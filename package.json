@@ -11,8 +11,16 @@
     "build:web": "node scripts/sync-frontend-config.mjs && node scripts/build-web.mjs",
     "dev:web": "node scripts/build-web.mjs --watch",
     "copy:web": "node scripts/copy-web.mjs",
-    "validate:infra": "npm --prefix infra test -- --runInBand && npm --prefix infra run build",
-    "validate": "npm run build:web && npm run validate:infra && npm run test:j2534",
+    "dev:worker": "wrangler dev",
+    "test:worker": "node --test worker/test/*.test.mjs",
+    "typegen:worker": "wrangler types worker-configuration.d.ts",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy:worker": "wrangler deploy",
+    "stage:pages": "node scripts/stage-pages.mjs",
+    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch",
+    "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
+    "validate": "npm run build:web && npm run test:config && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",
     "open:android": "npx cap open android",
     "build:android": "npm run sync",
@@ -27,7 +35,8 @@
     "@capacitor/cli": "^7.0.0",
     "electron": "^41.10.3",
     "electron-builder": "^26.0.12",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "wrangler": "^4.130.0"
   },
   "build": {
     "appId": "com.mechpro.dispatch",
@@ -87,7 +96,6 @@
     }
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1111.0",
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0"
   },

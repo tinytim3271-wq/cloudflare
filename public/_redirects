@@ -1,2 +1,2 @@
-# SPA fallback for Cloudflare Pages
+# `/api/*` is served by the mechpro-api Worker route on the production hostname.
 /*    /index.html   200

@@ -5,8 +5,6 @@ const diagnostics = require('./diagnostics-bridge');
 const trustedOrigins = new Set([
   'https://www.yourcarguy806.com',
   'https://mechpro-dispatch.pages.dev',
-  'https://njz0co209l.execute-api.us-east-1.amazonaws.com',
-  'https://cognito-idp.us-east-1.amazonaws.com',
 ]);
 
 function isTrustedUrl(rawUrl) {
@@ -75,12 +73,13 @@ function createWindow() {
           desktop: Boolean(window.mechproDesktop),
           diagnostics: Boolean(window.mechproDiagnostics),
           title: document.title,
+          authenticated: Boolean(document.querySelector('.app-shell')),
           loginText: document.querySelector('.login-panel')?.innerText || ''
         })`);
         const passed = result.desktop
           && result.diagnostics
           && result.title.includes('MechPro')
-          && result.loginText.includes('active subscription');
+          && (result.authenticated || result.loginText.includes('Cloudflare Access'));
         console.log(JSON.stringify({ smokeTest: passed ? 'passed' : 'failed', ...result }));
         app.exit(passed ? 0 : 1);
       } catch (error) {

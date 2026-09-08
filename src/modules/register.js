@@ -4,7 +4,7 @@
  * Platform modules wire the three repo surfaces together:
  *   - src/ (web PWA bundle)
  *   - desktop/ (Electron shell via window.mechproDesktop)
- *   - infra/ (API + Cognito; see src/shared/config.js)
+ *   - worker/ (Workers API + D1/R2/Workers AI; see src/shared/config.js)
  */
 import './platform/index.js';
 

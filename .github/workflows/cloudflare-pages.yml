@@ -1,4 +1,4 @@
-name: Cloudflare Pages
+name: Cloudflare deploy
 
 on:
   workflow_dispatch:
@@ -14,7 +14,8 @@ on:
       - 'manifest.webmanifest'
       - 'assets/**'
       - 'public/**'
-      - 'wrangler.toml'
+      - 'worker/**'
+      - 'wrangler.jsonc'
       - '.github/workflows/cloudflare-pages.yml'
       - 'package.json'
       - 'src/**'
@@ -24,8 +25,7 @@ permissions:
   contents: read
 
 jobs:
-  publish:
-    if: ${{ vars.CLOUDFLARE_PAGES_ENABLED == 'true' }}
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +35,47 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:web
-      - name: Stage Pages publish directory
+      - run: npm run test:config
+      - run: npm run test:worker
+      - run: npx wrangler deploy --dry-run
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Configure D1 binding
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_ALLOWED_ORIGINS: ${{ vars.CLOUDFLARE_ALLOWED_ORIGINS }}
         run: |
-          mkdir -p .pages-dist
-          cp index.html app.js styles.css theme.css service-worker.js diagnostics-ui.js manifest.webmanifest mechpro-icon.svg .pages-dist/
-          cp -r assets .pages-dist/assets
-          cp public/_headers public/_redirects .pages-dist/
-      - name: Publish to Cloudflare Pages
+          test -n "$CLOUDFLARE_D1_DATABASE_ID"
+          sed -i "s/00000000-0000-0000-0000-000000000000/$CLOUDFLARE_D1_DATABASE_ID/" wrangler.jsonc
+          if [ -n "$CLOUDFLARE_ALLOWED_ORIGINS" ]; then
+            node -e "const fs=require('fs');const p='wrangler.jsonc';let s=fs.readFileSync(p,'utf8');s=s.replace('https://mechpro-dispatch.pages.dev',process.env.CLOUDFLARE_ALLOWED_ORIGINS);fs.writeFileSync(p,s)"
+          fi
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply DB --remote
+      - name: Deploy API Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+      - name: Build and stage Pages
+        run: npm run build:web && npm run stage:pages
+      - name: Deploy Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
