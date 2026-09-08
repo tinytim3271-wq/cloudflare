@@ -2,7 +2,6 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "mechpro-api",
   "main": "worker/src/index.js",
-  "pages_build_output_dir": ".pages-dist",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
