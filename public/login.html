@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MechPro Login</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: linear-gradient(135deg, #0f172a, #111827); color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; }
+      .card { width: min(92vw, 440px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); padding: 32px; border-radius: 18px; }
+      input, button { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(148,163,184,.35); margin-top: 10px; }
+      button { background: #67e8f9; border: none; color: #082f49; font-weight: 700; cursor: pointer; }
+      a { color: #7dd3fc; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Sign in to MechPro</h1>
+      <p>Use your work email to receive a secure magic-link sign-in.</p>
+      <form method="post" action="/api/auth/magic-link">
+        <input type="email" name="email" placeholder="name@shop.com" required />
+        <input type="hidden" name="returnTo" value="/app" />
+        <button type="submit">Send sign-in link</button>
+      </form>
+      <p>Need a shop? <a href="/signup">Create your account</a></p>
+    </div>
+  </body>
+</html>
