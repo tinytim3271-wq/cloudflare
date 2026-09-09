@@ -19,3 +19,7 @@ export const storageKeys = Object.freeze({
   session: 'mechpro-session',
   mutationQueue: 'mechpro-mutation-queue-v1',
 });
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
+}

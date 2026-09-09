@@ -19,6 +19,7 @@ try {
   const generated = readFileSync(configPath, 'utf8');
   assert.match(generated, /cloudflare-access/);
   assert.match(generated, /https:\/\/api\.example\.com/);
+  assert.match(generated, /__MECHPRO_CONFIG__/);
   assert.doesNotMatch(generated, /amazonaws|cognito/i);
   console.log('sync-frontend-config tests passed');
 } finally {
