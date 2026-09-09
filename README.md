@@ -1,7 +1,9 @@
 # MechPro Dispatch
 
 MechPro is a local-first shop dispatch and work-order PWA with optional cloud
-synchronization. The hosted application runs entirely on Cloudflare:
+synchronization. The hosted application runs on Cloudflare today, and the target
+public SaaS architecture is documented in
+[`docs/cloudflare-saas-architecture.md`](docs/cloudflare-saas-architecture.md).
 
 - **Pages** serves the static PWA.
 - **Workers** provides the existing HTTP API routes under `/api`.
@@ -9,7 +11,8 @@ synchronization. The hosted application runs entirely on Cloudflare:
   encrypted integration configuration.
 - **R2** stores inspection photos, signatures, and Windows downloads.
 - **Workers AI** powers `/api/ai/assistant` and AgentPhone responses.
-- **Cloudflare Access** authenticates staff through the shop's configured IdP.
+- **Cloudflare Access** should be reserved for internal/operator surfaces as the
+  product moves to public SaaS signup, login, and billing.
 
 The PWA remains usable offline with `localStorage` (`mechpro-dispatch-v1`) and
 queues non-sensitive entity mutations until connectivity returns.
