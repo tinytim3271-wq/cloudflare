@@ -1881,7 +1881,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     openPasswordReset();
   }
   function bindPlatformAdmin() {
-    enrichPlatformControls();
+    if (typeof enrichPlatformControls === "function") enrichPlatformControls();
     document.querySelector("#refresh-platform")?.addEventListener("click", () => {
       platformAccounts = null;
       render();
@@ -1928,11 +1928,16 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return;
     }
     if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0];
-    const views = { superadmin: superAdmin, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, accounting, payroll, messaging, payments, imports, reports, settings, employees, "oem-diagnostics": oemDiagnosticsView };
-    root.innerHTML = (views[state.route] || views[roleRoutes[currentUser().role][0]])();
+    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, reports, settings };
+    if (typeof accounting === "function") views.accounting = accounting;
+    if (typeof payroll === "function") views.payroll = payroll;
+    if (typeof imports === "function") views.imports = imports;
+    if (typeof employees === "function") views.employees = employees;
+    if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView;
+    root.innerHTML = (views[state.route] || views.home || views.dispatch)();
     const operationsNav = root.querySelector(".sidebar .nav"), unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
     if (operationsNav && currentUser().role !== "super_admin") operationsNav.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || ""));
-    if (operationsNav && isOemDiagnosticsAvailable()) operationsNav.insertAdjacentHTML("afterbegin", nav("oem-diagnostics", "radio-tower", "OEM Diagnostics"));
+    if (operationsNav && typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable()) operationsNav.insertAdjacentHTML("afterbegin", nav("oem-diagnostics", "radio-tower", "OEM Diagnostics"));
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
@@ -1940,7 +1945,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     bindMessagingService();
     bindPaymentService();
     bindTeamChat();
-    bindOemDiagnostics();
+    if (typeof bindOemDiagnostics === "function") bindOemDiagnostics();
     root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => {
       await loadChatFromApi();
       render();
