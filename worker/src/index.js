@@ -22,6 +22,7 @@ import {
 } from './security.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+const APP_SESSION_COOKIE = 'mechpro_session';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
 const MUTATING_DIAGNOSTIC_PROCEDURES = new Set([
   'clear_dtcs', 'clearDtcs', 'program_key', 'add_key', 'all_keys_lost',
@@ -73,7 +74,66 @@ function withCors(response, request, env) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+async function hashValue(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function cookieEntries(request) {
+  const cookieHeader = request.headers.get('Cookie') || '';
+  return cookieHeader.split(';').map(entry => entry.trim()).filter(Boolean).reduce((map, entry) => {
+    const separator = entry.indexOf('=');
+    if (separator === -1) return map;
+    const key = entry.slice(0, separator).trim();
+    const value = decodeURIComponent(entry.slice(separator + 1).trim());
+    if (key) map[key] = value;
+    return map;
+  }, {});
+}
+
+function getCookieValue(request, name) {
+  return cookieEntries(request)[name] || '';
+}
+
+function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
+  return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+async function resolveAppSession(request, env) {
+  const token = getCookieValue(request, APP_SESSION_COOKIE);
+  if (!token) return null;
+  const tokenHash = await hashValue(token);
+  const row = await env.DB.prepare(`
+    SELECT s.id AS session_id, s.user_id, s.expires_at, s.revoked_at, u.email, u.name, u.shop_id, u.role
+    FROM sessions s
+    INNER JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+  `).bind(tokenHash, new Date().toISOString()).first();
+  if (!row) return null;
+  await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date().toISOString(), row.session_id).run();
+  return {
+    shopId: String(row.shop_id),
+    role: String(row.role || 'admin'),
+    userId: String(row.user_id),
+    email: String(row.email || '').trim().toLowerCase(),
+    name: String(row.name || row.email || 'Customer'),
+    sessionId: String(row.session_id),
+  };
+}
+
 async function resolveContext(request, env) {
+  const appSession = await resolveAppSession(request, env);
+  if (appSession) {
+    return {
+      shopId: appSession.shopId,
+      role: appSession.role,
+      userId: appSession.userId,
+      email: appSession.email,
+      name: appSession.name,
+      claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
+      sessionId: appSession.sessionId,
+    };
+  }
   let claims;
   if (env.DEV_AUTH_BYPASS === '1' && request.headers.get('X-MechPro-Dev-Email')) {
     claims = {
@@ -83,7 +143,7 @@ async function resolveContext(request, env) {
     };
   } else {
     const token = request.headers.get('Cf-Access-Jwt-Assertion');
-    if (!token) throw new HttpError(401, 'Cloudflare Access authentication is required');
+    if (!token) throw new HttpError(401, 'Authentication is required');
     try {
       claims = await verifyAccessJwt(token, env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
     } catch (error) {
@@ -810,6 +870,164 @@ async function handleAdmin(request, env, context, segments) {
   throw new HttpError(405, 'Method not allowed');
 }
 
+async function ensureSaasUser(env, email, name) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized) throw new HttpError(400, 'A valid email is required');
+  const existing = await env.DB.prepare('SELECT id, shop_id, role, name, enabled FROM users WHERE email = ? COLLATE NOCASE').bind(normalized).first();
+  if (existing) return existing;
+  const userId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const shopId = `shop-${Date.now().toString(36)}`;
+  const ownerName = String(name || normalized.split('@')[0] || 'Owner').trim();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
+      VALUES (?, ?, ?, 'America/Chicago', 'trialing', ?, ?)
+    `).bind(shopId, `${ownerName}'s shop`, shopId.toLowerCase(), now, now),
+    env.DB.prepare(`
+      INSERT INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
+      VALUES (?, ?, 'owner', 'active', ?, ?)
+    `).bind(shopId, userId, now, now),
+    env.DB.prepare(`
+      INSERT INTO users (id, email, shop_id, role, name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, 'admin', ?, 1, ?, ?)
+    `).bind(userId, normalized, shopId, ownerName, now, now),
+  ]);
+  return { id: userId, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
+}
+
+async function handleMagicLink(request, env) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  const contentType = request.headers.get('Content-Type') || '';
+  const raw = await request.text();
+  let body = {};
+  if (raw) {
+    if (contentType.includes('application/json')) body = parseJson(raw);
+    else if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+      body = Object.fromEntries(new URLSearchParams(raw).entries());
+    }
+  }
+  const email = String(body.email || '').trim().toLowerCase();
+  const returnTo = String(body.returnTo || '/app').trim() || '/app';
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
+  const token = crypto.randomUUID().replaceAll('-', '');
+  const tokenHash = await hashValue(token);
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO login_tokens (id, email, token_hash, return_to, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET
+      token_hash = excluded.token_hash,
+      return_to = excluded.return_to,
+      expires_at = excluded.expires_at,
+      used_at = NULL,
+      created_at = excluded.created_at
+  `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
+  return json({ ok: true, sent: true, email, returnTo, message: 'If the email matches an account, a sign-in link was sent.' });
+}
+
+async function handleAuthCallback(request, env) {
+  const url = new URL(request.url);
+  const token = String(url.searchParams.get('token') || '').trim();
+  if (!token) throw new HttpError(400, 'Missing login token');
+  const tokenHash = await hashValue(token);
+  const loginToken = await env.DB.prepare(
+    'SELECT id, email, return_to, expires_at, used_at FROM login_tokens WHERE token_hash = ? LIMIT 1',
+  ).bind(tokenHash).first();
+  if (!loginToken) throw new HttpError(401, 'The sign-in link is invalid or expired');
+  if (loginToken.used_at || new Date(loginToken.expires_at).getTime() <= Date.now()) {
+    throw new HttpError(401, 'The sign-in link has expired');
+  }
+  const email = String(loginToken.email || '').trim().toLowerCase();
+  const user = await ensureSaasUser(env, email, email.split('@')[0]);
+  const sessionToken = crypto.randomUUID().replaceAll('-', '');
+  const sessionId = crypto.randomUUID();
+  const sessionHash = await hashValue(sessionToken);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()),
+    env.DB.prepare('UPDATE login_tokens SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), loginToken.id),
+  ]);
+  const nextUrl = String(loginToken.return_to || '/app').trim() || '/app';
+  const redirect = new URL(nextUrl, url.origin);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: redirect.toString(),
+      'Set-Cookie': sessionCookieHeader(sessionToken),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function handleLogout(request, env) {
+  const context = await resolveContext(request, env);
+  const sessionId = context.sessionId || '';
+  if (sessionId) {
+    await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
+  }
+  return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
+  });
+}
+
+async function handleAuth(request, env, segments) {
+  const action = segments[1] || '';
+  if (action === 'magic-link') return handleMagicLink(request, env);
+  if (action === 'callback') return handleAuthCallback(request, env);
+  if (action === 'logout') return handleLogout(request, env);
+  if (action === 'session') {
+    const context = await resolveContext(request, env);
+    return handleAuthSession(context);
+  }
+  throw new HttpError(404, 'Not found');
+}
+
+async function handleBilling(request, env, context, segments) {
+  const action = segments[1] || '';
+  if (action === 'checkout' && request.method === 'POST') {
+    const body = await requestJson(request);
+    const planId = String(body.planId || '').trim();
+    const hasSession = Boolean(context?.shopId);
+    if (!hasSession) throw new HttpError(401, 'You must be signed in to start a trial');
+    const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
+    if (!plan) throw new HttpError(404, 'Billing plan not found');
+    const checkoutUrl = body.successUrl || '/app';
+    return json({ ok: true, planId: plan.id, shopId: context.shopId, url: String(checkoutUrl), provider: 'stripe' });
+  }
+  if (action === 'portal' && request.method === 'POST') {
+    if (!context?.shopId) throw new HttpError(401, 'Sign in to manage billing');
+    return json({ ok: true, shopId: context.shopId, url: '/app/billing', provider: 'stripe' });
+  }
+  if (action === 'status' && request.method === 'GET') {
+    if (!context?.shopId) throw new HttpError(401, 'Sign in to view billing');
+    const subscription = await env.DB.prepare(
+      'SELECT * FROM subscriptions WHERE shop_id = ? LIMIT 1',
+    ).bind(context.shopId).first();
+    return json({
+      ok: true,
+      shopId: context.shopId,
+      active: Boolean(subscription && ['trialing', 'active'].includes(String(subscription.status || ''))),
+      status: subscription ? String(subscription.status || 'trialing') : 'trialing',
+      planId: subscription ? String(subscription.plan_id || '') : null,
+      currentPeriodEnd: subscription ? String(subscription.current_period_end || '') : null,
+    });
+  }
+  if (action === 'webhook' && request.method === 'POST') {
+    const payload = await request.text();
+    const signature = request.headers.get('Stripe-Signature') || '';
+    if (!signature) return json({ received: true, mode: 'stub' }, 202);
+    const event = parseJson(payload);
+    return json({ received: true, type: event.type || 'unknown', mode: 'stub' }, 202);
+  }
+  throw new HttpError(404, 'Not found');
+}
+
 async function route(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
@@ -829,8 +1047,14 @@ async function route(request, env) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
+  if (segments[0] === 'auth') return handleAuth(request, env, segments);
   if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''));
   if (segments[0] === 'agentphone' && segments[1] === 'webhook') return handleAgentPhoneWebhook(request, env, decodeURIComponent(segments[2] || ''));
+  if (segments[0] === 'billing') {
+    const action = segments[1] || '';
+    const context = action === 'webhook' ? null : await resolveContext(request, env);
+    return handleBilling(request, env, context, segments);
+  }
   const context = await resolveContext(request, env);
   await requireActiveAccount(context, env);
   if (path === '/auth/session') return handleAuthSession(context);

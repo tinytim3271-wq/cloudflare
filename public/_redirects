@@ -1,2 +1,9 @@
 # `/api/*` is served by the mechpro-api Worker route on the production hostname.
-/*    /index.html   200
+/pricing        /pricing.html     200
+/features       /features.html    200
+/login          /login.html       200
+/signup         /signup.html      200
+/terms          /terms.html       200
+/privacy        /privacy.html     200
+/app            /index.html       200
+/*              /index.html       200

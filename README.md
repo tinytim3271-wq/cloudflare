@@ -4,7 +4,9 @@ MechPro is a local-first shop dispatch and work-order PWA with optional cloud
 synchronization. The hosted application runs on Cloudflare today, and the target
 public SaaS architecture is documented in
 [`docs/cloudflare-saas-architecture.md`](docs/cloudflare-saas-architecture.md).
-
+The app now supports a public customer-auth path using the `mechpro_session`
+HTTP-only cookie, with magic-link sign-in endpoints at
+`/api/auth/magic-link`, `/api/auth/callback`, and `/api/auth/logout`.
 - **Pages** serves the static PWA.
 - **Workers** provides the existing HTTP API routes under `/api`.
 - **D1** stores tenant accounts, identity mappings, entities, audit events, and
