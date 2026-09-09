@@ -836,9 +836,11 @@
   async function loadCustomersFromApi() {
     try {
       state.customers = await apiFetch("/entities/customers");
+      cloudSyncStatus = "connected";
       save();
     } catch (error) {
       console.error("Failed to load customers from API; using local data", error);
+      cloudSyncStatus = authSession() ? "offline" : "local";
     }
   }
   async function pushOrderToApi(record) {
@@ -865,9 +867,11 @@
   async function loadOrdersFromApi() {
     try {
       state.orders = await apiFetch("/entities/orders");
+      cloudSyncStatus = "connected";
       save();
     } catch (error) {
       console.error("Failed to load orders from API; using local data", error);
+      cloudSyncStatus = authSession() ? "offline" : "local";
     }
   }
   async function updateInvoiceInApi(record) {
@@ -1169,7 +1173,7 @@
   }
   function shell(content) {
     const user = currentUser(), active = visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, shift = openShift(user.id);
-    return `<div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="nav-label">Operations</div><nav class="nav">${nav("dispatch", "layout-dashboard", "Dispatch board", active)}${nav("orders", "clipboard-list", "Work orders", visibleOrders().length)}${nav("schedule", "calendar-days", "Schedule")}${nav("customers", "users", "Customers")}${nav("invoices", "receipt-text", "Invoices", state.invoices.filter((x) => x.status === "overdue").length)}</nav><div class="nav-label shop-label">Shop</div><nav class="nav">${nav("ai", "sparkles", "AI Workbench")}${nav("accounting", "landmark", "Accounting")}${nav("payroll", "wallet-cards", "Payroll")}${nav("imports", "file-up", "Import data")}${nav("employees", "user-round-cog", "Employees")}${nav("reports", "chart-no-axes-combined", "Reports")}${nav("settings", "settings", "Settings")}</nav><div class="sidebar-foot"><div class="shop-card"><strong>Your Car Guy</strong><span>Main Shop \xB7 Lubbock, TX</span></div><button class="user-row" id="sign-out" title="Sign out"><div class="avatar">${initials(user.name)}</div><div><strong>${user.name}</strong><span>${roleLabel[user.role]} \xB7 Sign out</span></div>${icon("log-out", 14)}</button></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions"><button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill">${icon("map-pin", 15)} Main Shop ${icon("chevron-down", 13)}</button><button class="icon-button" title="Notifications">${icon("bell")}</button></div></header><div class="content">${content}</div></main></div>`;
+    return `<div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="nav-label">Operations</div><nav class="nav">${nav("dispatch", "layout-dashboard", "Dispatch board", active)}${nav("orders", "clipboard-list", "Work orders", visibleOrders().length)}${nav("schedule", "calendar-days", "Schedule")}${nav("customers", "users", "Customers")}${nav("invoices", "receipt-text", "Invoices", state.invoices.filter((x) => x.status === "overdue").length)}</nav><div class="nav-label shop-label">Shop</div><nav class="nav">${nav("ai", "sparkles", "AI Workbench")}${nav("accounting", "landmark", "Accounting")}${nav("payroll", "wallet-cards", "Payroll")}${nav("imports", "file-up", "Import data")}${nav("employees", "user-round-cog", "Employees")}${nav("reports", "chart-no-axes-combined", "Reports")}${nav("settings", "settings", "Settings")}</nav><div class="sidebar-foot"><div class="shop-card"><strong>Your Car Guy</strong><span>Main Shop \xB7 Lubbock, TX</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${user.name}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill">${icon("map-pin", 15)} Main Shop ${icon("chevron-down", 13)}</button><button class="icon-button" type="button" aria-label="Notifications" title="Notifications">${icon("bell")}</button></div></header><div class="content">${content}</div></main></div>`;
   }
   function heading(kicker, title, description, action = true) {
     return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>`;
@@ -2883,8 +2887,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (profileForm && !profileForm.querySelector("[name=themeMode]")) {
       profileForm.querySelector(".statement-head")?.insertAdjacentHTML("afterend", `<fieldset class="full appearance-settings"><legend>Appearance</legend><div class="appearance-options">${[["device", "monitor-smartphone", "Device setting"], ["light", "sun", "Light"], ["dark", "moon", "Dark"]].map(([value, iconName, label2]) => `<label class="appearance-option"><input type="radio" name="themeMode" value="${value}" ${shopProfile().themeMode === value ? "checked" : ""}/><span>${icon(iconName, 17)}<b>${label2}</b></span></label>`).join("")}</div></fieldset>`);
       lucide.createIcons();
-      profileForm.querySelectorAll("[name=themeMode]").forEach((input) => input.addEventListener("change", () => applyAppearance(input.value)));
+      bindAppearanceControls(profileForm);
     }
+    bindAppearanceControls(profileForm);
     profileForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
       event.stopImmediatePropagation();
