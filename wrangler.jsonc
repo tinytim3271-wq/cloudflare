@@ -7,13 +7,18 @@
   "workers_dev": false,
   "routes": [
     {
+      "pattern": "www.yourcarguy806.com",
+      "custom_domain": true
+    },
+    {
       "pattern": "www.yourcarguy806.com/api/*",
       "zone_name": "yourcarguy806.com"
     }
   ],
   "vars": {
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev"
+    "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",
+    "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev"
   },
   "d1_databases": [
     {

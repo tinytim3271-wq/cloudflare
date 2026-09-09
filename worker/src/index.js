@@ -849,9 +849,36 @@ async function route(request, env) {
   throw new HttpError(404, 'Not found');
 }
 
+function isApiRequest(request) {
+  const path = new URL(request.url).pathname;
+  return path === '/api' || path.startsWith('/api/');
+}
+
+async function proxyPagesRequest(request, env) {
+  if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'Method not allowed');
+  const incoming = new URL(request.url);
+  const pagesOrigin = String(env.PAGES_ORIGIN || 'https://mechpro-dispatch.pages.dev').replace(/\/$/, '');
+  const target = new URL(`${incoming.pathname}${incoming.search}`, pagesOrigin);
+  const headers = new Headers(request.headers);
+  headers.set('Host', target.host);
+  const response = await fetch(new Request(target, {
+    method: request.method,
+    headers,
+    redirect: 'manual',
+  }));
+  const nextHeaders = new Headers(response.headers);
+  nextHeaders.delete('Content-Security-Policy-Report-Only');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: nextHeaders,
+  });
+}
+
 export default {
   async fetch(request, env) {
     try {
+      if (!isApiRequest(request)) return proxyPagesRequest(request, env);
       return withCors(await route(request, env), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
