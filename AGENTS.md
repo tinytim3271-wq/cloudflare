@@ -13,7 +13,7 @@ This repository has three independent parts:
 - Use Node 24, matching `.github/workflows/cloudflare-pages.yml`.
 - Replace the placeholder D1 ID in `wrangler.jsonc` before remote migration or deployment.
 
-### Running the frontend
+### Running the frontend (browser)
 
 Serve the repo root over HTTP (service worker registration is gated on a secure context, and `localhost`/`127.0.0.1` counts as secure), e.g.:
 
