@@ -1,0 +1,20 @@
+{
+  "name": "MechPro Dispatch",
+  "install": "bash scripts/cloud-agent-setup.sh",
+  "terminals": [
+    {
+      "name": "web",
+      "command": "python3 -m http.server 3000 --bind 127.0.0.1",
+      "description": "Serves the local-first PWA shell (repo root) at http://127.0.0.1:3000/"
+    },
+    {
+      "name": "worker",
+      "command": "npx wrangler dev --local --port 8787 --ip 127.0.0.1",
+      "description": "Cloudflare Worker API (D1/R2 local via Miniflare) at http://127.0.0.1:8787/api/*"
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 3000 },
+    { "name": "worker-api", "port": 8787 }
+  ]
+}
