@@ -5,6 +5,7 @@ diagnostics/j2534-service/**/bin/
 diagnostics/j2534-service/**/obj/
 .wrangler/
 .pages-dist/
+.dev.vars
 worker-configuration.d.ts
 .playwright-mcp/
 www/
