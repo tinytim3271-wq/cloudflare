@@ -5,12 +5,12 @@
  */
 export const cloudflareConfig = Object.freeze({
   auth: 'mechpro-saas',
-  apiUrl: '/api',
+  apiUrl: "/api",
   authEndpoints: {
-    magicLink: '/api/auth/magic-link',
-    callback: '/api/auth/callback',
-    session: '/api/auth/session',
-    logout: '/api/auth/logout',
+    magicLink: "/api/auth/magic-link",
+    callback: "/api/auth/callback",
+    session: "/api/auth/session",
+    logout: "/api/auth/logout",
   },
 });
 
