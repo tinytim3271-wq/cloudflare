@@ -100,9 +100,9 @@ CREATE TABLE IF NOT EXISTS billing_events (
   FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
 );
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS id TEXT;
+ALTER TABLE users ADD COLUMN id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_id ON users(id);
 UPDATE users SET id = lower(hex(randomblob(16))) WHERE id IS NULL;
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS customer_created_at TEXT;
+ALTER TABLE users ADD COLUMN email_verified_at TEXT;
+ALTER TABLE users ADD COLUMN customer_created_at TEXT;

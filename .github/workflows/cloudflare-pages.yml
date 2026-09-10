@@ -18,6 +18,7 @@ on:
       - 'wrangler.jsonc'
       - '.github/workflows/cloudflare-pages.yml'
       - 'package.json'
+      - 'package-lock.json'
       - 'src/**'
       - 'scripts/**'
 
@@ -37,10 +38,11 @@ jobs:
       - run: npm run build:web
       - run: npm run test:config
       - run: npm run test:worker
+      - run: npm run stage:pages
       - run: npx wrangler deploy --dry-run
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CLOUDFLARE_DEPLOY_ENABLED != 'false'
     needs: validate
     runs-on: ubuntu-latest
     environment: production
@@ -51,16 +53,39 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Require Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Set GitHub secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID before deploying."
+            echo "Set variable CLOUDFLARE_DEPLOY_ENABLED=false only if you need to skip publish."
+            exit 1
+          fi
       - name: Configure D1 binding
         env:
           CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_ALLOWED_ORIGINS: ${{ vars.CLOUDFLARE_ALLOWED_ORIGINS }}
         run: |
-          test -n "$CLOUDFLARE_D1_DATABASE_ID"
-          sed -i "s/00000000-0000-0000-0000-000000000000/$CLOUDFLARE_D1_DATABASE_ID/" wrangler.jsonc
-          if [ -n "$CLOUDFLARE_ALLOWED_ORIGINS" ]; then
-            node -e "const fs=require('fs');const p='wrangler.jsonc';let s=fs.readFileSync(p,'utf8');s=s.replace('https://mechpro-dispatch.pages.dev',process.env.CLOUDFLARE_ALLOWED_ORIGINS);fs.writeFileSync(p,s)"
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'wrangler.jsonc';
+          let source = fs.readFileSync(path, 'utf8');
+          const placeholder = '00000000-0000-0000-0000-000000000000';
+          const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
+          if (databaseId) {
+            source = source.replace(/"database_id":\s*"[^"]+"/, `"database_id": "${databaseId}"`);
+          }
+          if (source.includes(placeholder)) {
+            console.error('Set CLOUDFLARE_D1_DATABASE_ID or put a real D1 id in wrangler.jsonc');
+            process.exit(1);
+          }
+          if (process.env.CLOUDFLARE_ALLOWED_ORIGINS) {
+            source = source.replace('https://mechpro-dispatch.pages.dev', process.env.CLOUDFLARE_ALLOWED_ORIGINS);
+          }
+          fs.writeFileSync(path, source);
+          NODE
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@v3
         with:

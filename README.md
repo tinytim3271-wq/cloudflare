@@ -68,18 +68,23 @@ npm run deploy:worker
 npm run deploy:pages
 ```
 
-Configure a Cloudflare Access self-hosted application for
-`www.yourcarguy806.com` and an identity-provider Allow policy. The committed
-Worker route sends `www.yourcarguy806.com/api/*` to `mechpro-api`; Pages serves
-every other path on the custom domain. This keeps browser requests same-origin
-and lets Access inject `Cf-Access-Jwt-Assertion`. Change the route if the
-production hostname changes, and do not expose it without the Access policy.
+Configure a Cloudflare Pages custom domain for `www.yourcarguy806.com` and keep
+the Worker on the `/api/*` route only. Do not attach `mechpro-api` as a custom
+domain for the whole hostname — that conflicts with Pages and is why production
+deploys fail. Browser requests stay same-origin: Pages serves the PWA and marketing
+pages, and the Worker handles `/api`.
 
-After the bootstrap administrator signs in, create shops in **Platform
-Administration**. Account creation maps the owner's IdP email to the shop; adding
-or editing an employee synchronizes that employee's email and role into D1.
-Passwords, MFA, account recovery, and user lifecycle remain in the configured
-IdP, not MechPro.
+Do not put Cloudflare Access or Bot Fight Mode / Super Bot Fight Mode in front of
+the public hostname. Those challenges currently return HTTP 403 "Just a moment..."
+for `https://www.yourcarguy806.com/` and `/api/*`, which blocks the PWA and API
+clients. Reserve Access for an internal admin hostname. Confirm the Worker route
+with `curl -sS https://www.yourcarguy806.com/api/healthz` — it should return JSON
+`{"ok":true,"service":"mechpro-cloudflare-api"}`, not a Cloudflare challenge page.
+
+After an owner signs in with a magic-link from `/login`, create shops in
+**Platform Administration**. Account creation maps the owner's email to the
+shop; adding or editing an employee synchronizes that employee's email and role
+into D1.
 
 For local Worker API development only, set these values in an ignored
 `.dev.vars`:
@@ -131,14 +136,15 @@ applies D1 migrations, deploys the Worker, and publishes Pages on `main`.
 Configure:
 
 - secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
-- variables: `CLOUDFLARE_DEPLOY_ENABLED=true`,
+- variables: optional `CLOUDFLARE_DEPLOY_ENABLED=false` to skip publish,
   `CLOUDFLARE_D1_DATABASE_ID`, optional `CLOUDFLARE_PAGES_PROJECT`, and optional
   `CLOUDFLARE_ALLOWED_ORIGINS`
 
-The token needs Workers Scripts, D1, R2, and Pages edit permissions. Worker
-runtime secrets are configured with `wrangler secret put`, not GitHub variables.
-The Windows workflow publishes installers to the configured
-`CLOUDFLARE_R2_BUCKET`.
+Publish runs on pushes to `main` and on manual **Run workflow** unless
+`CLOUDFLARE_DEPLOY_ENABLED` is set to `false`. The token needs Workers Scripts, D1,
+R2, and Pages edit permissions. Worker runtime secrets are configured with
+`wrangler secret put`, not GitHub variables. The Windows workflow publishes
+installers to the configured `CLOUDFLARE_R2_BUCKET`.
 
 ## Desktop and mobile
 
