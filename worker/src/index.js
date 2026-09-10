@@ -1,4 +1,5 @@
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
+import { isApiRequest, pagesProxyUrl } from './routing.mjs';
 import {
   ENTITY_TYPES,
   buildTaxReport,
@@ -1073,18 +1074,11 @@ async function route(request, env) {
   throw new HttpError(404, 'Not found');
 }
 
-function isApiRequest(request) {
-  const path = new URL(request.url).pathname;
-  return path === '/api' || path.startsWith('/api/');
-}
-
 async function proxyPagesRequest(request, env) {
   if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'Method not allowed');
-  const incoming = new URL(request.url);
-  const pagesOrigin = String(env.PAGES_ORIGIN || 'https://mechpro-dispatch.pages.dev').replace(/\/$/, '');
-  const target = new URL(`${incoming.pathname}${incoming.search}`, pagesOrigin);
+  const target = pagesProxyUrl(request.url, env.PAGES_ORIGIN);
   const headers = new Headers(request.headers);
-  headers.set('Host', target.host);
+  headers.set('Host', new URL(target).host);
   const response = await fetch(new Request(target, {
     method: request.method,
     headers,

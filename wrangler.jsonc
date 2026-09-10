@@ -4,12 +4,10 @@
   "main": "worker/src/index.js",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
+  // Pages owns the www hostname. Keep this Worker route-only so deploy does
+  // not fight the Pages custom domain.
   "workers_dev": false,
   "routes": [
-    {
-      "pattern": "www.yourcarguy806.com",
-      "custom_domain": true
-    },
     {
       "pattern": "www.yourcarguy806.com/api/*",
       "zone_name": "yourcarguy806.com"
