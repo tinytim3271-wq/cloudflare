@@ -2,6 +2,24 @@ name: Cloudflare deploy
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'index.html'
+      - 'app.js'
+      - 'styles.css'
+      - 'theme.css'
+      - 'service-worker.js'
+      - 'diagnostics-ui.js'
+      - 'manifest.webmanifest'
+      - 'assets/**'
+      - 'public/**'
+      - 'worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/cloudflare-pages.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'scripts/**'
   push:
     branches: [main]
     paths:
