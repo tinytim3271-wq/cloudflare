@@ -1925,23 +1925,76 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function loginScreen() {
     return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
   }
+  async function upgradeShopPlan() {
+    try {
+      const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: "starter", successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+      toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
+      if (result.url) {
+        if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url);
+      }
+    } catch (error) {
+      toast(error.message || "Could not start upgrade");
+    }
+  }
+  async function platformApi(path, options = {}) {
+    const response = await authorizedApiRequest(path, options);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || payload.error || `Platform request failed (${response.status})`);
+    return payload;
+  }
+  async function loadPlatformAccounts() {
+    if (platformAccountsLoading) return;
+    platformAccountsLoading = true;
+    try {
+      const accounts = await platformApi("/admin/accounts");
+      platformAccounts = Array.isArray(accounts) ? accounts : accounts.accounts || [];
+    } catch (error) {
+      console.error(error);
+      platformAccounts = [];
+      toast(error.message || "Could not load customer accounts");
+    } finally {
+      platformAccountsLoading = false;
+      if (currentUser()?.role === "super_admin" && state.route === "superadmin") render();
+    }
+  }
+  function platformShell(content) {
+    const user = currentUser();
+    return `<div class="app-shell platform-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Platform console</small></div></div><div class="nav-label">Platform</div><nav class="nav">${nav("superadmin", "building-2", "Customer shops")}<a class="nav-button" href="/downloads" target="_blank" rel="noopener">${icon("download")} Downloads</a><a class="nav-button" href="/pricing" target="_blank" rel="noopener">${icon("badge-dollar-sign")} Pricing</a></nav><div class="sidebar-foot"><div class="shop-card"><strong>Platform admin</strong><span>${escapeHtml(user?.email || "")}</span></div><button class="user-row" id="sign-out" type="button"><div class="avatar">${initials(user?.name || "P")}</div><div><strong>${escapeHtml(user?.name || "Platform")}</strong><span>Sign out</span></div></button></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation">${icon("menu")}</button><div class="top-actions"><button class="secondary" id="refresh-platform" type="button">${icon("refresh-cw", 14)} Refresh</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 14)} Get apps</a></div></header><div class="content">${content}</div></main></div>`;
+  }
+  function subscriptionBadge(account) {
+    const status = String(account.subscriptionStatus || "missing");
+    const expires = account.subscriptionExpiresAt ? new Date(account.subscriptionExpiresAt) : null;
+    const expired = Boolean(expires && expires.getTime() <= Date.now());
+    const label2 = account.suspended ? "Suspended" : expired ? "Expired" : status === "active" ? "Paid" : status === "trialing" ? expires ? "Free trial" : "Free / comped" : status;
+    const cls = account.suspended || expired ? "overdue" : status === "active" ? "paid" : "estimate";
+    const detail = account.suspended ? "Access disabled" : expired ? `Ended ${expires.toLocaleDateString()}` : expires ? `Until ${expires.toLocaleDateString()}` : status === "active" ? "No end date" : "No expiry set";
+    return `<span class="badge ${cls}">${escapeHtml(label2)}</span><small>${escapeHtml(detail)}</small>`;
+  }
   function superAdmin() {
     if (platformAccounts === null && !platformAccountsLoading) void loadPlatformAccounts();
-    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + account.users.length, 0), credits = accounts.reduce((sum, account) => sum + Number(account.creditBalance || 0), 0), rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td><span class="badge paid">${account.users.length} login${account.users.length === 1 ? "" : "s"}</span><small>${account.users.map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money(account.creditBalance || 0)}</b><small>Available account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Give credit</button>${account.users.map((user) => `<button class="mini-action" data-reset-user="${encodeURIComponent(user.username || user.email)}">${icon("key-round", 13)} Reset password</button>`).join("")}</div></td></tr>`).join("");
-    return platformShell(`${heading("Platform control", "Customer accounts", "Create subscribing shops, manage owner access, issue account credits, and send secure password resets.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article><article><span>Credits outstanding</span><strong>${money(credits)}</strong></article></div><button class="primary" id="new-customer-account">${icon("building-2", 15)} Add customer account</button></div><div class="access-note platform-security">${icon("shield-check", 15)} Every action is authorized server-side from the verified Cloudflare Access identity. Passwords are managed by the configured identity provider.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Login status</th><th>Credit balance</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">${platformAccountsLoading ? "Loading customer accounts..." : "No customer accounts yet."}</td></tr>`}</tbody></table></div>`);
+    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
+    return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
-    showModal(`<form class="modal" id="customer-account-form"><div class="modal-head"><h2>Add customer account</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label></div><div class="ledger-note">${icon("mail", 15)} Provision this email in the Cloudflare Access identity provider. MechPro maps it to the new shop owner profile.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create and invite</button></div></form>`);
-    document.querySelector("#customer-account-form").onsubmit = async (event) => {
+    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
+    const form = document.querySelector("#customer-account-form"), mode = form.elements.accountMode, days = form.elements.trialDays;
+    const syncMode = () => {
+      days.disabled = mode.value === "active";
+      if (mode.value === "comped") days.value = "0";
+      if (mode.value === "trialing" && !days.value) days.value = "30";
+    };
+    mode.onchange = syncMode;
+    syncMode();
+    form.onsubmit = async (event) => {
       event.preventDefault();
-      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#customer-account-error"), data = Object.fromEntries(new FormData(event.target));
+      const button = form.querySelector("button[type=submit]"), error = document.querySelector("#customer-account-error"), data = Object.fromEntries(new FormData(form));
       button.disabled = true;
       error.hidden = true;
       try {
-        await platformApi("/admin/accounts", { method: "POST", body: JSON.stringify(data) });
+        await platformApi("/admin/accounts", { method: "POST", body: JSON.stringify({ shopName: data.shopName, shopId: data.shopId, ownerName: data.ownerName, email: data.email, accountMode: data.accountMode, trialDays: data.trialDays, planId: data.planId }) });
         closeModal();
         platformAccounts = null;
-        toast("Customer account created and invitation sent");
+        toast("Customer shop created");
         render();
       } catch (requestError) {
         error.textContent = requestError.message;
@@ -1951,14 +2004,14 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     };
   }
   function openAccountCredit(shopId, shopName) {
-    showModal(`<form class="modal" id="account-credit-form"><div class="modal-head"><h2>Give account credit</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Credit amount *<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Reason *<input name="reason" required placeholder="Service adjustment"/></label></div><div class="ledger-note">${icon("file-check-2", 15)} Credits are additive and recorded in an immutable audit entry.</div><p class="login-error" id="account-credit-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-dollar-sign", 14)} Apply credit</button></div></form>`);
+    showModal(`<form class="modal" id="account-credit-form"><div class="modal-head"><h2>Give account credit</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Credit amount *<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Reason *<input name="reason" required placeholder="Service adjustment"/></label></div><p class="login-error" id="account-credit-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-dollar-sign", 14)} Apply credit</button></div></form>`);
     document.querySelector("#account-credit-form").onsubmit = async (event) => {
       event.preventDefault();
       const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#account-credit-error"), data = Object.fromEntries(new FormData(event.target));
       button.disabled = true;
       error.hidden = true;
       try {
-        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify(data) });
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify({ amount: Number(data.amount), reason: data.reason }) });
         closeModal();
         platformAccounts = null;
         toast(`${money(Number(data.amount))} credit applied`);
@@ -1970,21 +2023,58 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       }
     };
   }
-  function openSetPassword() {
-    openPasswordReset();
+  function openConvertPaid(shopId, shopName) {
+    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
+    document.querySelector("#convert-paid-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#convert-paid-error"), data = Object.fromEntries(new FormData(event.target));
+      button.disabled = true;
+      error.hidden = true;
+      try {
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/subscription`, { method: "POST", body: JSON.stringify({ mode: "active", planId: data.planId }) });
+        closeModal();
+        platformAccounts = null;
+        toast(`${shopName} is now a paid account`);
+        render();
+      } catch (requestError) {
+        error.textContent = requestError.message;
+        error.hidden = false;
+        button.disabled = false;
+      }
+    };
+  }
+  function openFreeTerm(shopId, shopName) {
+    showModal(`<form class="modal" id="free-term-form"><div class="modal-head"><h2>Set free / tester term</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Mode<select name="mode"><option value="trialing">Replace term from today</option><option value="extend">Extend from current end</option><option value="comped">Comped (no expiry)</option></select></label><label>Days<input name="trialDays" type="number" min="0" max="3650" value="30"/></label></div><div class="ledger-note">${icon("timer", 15)} Use this for tester shops. Zero days with Comped means unlimited free access until you convert them to paid.</div><p class="login-error" id="free-term-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save term</button></div></form>`);
+    document.querySelector("#free-term-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#free-term-error"), data = Object.fromEntries(new FormData(event.target));
+      button.disabled = true;
+      error.hidden = true;
+      try {
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/subscription`, { method: "POST", body: JSON.stringify({ mode: data.mode, trialDays: data.trialDays }) });
+        closeModal();
+        platformAccounts = null;
+        toast("Free term updated");
+        render();
+      } catch (requestError) {
+        error.textContent = requestError.message;
+        error.hidden = false;
+        button.disabled = false;
+      }
+    };
   }
   function bindPlatformAdmin() {
-    if (typeof enrichPlatformControls === "function") enrichPlatformControls();
     document.querySelector("#refresh-platform")?.addEventListener("click", () => {
       platformAccounts = null;
       render();
     });
     document.querySelector("#new-customer-account")?.addEventListener("click", openCustomerAccount);
     document.querySelectorAll("[data-credit-shop]").forEach((button) => button.onclick = () => openAccountCredit(button.dataset.creditShop, button.dataset.shopName));
-    document.querySelectorAll("[data-set-password]").forEach((button) => button.onclick = () => openSetPassword(button.dataset.setPassword, button.dataset.userEmail));
+    document.querySelectorAll("[data-convert-shop]").forEach((button) => button.onclick = () => openConvertPaid(button.dataset.convertShop, button.dataset.shopName));
+    document.querySelectorAll("[data-trial-shop]").forEach((button) => button.onclick = () => openFreeTerm(button.dataset.trialShop, button.dataset.shopName));
     document.querySelectorAll("[data-account-status]").forEach((button) => button.onclick = async () => {
       const suspended = button.dataset.suspended === "true", action = suspended ? "suspend" : "reactivate";
-      if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}? ${suspended ? "Every login for this customer will be signed out and disabled." : "Every login for this customer will be enabled."}`)) return;
+      if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}?`)) return;
       button.disabled = true;
       try {
         await platformApi(`/admin/accounts/${encodeURIComponent(button.dataset.accountStatus)}/status`, { method: "POST", body: JSON.stringify({ suspended }) });
@@ -1996,21 +2086,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
         button.disabled = false;
       }
     });
-    document.querySelectorAll("[data-reset-user]").forEach((button) => button.onclick = async () => {
-      if (!confirm("Send password reset instructions to this account?")) return;
-      button.disabled = true;
-      try {
-        await platformApi(`/admin/accounts/${button.dataset.resetUser}/reset-password`, { method: "POST" });
-        toast("Password reset instructions sent");
-      } catch (error) {
-        toast(error.message);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  }
-  function openPasswordReset() {
-    showModal(`<div class="modal"><div class="modal-head"><h2>Password and MFA</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><p>MechPro authentication is managed by Cloudflare Access and your organization identity provider. Use your identity provider's account-recovery flow or contact your administrator.</p></div><div class="modal-actions"><button type="button" class="primary" data-close>Close</button></div></div>`);
   }
   function render() {
     const root = document.querySelector("#root");
@@ -2034,6 +2109,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
+    document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan);
     bindEstimateActions();
     bindMessagingService();
     bindPaymentService();
@@ -3636,6 +3712,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const page = settingsAgentPhoneCore();
     if (currentUser()?.role !== "admin") return page;
     return page.replace("</main>", `<section class="settings-panel agentphone-settings"><div class="statement-head"><div><div class="eyebrow">Voice and messaging</div><h2>Connect AgentPhone.ai</h2><p>Give this shop's AgentPhone agent access to the live MechPro assistant for calls and messages. Credentials are encrypted by the Worker and never stored in the browser.</p></div>${icon("phone-call", 20)}</div><form class="form-grid" id="agentphone-config-form"><label>AgentPhone API key *<input name="apiKey" type="password" autocomplete="new-password" placeholder="ap_..." required/></label><label>Agent ID *<input name="agentId" placeholder="agt_..." required/></label><label>Conversation history<input name="contextLimit" type="number" min="0" max="50" value="10"/></label><label>Voice response timeout<input name="timeout" type="number" min="5" max="120" value="30"/></label><div class="full agentphone-webhook-preview"><span>Webhook URL</span><code>${cloudflareConfig2.apiUrl}/agentphone/webhook/${escapeHtml(authSession()?.claims?.["custom:shopId"] || "")}</code></div><div class="full"><button class="primary" type="submit">${icon("plug-zap", 14)} Connect AgentPhone</button><small class="form-help">The AgentPhone webhook signing secret is generated and encrypted and stored in D1 by the Worker.</small></div></form></section></main>`);
+  };
+  var settingsAppsBillingCore = settings;
+  settings = function() {
+    const page = settingsAppsBillingCore();
+    if (!["admin", "super_admin"].includes(currentUser()?.role || "")) return page;
+    return page.replace("</main>", `<section class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Apps and subscription</div><h2>Install MechPro and manage plan</h2><p>Download Windows or Android apps, install the web app on a phone home screen, or convert a free shop to paid.</p></div></div><div class="download-actions"><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 14)} Open downloads page</a><a class="secondary" href="/downloads/MechPro.apk">${icon("smartphone", 14)} Android APK</a><a class="secondary" href="/downloads/MechPro-Setup-1.0.0.exe">${icon("monitor", 14)} Windows setup</a><button type="button" class="primary" id="upgrade-shop-plan">${icon("sparkles", 14)} Upgrade to paid</button></div></section></main>`);
   };
   var bindAgentPhoneSettingsCore = bindExpandedFeatures;
   bindExpandedFeatures = function() {

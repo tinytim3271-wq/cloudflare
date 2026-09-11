@@ -551,7 +551,7 @@ async function handleAdmin(request, env, context, segments) {
     return json(accounts.results.map(account => ({
       id: account.shop_id, shopId: account.shop_id, shopName: account.shop_name,
       ownerEmail: account.owner_email, ownerName: account.owner_name,
-      creditBalance: account.credit_balance, subscriptionStatus: account.subscription_status,
+      creditBalance: Number(account.credit_balance ?? 0), subscriptionStatus: account.subscription_status,
       subscriptionExpiresAt: account.subscription_expires_at, suspended: Boolean(account.suspended),
       createdAt: account.created_at, updatedAt: account.updated_at,
       users: users.results.filter(user => user.shop_id === account.shop_id).map(user => ({
@@ -566,29 +566,69 @@ async function handleAdmin(request, env, context, segments) {
     const ownerName = String(body.ownerName || '').trim();
     const shopName = String(body.shopName || '').trim();
     const shopId = String(body.shopId || '').trim().toLowerCase();
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const accountMode = String(body.accountMode || body.subscriptionStatus || 'trialing').trim().toLowerCase();
+    const trialDaysRaw = body.trialDays;
+    const trialDays = trialDaysRaw === '' || trialDaysRaw === null || trialDaysRaw === undefined
+      ? null
+      : Math.max(0, Math.min(3650, Math.round(Number(trialDaysRaw))));
     if (!email || !ownerName || !shopName || !validShopId(shopId)) throw new HttpError(400, 'Owner name, email, shop name, and a valid shop ID are required');
+    if (!['trialing', 'active', 'comped'].includes(accountMode)) throw new HttpError(400, 'accountMode must be trialing, active, or comped');
+    if (trialDaysRaw !== null && trialDaysRaw !== undefined && trialDaysRaw !== '' && !Number.isFinite(trialDays)) {
+      throw new HttpError(400, 'trialDays must be a number of days (0 = no expiry)');
+    }
     const existing = await env.DB.prepare(
       'SELECT shop_id FROM accounts WHERE shop_id = ? UNION ALL SELECT shop_id FROM users WHERE email = ? COLLATE NOCASE LIMIT 1',
     ).bind(shopId, email).first();
     if (existing) throw new HttpError(409, 'An account already uses this shop ID or owner email');
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const subscriptionStatus = accountMode === 'active' ? 'active' : 'trialing';
+    let subscriptionExpiresAt = null;
+    if (accountMode !== 'active' && trialDays && trialDays > 0) {
+      subscriptionExpiresAt = new Date(now.getTime() + trialDays * 86400000).toISOString();
+    }
     await env.DB.batch([
       env.DB.prepare(`
-        INSERT INTO accounts (shop_id, shop_name, owner_email, owner_name, created_at, updated_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).bind(shopId, shopName, email, ownerName, now, now, context.userId),
+        INSERT INTO accounts (shop_id, shop_name, owner_email, owner_name, subscription_status, subscription_expires_at, created_at, updated_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(shopId, shopName, email, ownerName, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso, context.userId),
       env.DB.prepare(`
         INSERT INTO users (email, shop_id, role, name, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?, ?)
-      `).bind(email, shopId, ownerName, now, now),
+      `).bind(email, shopId, ownerName, nowIso, nowIso),
       env.DB.prepare(`
         INSERT INTO entities (shop_id, entity_type, entity_id, data_json, created_by, created_at, updated_at)
         VALUES (?, 'employees', ?, ?, ?, ?, ?)
       `).bind(shopId, `owner-${shopId}`, JSON.stringify({
         id: `owner-${shopId}`, shopId, name: ownerName, email, role: 'admin', title: 'Owner',
-        department: 'Administration', active: true, createdAt: now, updatedAt: now,
-      }), context.userId, now, now),
+        department: 'Administration', active: true, createdAt: nowIso, updatedAt: nowIso,
+      }), context.userId, nowIso, nowIso),
     ]);
-    return json({ id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0, subscriptionStatus: 'active', createdAt: now, updatedAt: now }, 201);
+    try {
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT OR IGNORE INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
+          VALUES (?, ?, ?, 'America/Chicago', ?, ?, ?)
+        `).bind(shopId, shopName, shopId, subscriptionStatus, nowIso, nowIso),
+        env.DB.prepare(`
+          INSERT OR IGNORE INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
+          VALUES (?, ?, 'owner', 'active', ?, ?)
+        `).bind(shopId, email, nowIso, nowIso),
+        env.DB.prepare(`
+          INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+            current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+        `).bind(shopId, planId, subscriptionStatus, subscriptionExpiresAt, nowIso),
+      ]);
+    } catch (_) {
+      // SaaS tables from 0002 may be absent in older local DBs; accounts/users are enough for entitlement.
+    }
+    return json({
+      id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0,
+      subscriptionStatus, subscriptionExpiresAt, planId, accountMode, trialDays,
+      createdAt: nowIso, updatedAt: nowIso,
+    }, 201);
   }
   const target = decodeURIComponent(segments[2] || '');
   const action = segments[3];
@@ -630,6 +670,62 @@ async function handleAdmin(request, env, context, segments) {
     if (!result.meta.changes) throw new HttpError(404, 'Customer account not found');
     await env.DB.prepare('UPDATE users SET enabled = ?, updated_at = ? WHERE shop_id = ?').bind(body.suspended ? 0 : 1, now, target).run();
     return json({ shopId: target, suspended: body.suspended });
+  }
+  if (request.method === 'POST' && action === 'subscription') {
+    if (!validShopId(target)) throw new HttpError(400, 'A valid shop ID is required');
+    const body = await requestJson(request);
+    const mode = String(body.mode || body.subscriptionStatus || '').trim().toLowerCase();
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const trialDays = body.trialDays === '' || body.trialDays === null || body.trialDays === undefined
+      ? null
+      : Math.max(0, Math.min(3650, Math.round(Number(body.trialDays))));
+    if (!['trialing', 'active', 'comped', 'extend'].includes(mode)) {
+      throw new HttpError(400, 'mode must be trialing, active, comped, or extend');
+    }
+    if (body.trialDays !== undefined && body.trialDays !== null && body.trialDays !== '' && !Number.isFinite(trialDays)) {
+      throw new HttpError(400, 'trialDays must be a number of days');
+    }
+    const account = await env.DB.prepare('SELECT * FROM accounts WHERE shop_id = ?').bind(target).first();
+    if (!account) throw new HttpError(404, 'Customer account not found');
+    const now = new Date();
+    const nowIso = now.toISOString();
+    let subscriptionStatus = String(account.subscription_status || 'trialing');
+    let subscriptionExpiresAt = account.subscription_expires_at || null;
+    if (mode === 'active') {
+      subscriptionStatus = 'active';
+      subscriptionExpiresAt = null;
+    } else if (mode === 'comped' || mode === 'trialing') {
+      subscriptionStatus = 'trialing';
+      subscriptionExpiresAt = trialDays && trialDays > 0
+        ? new Date(now.getTime() + trialDays * 86400000).toISOString()
+        : null;
+    } else if (mode === 'extend') {
+      subscriptionStatus = 'trialing';
+      const days = trialDays && trialDays > 0 ? trialDays : 30;
+      const base = subscriptionExpiresAt && new Date(subscriptionExpiresAt).getTime() > now.getTime()
+        ? new Date(subscriptionExpiresAt)
+        : now;
+      subscriptionExpiresAt = new Date(base.getTime() + days * 86400000).toISOString();
+    }
+    await env.DB.prepare(
+      'UPDATE accounts SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE shop_id = ?',
+    ).bind(subscriptionStatus, subscriptionExpiresAt, nowIso, target).run();
+    try {
+      await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind(subscriptionStatus, nowIso, target).run();
+      await env.DB.prepare(`
+        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+          current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+      `).bind(target, planId, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso).run();
+    } catch (_) {}
+    return json({
+      shopId: target,
+      subscriptionStatus,
+      subscriptionExpiresAt,
+      planId,
+      mode,
+    });
   }
   throw new HttpError(405, 'Method not allowed');
 }
@@ -780,30 +876,86 @@ async function handleBilling(request, env, context, segments) {
   const action = segments[1] || '';
   if (action === 'checkout' && request.method === 'POST') {
     const body = await requestJson(request);
-    const planId = String(body.planId || '').trim();
-    const hasSession = Boolean(context?.shopId);
-    if (!hasSession) throw new HttpError(401, 'You must be signed in to start a trial');
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
+    if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
     const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
     if (!plan) throw new HttpError(404, 'Billing plan not found');
-    const checkoutUrl = body.successUrl || '/app';
-    return json({ ok: true, planId: plan.id, shopId: context.shopId, url: String(checkoutUrl), provider: 'stripe' });
+    const stripeKey = env.STRIPE_SECRET_KEY || '';
+    const priceId = String(plan.stripe_price_id || '').trim();
+    if (stripeKey && priceId && !priceId.startsWith('price_placeholder') && !priceId.startsWith('price_starter') && !priceId.startsWith('price_growth')) {
+      const origin = new URL(request.url).origin;
+      const successUrl = String(body.successUrl || `${origin}/?billing=success`);
+      const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
+      const params = new URLSearchParams({
+        mode: 'subscription',
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: context.shopId,
+        'line_items[0][price]': priceId,
+        'line_items[0][quantity]': '1',
+        'metadata[shopId]': context.shopId,
+        'metadata[planId]': plan.id,
+      });
+      const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Basic ${btoa(`${stripeKey}:`)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params,
+      });
+      const session = await response.json().catch(() => ({}));
+      if (!response.ok || !session.url) throw new HttpError(502, session.error?.message || 'Stripe checkout could not be created');
+      return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
+    }
+    // Manual conversion path when SaaS Stripe prices are not configured yet.
+    const nowIso = new Date().toISOString();
+    await env.DB.prepare(
+      'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
+    ).bind('active', nowIso, context.shopId).run();
+    try {
+      await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, context.shopId).run();
+      await env.DB.prepare(`
+        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+        VALUES (?, ?, 'active', NULL, ?, ?)
+        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
+          current_period_end = NULL, updated_at = excluded.updated_at
+      `).bind(context.shopId, plan.id, nowIso, nowIso).run();
+    } catch (_) {}
+    return json({
+      ok: true,
+      planId: plan.id,
+      shopId: context.shopId,
+      url: String(body.successUrl || '/?billing=activated'),
+      provider: 'manual',
+      mode: 'activated',
+      message: 'Account converted to paid. Connect live Stripe SaaS prices to collect card payments automatically.',
+    });
   }
   if (action === 'portal' && request.method === 'POST') {
     if (!context?.shopId) throw new HttpError(401, 'Sign in to manage billing');
-    return json({ ok: true, shopId: context.shopId, url: '/app/billing', provider: 'stripe' });
+    return json({ ok: true, shopId: context.shopId, url: '/downloads', provider: 'manual' });
   }
   if (action === 'status' && request.method === 'GET') {
     if (!context?.shopId) throw new HttpError(401, 'Sign in to view billing');
+    const account = await env.DB.prepare(
+      'SELECT subscription_status, subscription_expires_at, suspended FROM accounts WHERE shop_id = ?',
+    ).bind(context.shopId).first();
     const subscription = await env.DB.prepare(
       'SELECT * FROM subscriptions WHERE shop_id = ? LIMIT 1',
-    ).bind(context.shopId).first();
+    ).bind(context.shopId).first().catch(() => null);
+    const expiresAt = account?.subscription_expires_at || subscription?.current_period_end || null;
+    const expired = Boolean(expiresAt && new Date(expiresAt).getTime() <= Date.now());
+    const status = Number(account?.suspended) === 1
+      ? 'suspended'
+      : expired
+        ? 'expired'
+        : String(account?.subscription_status || subscription?.status || 'trialing');
     return json({
       ok: true,
       shopId: context.shopId,
-      active: Boolean(subscription && ['trialing', 'active'].includes(String(subscription.status || ''))),
-      status: subscription ? String(subscription.status || 'trialing') : 'trialing',
+      active: Number(account?.suspended) !== 1 && ['trialing', 'active'].includes(status) && !expired,
+      status,
       planId: subscription ? String(subscription.plan_id || '') : null,
-      currentPeriodEnd: subscription ? String(subscription.current_period_end || '') : null,
+      currentPeriodEnd: expiresAt,
     });
   }
   if (action === 'webhook' && request.method === 'POST') {
@@ -811,7 +963,26 @@ async function handleBilling(request, env, context, segments) {
     const signature = request.headers.get('Stripe-Signature') || '';
     if (!signature) return json({ received: true, mode: 'stub' }, 202);
     const event = parseJson(payload);
-    return json({ received: true, type: event.type || 'unknown', mode: 'stub' }, 202);
+    if (event?.type === 'checkout.session.completed') {
+      const shopId = event.data?.object?.client_reference_id || event.data?.object?.metadata?.shopId;
+      const planId = event.data?.object?.metadata?.planId || 'starter';
+      if (shopId) {
+        const nowIso = new Date().toISOString();
+        await env.DB.prepare(
+          'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
+        ).bind('active', nowIso, shopId).run();
+        try {
+          await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, shopId).run();
+          await env.DB.prepare(`
+            INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+            VALUES (?, ?, 'active', NULL, ?, ?)
+            ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
+              current_period_end = NULL, updated_at = excluded.updated_at
+          `).bind(shopId, planId, nowIso, nowIso).run();
+        } catch (_) {}
+      }
+    }
+    return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);
   }
   throw new HttpError(404, 'Not found');
 }

@@ -65,3 +65,13 @@ input,select,textarea{border-color:#cdd7cf;background:#fff}input:hover,select:ho
 .sync-pill.online{color:#215c45;border-color:#b7d7c7;background:#e9f1ec}
 .sync-pill.offline,.sync-pill.pending{color:#7a5a12;border-color:#e2d2a2;background:#f8f1de}
 .sync-pill.conflict{color:#9d3028;border-color:#e5b7b2;background:#f8e5e2}
+
+.platform-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.platform-kpis article,.platform-actions .platform-kpis article{padding:14px;border:1px solid var(--line);background:var(--paper);border-radius:6px}
+.platform-kpis span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.platform-kpis strong{display:block;margin-top:6px;font-size:22px}
+.platform-actions{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin:16px 0 18px;flex-wrap:wrap}
+.platform-action-buttons,.download-actions,.platform-row-actions{display:flex;flex-wrap:wrap;gap:8px}
+.platform-table td small,.platform-table th{vertical-align:top}
+.platform-shell .shop-card{margin-bottom:10px}
+@media(max-width:900px){.platform-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Download MechPro — Desktop & Mobile</title>
+    <style>
+      :root { --ink:#edf6f9; --muted:#a6b7be; --deep:#0d1d24; --card:rgba(255,255,255,.03); --line:rgba(255,255,255,.14); --accent:#4cc9f0; }
+      * { box-sizing: border-box; }
+      body { margin:0; font-family: Georgia, "Times New Roman", serif; background: radial-gradient(circle at top left, #163645, var(--deep) 55%); color: var(--ink); }
+      a { color: var(--accent); }
+      .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 20px 72px; }
+      header { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; padding: 10px 0 28px; }
+      nav { display:flex; gap:16px; flex-wrap:wrap; align-items:center; font-family: Arial, sans-serif; font-size: 14px; }
+      .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:12px 18px; border-radius:999px; text-decoration:none; font-weight:700; font-family: Arial, sans-serif; }
+      .btn.primary { background: var(--accent); color:#061d2b; }
+      .btn.secondary { border:1px solid var(--line); color: var(--ink); }
+      h1 { font-size: clamp(2rem, 5vw, 3.4rem); line-height:1.08; margin: 0 0 12px; max-width: 14ch; }
+      .lede { font-family: Arial, sans-serif; color: var(--muted); font-size: 1.05rem; max-width: 52ch; line-height:1.55; }
+      .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:18px; margin-top:34px; }
+      .card { border:1px solid var(--line); border-radius:18px; padding:22px; background: var(--card); display:flex; flex-direction:column; gap:12px; min-height: 280px; }
+      .card h2 { margin:0; font-size:1.45rem; }
+      .card p { margin:0; font-family: Arial, sans-serif; color: var(--muted); line-height:1.5; flex:1; }
+      .meta { font-family: Arial, sans-serif; font-size:12px; color:#8ea3ab; text-transform:uppercase; letter-spacing:.06em; }
+      .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:auto; }
+      .note { margin-top:28px; padding:16px 18px; border:1px solid var(--line); border-radius:14px; font-family: Arial, sans-serif; color: var(--muted); line-height:1.5; }
+      footer { margin-top:40px; color: var(--muted); font-family: Arial, sans-serif; font-size:14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <strong>MechPro</strong>
+        <nav>
+          <a href="/">Home</a>
+          <a href="/features">Features</a>
+          <a href="/pricing">Pricing</a>
+          <a href="/login">Login</a>
+          <a href="/signup" class="btn primary">Start free trial</a>
+        </nav>
+      </header>
+
+      <h1>Install MechPro on your computer or phone.</h1>
+      <p class="lede">Same shop data in the browser, on Windows desktops, and on Android. Use the web app anywhere, then install the native apps for bay computers and phones.</p>
+
+      <div class="grid">
+        <article class="card">
+          <div class="meta">Windows desktop</div>
+          <h2>PC installer</h2>
+          <p>Full desktop app for office and bay computers, including optional OEM diagnostics on Windows. Prefer the installer for shop machines.</p>
+          <div class="actions">
+            <a class="btn primary" href="/downloads/MechPro-Setup-1.0.0.exe">Download Windows setup</a>
+            <a class="btn secondary" href="/downloads/MechPro-Setup-1.0.0.zip">Portable ZIP</a>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="meta">Android phone / tablet</div>
+          <h2>Android app</h2>
+          <p>Install the APK on Android phones and tablets for dispatch, work orders, and shop updates on the floor.</p>
+          <div class="actions">
+            <a class="btn primary" href="/downloads/MechPro.apk">Download Android APK</a>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="meta">Any device</div>
+          <h2>Web app / PWA</h2>
+          <p>Open MechPro in Chrome or Edge, then use Install app / Add to Home Screen for a full-screen icon without an APK or EXE.</p>
+          <div class="actions">
+            <a class="btn primary" href="/app">Open web app</a>
+            <a class="btn secondary" href="/login">Sign in</a>
+          </div>
+        </article>
+      </div>
+
+      <div class="note">
+        <strong style="color:#edf6f9;">Need a tester shop?</strong>
+        Platform admins can create free shops with any trial length from the platform console after signing in as a platform administrator. Free shops can be converted to paid anytime.
+      </div>
+
+      <footer>
+        Windows builds publish from CI to this downloads folder. If a file 404s, the latest desktop build may still be publishing — use the web app meanwhile.
+      </footer>
+    </div>
+  </body>
+</html>
