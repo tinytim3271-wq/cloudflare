@@ -16,6 +16,7 @@ on:
       - 'theme.css'
       - 'service-worker.js'
       - 'manifest.webmanifest'
+      - 'diagnostics-ui.js'
       - 'assets/**'
   push:
     branches: [main]
@@ -33,6 +34,7 @@ on:
       - 'theme.css'
       - 'service-worker.js'
       - 'manifest.webmanifest'
+      - 'diagnostics-ui.js'
       - 'assets/**'
 
 permissions:

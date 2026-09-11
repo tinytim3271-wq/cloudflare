@@ -4,7 +4,7 @@ This project uses [Capacitor](https://capacitorjs.com/) to package the web app a
 
 ## Requirements
 
-- **Node.js** 18+ and npm
+- **Node.js** 24+ and npm (matches CI and `package.json` `engines`)
 - **Android Studio** (latest stable) with:
   - Android SDK Platform 35
   - Android SDK Build-Tools

@@ -11,6 +11,8 @@ on:
       - 'package-lock.json'
       - 'app.js'
       - 'diagnostics-ui.js'
+      - 'src/**'
+      - 'scripts/**'
   push:
     branches: [main]
     paths:
@@ -21,6 +23,8 @@ on:
       - 'package-lock.json'
       - 'app.js'
       - 'diagnostics-ui.js'
+      - 'src/**'
+      - 'scripts/**'
 
 permissions:
   contents: read
@@ -73,6 +77,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: mechpro-windows-installer
@@ -82,7 +87,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="desktop-v1.0.0"
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="desktop-v${VERSION}"
           REPO="${{ github.repository }}"
           NOTES="Automated Windows build from ${GITHUB_SHA}. Includes J2534 OEM Diagnostics and 64-bit Windows adapter detection (WOW6432Node)."
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
@@ -90,48 +96,50 @@ jobs:
           else
             gh release create "$TAG" dist/windows/*.exe dist/windows/*.zip \
               --repo "$REPO" \
-              --title "MechPro Desktop 1.0.0" \
+              --title "MechPro Desktop ${VERSION}" \
               --notes "$NOTES"
           fi
 
   publish-download:
-    # Job-level `if` cannot read `secrets`; skip the R2 upload in a step instead.
+    # Job-level `if` cannot read secrets; skip the R2 upload in a step instead.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-installer
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+      id-token: write
     steps:
-      - name: Check Cloudflare credentials
-        id: creds
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=R2 installer publish skipped::Add repository secret CLOUDFLARE_API_TOKEN to publish the Windows installer to R2."
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.creds.outputs.present == 'true'
-        uses: actions/checkout@v4
-      - if: steps.creds.outputs.present == 'true'
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           name: mechpro-windows-installer
           path: dist/windows
-      - name: Publish Windows installer exe to R2
-        if: steps.creds.outputs.present == 'true'
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+      - uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}/downloads/MechPro-Setup-1.0.0.exe --remote --file dist/windows/MechPro-Setup-1.0.0.exe --content-type application/octet-stream --cache-control "public, max-age=300"
-      - name: Publish Windows installer zip to R2
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Check Cloudflare credentials
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=R2 installer publish skipped::Add repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to publish the Windows installer to R2."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish Windows installer to R2
         if: steps.creds.outputs.present == 'true'
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}/downloads/MechPro-Setup-1.0.0.zip --remote --file dist/windows/MechPro-Setup-1.0.0.zip --content-type application/zip --cache-control "public, max-age=300"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.exe" --remote --file "dist/windows/MechPro-Setup-${VERSION}.exe" --content-type application/octet-stream --cache-control "public, max-age=300"
+          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.zip" --remote --file "dist/windows/MechPro-Setup-${VERSION}.zip" --content-type application/zip --cache-control "public, max-age=300"
