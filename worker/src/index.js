@@ -21,7 +21,7 @@ import {
   hmacHex,
   verifyAccessJwt,
 } from './security.mjs';
-import { HttpError, json, requestJson } from './http.mjs';
+import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { getEntity, handleEntities, listEntities, putEntity } from './routes/entities.mjs';
 import { handleFiles } from './routes/files.mjs';
 
@@ -883,7 +883,11 @@ export default {
         status,
         error: error instanceof Error ? error.message : String(error),
       }));
-      return withCors(json({ message: status === 500 ? 'Internal error' : error.message }, status), request, env);
+      return withCors(json({
+        message: status === 500
+          ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
+          : error.message,
+      }, status), request, env);
     }
   },
 };
