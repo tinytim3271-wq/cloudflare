@@ -121,6 +121,7 @@ function normalizeOemAdapter(adapter) {
   };
 }
 
+function formatCommEntry(entry) {
   const time = new Date(entry.timestamp).toLocaleTimeString();
   const dir = entry.direction === 'tx' ? 'TX' : 'RX';
   return `[${time}] ${dir} ${entry.address} ${entry.data} — ${entry.description}`;

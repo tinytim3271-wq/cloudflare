@@ -637,8 +637,19 @@ async function handleAdmin(request, env, context, segments) {
 async function ensureSaasUser(env, email, name) {
   const normalized = String(email || '').trim().toLowerCase();
   if (!normalized) throw new HttpError(400, 'A valid email is required');
-  const existing = await env.DB.prepare('SELECT id, shop_id, role, name, enabled FROM users WHERE email = ? COLLATE NOCASE').bind(normalized).first();
-  if (existing) return existing;
+  const existing = await env.DB.prepare(
+    'SELECT id, email, shop_id, role, name, enabled FROM users WHERE email = ? COLLATE NOCASE',
+  ).bind(normalized).first();
+  if (existing) {
+    if (!existing.id) {
+      const userId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      await env.DB.prepare('UPDATE users SET id = ?, updated_at = ? WHERE email = ? COLLATE NOCASE')
+        .bind(userId, now, normalized).run();
+      existing.id = userId;
+    }
+    return existing;
+  }
   const userId = crypto.randomUUID();
   const now = new Date().toISOString();
   const shopId = `shop-${Date.now().toString(36)}`;
@@ -657,7 +668,7 @@ async function ensureSaasUser(env, email, name) {
       VALUES (?, ?, ?, 'admin', ?, 1, ?, ?)
     `).bind(userId, normalized, shopId, ownerName, now, now),
   ]);
-  return { id: userId, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
+  return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
 }
 
 async function handleMagicLink(request, env) {
