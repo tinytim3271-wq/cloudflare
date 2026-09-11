@@ -6,6 +6,7 @@ diagnostics/j2534-service/**/obj/
 .wrangler/
 .pages-dist/
 .dev.vars
+!.dev.vars.example
 worker-configuration.d.ts
 .playwright-mcp/
 www/
@@ -14,3 +15,4 @@ www/
 .env.*
 !.env.example
 .dev.vars
+!.dev.vars.example

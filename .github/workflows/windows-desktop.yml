@@ -11,6 +11,8 @@ on:
       - 'package-lock.json'
       - 'app.js'
       - 'diagnostics-ui.js'
+      - 'src/**'
+      - 'scripts/**'
   push:
     branches: [main]
     paths:
@@ -21,6 +23,8 @@ on:
       - 'package-lock.json'
       - 'app.js'
       - 'diagnostics-ui.js'
+      - 'src/**'
+      - 'scripts/**'
 
 permissions:
   contents: read
@@ -73,6 +77,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: mechpro-windows-installer
@@ -82,7 +87,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="desktop-v1.0.0"
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="desktop-v${VERSION}"
           REPO="${{ github.repository }}"
           NOTES="Automated Windows build from ${GITHUB_SHA}. Includes J2534 OEM Diagnostics and 64-bit Windows adapter detection (WOW6432Node)."
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
@@ -90,7 +96,7 @@ jobs:
           else
             gh release create "$TAG" dist/windows/*.exe dist/windows/*.zip \
               --repo "$REPO" \
-              --title "MechPro Desktop 1.0.0" \
+              --title "MechPro Desktop ${VERSION}" \
               --notes "$NOTES"
           fi
 
@@ -119,5 +125,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}
         run: |
-          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-1.0.0.exe" --remote --file dist/windows/MechPro-Setup-1.0.0.exe --content-type application/octet-stream --cache-control "public, max-age=300"
-          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-1.0.0.zip" --remote --file dist/windows/MechPro-Setup-1.0.0.zip --content-type application/zip --cache-control "public, max-age=300"
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.exe" --remote --file "dist/windows/MechPro-Setup-${VERSION}.exe" --content-type application/octet-stream --cache-control "public, max-age=300"
+          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.zip" --remote --file "dist/windows/MechPro-Setup-${VERSION}.zip" --content-type application/zip --cache-control "public, max-age=300"

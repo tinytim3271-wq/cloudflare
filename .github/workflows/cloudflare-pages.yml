@@ -81,7 +81,7 @@ jobs:
             echo "Set variable CLOUDFLARE_DEPLOY_ENABLED=false only if you need to skip publish."
             exit 1
           fi
-      - name: Configure D1 binding
+      - name: Configure D1 binding and CORS origins
         env:
           CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_ALLOWED_ORIGINS: ${{ vars.CLOUDFLARE_ALLOWED_ORIGINS }}
@@ -89,20 +89,34 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const path = 'wrangler.jsonc';
-          let source = fs.readFileSync(path, 'utf8');
+          // Strip JSONC comments for parsing, then write pretty JSON (wrangler accepts JSON).
+          const raw = fs.readFileSync(path, 'utf8');
+          const jsonText = raw
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+          const config = JSON.parse(jsonText);
           const placeholder = '00000000-0000-0000-0000-000000000000';
           const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
-          if (databaseId) {
-            source = source.replace(/"database_id":\s*"[^"]+"/, `"database_id": "${databaseId}"`);
+          const d1 = (config.d1_databases || [])[0];
+          if (!d1) {
+            console.error('wrangler.jsonc is missing d1_databases[0]');
+            process.exit(1);
           }
-          if (source.includes(placeholder)) {
+          if (databaseId) {
+            d1.database_id = databaseId;
+          }
+          if (!d1.database_id || d1.database_id === placeholder) {
             console.error('Set CLOUDFLARE_D1_DATABASE_ID or put a real D1 id in wrangler.jsonc');
             process.exit(1);
           }
           if (process.env.CLOUDFLARE_ALLOWED_ORIGINS) {
-            source = source.replace('https://mechpro-dispatch.pages.dev', process.env.CLOUDFLARE_ALLOWED_ORIGINS);
+            // Replace the full ALLOWED_ORIGINS value (comma-separated list), not a substring.
+            config.vars = config.vars || {};
+            config.vars.ALLOWED_ORIGINS = process.env.CLOUDFLARE_ALLOWED_ORIGINS;
           }
-          fs.writeFileSync(path, source);
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          console.log(`D1 database_id=${d1.database_id}`);
+          console.log(`ALLOWED_ORIGINS=${config.vars?.ALLOWED_ORIGINS || '(unchanged)'}`);
           NODE
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@v3

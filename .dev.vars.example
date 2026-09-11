@@ -1,0 +1,11 @@
+# Local Worker secrets for `wrangler dev` (copy to `.dev.vars` — gitignored).
+# Never enable DEV_AUTH_BYPASS in production.
+
+DEV_AUTH_BYPASS=1
+ACCESS_ADMIN_EMAILS=admin@example.com
+INTEGRATION_ENCRYPTION_KEY=replace-with-a-long-random-value
+DIAGNOSTICS_CAPABILITY_SECRET=replace-with-a-different-random-value
+
+# Optional Access simulation when not using DEV_AUTH_BYPASS:
+# ACCESS_TEAM_DOMAIN=https://example.cloudflareaccess.com
+# ACCESS_AUD=your-access-application-audience

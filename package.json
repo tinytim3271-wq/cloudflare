@@ -21,16 +21,19 @@
     "stage:pages": "node scripts/stage-pages.mjs",
     "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
-    "validate": "npm run build:web && npm run test:config && npm run test:home && npm run validate:worker && npm run test:j2534",
+    "validate": "npm run build:web && npm run test:config && npm run test:modules && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",
     "open:android": "npx cap open android",
     "build:android": "npm run sync",
     "desktop": "electron .",
-    "build:j2534": "bash diagnostics/j2534-service/scripts/publish-win-x64.sh",
+    "build:j2534": "node scripts/build-j2534.mjs",
     "build:windows": "npm run build:web && npm run build:j2534 && electron-builder --win nsis --publish never",
     "build:windows:zip": "npm run build:web && npm run build:j2534 && electron-builder --win zip --publish never",
     "test:j2534": "node diagnostics/j2534-host-node/test/host.test.js",
-    "merge:open-prs": "bash scripts/merge-open-prs.sh"
+    "merge:open-prs": "bash scripts/merge-open-prs.sh",
+    "test:html": "node --test src/shared/html.test.mjs",
+    "test:storage": "node --test src/modules/storage.test.mjs",
+    "test:modules": "npm run test:home && npm run test:html && npm run test:storage"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
@@ -108,5 +111,8 @@
     "electron@41.10.7": true,
     "electron-winstaller@5.4.0": true,
     "esbuild@0.28.2": true
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
