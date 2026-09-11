@@ -131,18 +131,21 @@ the Settings screen stores its returned signing secret the same way.
 
 `.github/workflows/cloudflare-pages.yml` validates the web bundle and Worker,
 applies D1 migrations, deploys the Worker, and publishes Pages on `main`.
-Configure:
+Configure repository **Actions** credentials (not the unused `production`
+environment):
 
-- secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+- secret: `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, R2, and Pages edit)
+- variable or secret: `CLOUDFLARE_ACCOUNT_ID`
 - variables: optional `CLOUDFLARE_DEPLOY_ENABLED=false` to skip publish,
   `CLOUDFLARE_D1_DATABASE_ID`, optional `CLOUDFLARE_PAGES_PROJECT`, and optional
   `CLOUDFLARE_ALLOWED_ORIGINS`
 
-Publish runs on pushes to `main` and on manual **Run workflow** unless
-`CLOUDFLARE_DEPLOY_ENABLED` is set to `false`. The token needs Workers Scripts, D1,
-R2, and Pages edit permissions. Worker runtime secrets are configured with
+Publish runs on pushes to `main` and on manual **Run workflow** when
+`CLOUDFLARE_API_TOKEN` is set, unless `CLOUDFLARE_DEPLOY_ENABLED` is `false`.
+If the token is missing, validate still runs and publish is skipped instead of
+failing the workflow. Worker runtime secrets are configured with
 `wrangler secret put`, not GitHub variables. The Windows workflow publishes
-installers to the configured `CLOUDFLARE_R2_BUCKET`.
+installers to the configured `CLOUDFLARE_R2_BUCKET` when the same token is set.
 
 ## Desktop and mobile
 

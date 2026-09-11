@@ -101,6 +101,7 @@ jobs:
           fi
 
   publish-download:
+    # Job-level `if` cannot read secrets; skip the R2 upload in a step instead.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-installer
     runs-on: ubuntu-latest
@@ -119,7 +120,20 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Check Cloudflare credentials
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=R2 installer publish skipped::Add repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to publish the Windows installer to R2."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish Windows installer to R2
+        if: steps.creds.outputs.present == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
