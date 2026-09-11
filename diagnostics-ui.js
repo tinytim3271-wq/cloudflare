@@ -352,3 +352,5 @@ function bindOemDiagnostics() {
     refreshOemAdapters().then(() => { if (state.route === 'oem-diagnostics') render(); }).catch(() => {});
   }
 }
+
+/* rebuild 20260911175056 */

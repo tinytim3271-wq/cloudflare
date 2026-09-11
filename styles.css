@@ -60,3 +60,8 @@ input,select,textarea{border-color:#cdd7cf;background:#fff}input:hover,select:ho
 .oem-error{margin-top:12px}
 .muted{color:var(--muted);font-size:10px}
 @media(max-width:900px){.oem-grid{grid-template-columns:1fr}}
+
+.sync-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--paper);color:#46564e;font-size:10px;font-weight:700;white-space:nowrap}
+.sync-pill.online{color:#215c45;border-color:#b7d7c7;background:#e9f1ec}
+.sync-pill.offline,.sync-pill.pending{color:#7a5a12;border-color:#e2d2a2;background:#f8f1de}
+.sync-pill.conflict{color:#9d3028;border-color:#e5b7b2;background:#f8e5e2}
