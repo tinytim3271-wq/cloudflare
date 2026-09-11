@@ -287,11 +287,11 @@ async function handleEntities(request, env, context, segments) {
           'DELETE FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
         ).bind(context.shopId, 'payments', payment.id));
       }
-      if (type === 'employees' && existing.email) {
-        statements.push(env.DB.prepare(
-          'DELETE FROM users WHERE email = ? COLLATE NOCASE AND shop_id = ?',
-        ).bind(existing.email, context.shopId));
-      }
+    }
+    if (type === 'employees' && existing.email) {
+      statements.push(env.DB.prepare(
+        'DELETE FROM users WHERE email = ? COLLATE NOCASE AND shop_id = ?',
+      ).bind(existing.email, context.shopId));
     }
     await env.DB.batch(statements);
     return new Response(null, { status: 204 });
@@ -599,12 +599,29 @@ async function handleFiles(request, env, context, segments) {
   const key = new URL(request.url).searchParams.get('key') || (action === 'object' ? '' : decodeURIComponent(segments.slice(1).join('/')));
   if (!key || !key.startsWith(`shops/${context.shopId}/`)) throw new HttpError(403, 'File key is outside this shop');
   if (action === 'upload' && request.method === 'PUT') {
-    const contentLength = Number(request.headers.get('Content-Length') || 0);
-    if (contentLength > 15 * 1024 * 1024) throw new HttpError(413, 'File exceeds 15 MB');
-    await env.FILES.put(key, request.body, {
-      httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-      customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+    if (!request.body) throw new HttpError(400, 'Request body is required');
+    const maxBytes = 15 * 1024 * 1024;
+    const declaredLength = Number(request.headers.get('Content-Length') || 0);
+    if (declaredLength > maxBytes) throw new HttpError(413, 'File exceeds 15 MB');
+    let received = 0;
+    const limiter = new TransformStream({
+      transform(chunk, controller) {
+        received += chunk.byteLength;
+        if (received > maxBytes) {
+          controller.error(new Error('File exceeds 15 MB'));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
     });
+    try {
+      await env.FILES.put(key, request.body.pipeThrough(limiter), {
+        httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
+        customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+      });
+    } catch {
+      throw new HttpError(413, 'File exceeds 15 MB');
+    }
     return new Response(null, { status: 204 });
   }
   if (action === 'presign-download' && request.method === 'GET') {
