@@ -58,6 +58,12 @@ jobs:
       - run: npm run test:worker
       - run: npm run stage:pages
       - run: npx wrangler deploy --dry-run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages-dist
+          path: .pages-dist
+          if-no-files-found: error
+          retention-days: 1
 
   publish:
     # Job-level `if` cannot read `secrets` (GitHub rejects the workflow with 0 jobs).
@@ -80,13 +86,6 @@ jobs:
           fi
       - if: steps.creds.outputs.present == 'true'
         uses: actions/checkout@v4
-      - if: steps.creds.outputs.present == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - if: steps.creds.outputs.present == 'true'
-        run: npm ci
       - name: Configure D1 binding
         if: steps.creds.outputs.present == 'true'
         env:
@@ -125,9 +124,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
-      - name: Build and stage Pages
+      - name: Download staged Pages
         if: steps.creds.outputs.present == 'true'
-        run: npm run build:web && npm run stage:pages
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-dist
+          path: .pages-dist
       - name: Deploy Pages
         if: steps.creds.outputs.present == 'true'
         uses: cloudflare/wrangler-action@v3
