@@ -34,8 +34,8 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 
 ## Cloudflare provisioning
 
-Create the resources once, then put the returned D1 database ID in
-`wrangler.jsonc`:
+Create the resources once. The production D1 `database_id` is already set in
+`wrangler.jsonc`; only replace it when provisioning a new account or database:
 
 ```bash
 npx wrangler login
@@ -86,13 +86,11 @@ After an owner signs in with a magic-link from `/login`, create shops in
 shop; adding or editing an employee synchronizes that employee's email and role
 into D1.
 
-For local Worker API development only, set these values in an ignored
-`.dev.vars`:
+For local Worker API development only, copy `.dev.vars.example` to an ignored
+`.dev.vars` and fill in secrets:
 
-```dotenv
-DEV_AUTH_BYPASS=1
-INTEGRATION_ENCRYPTION_KEY=replace-with-a-long-random-value
-DIAGNOSTICS_CAPABILITY_SECRET=replace-with-a-different-random-value
+```bash
+cp .dev.vars.example .dev.vars
 ```
 
 Then send `X-MechPro-Dev-Email` (and optionally `X-MechPro-Dev-Name`) on local

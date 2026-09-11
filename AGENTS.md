@@ -10,8 +10,9 @@ This repository has three independent parts:
 
 ### Toolchain / non-obvious gotchas
 
-- Use Node 24, matching `.github/workflows/cloudflare-pages.yml`.
-- Replace the placeholder D1 ID in `wrangler.jsonc` before remote migration or deployment.
+- Use Node 24, matching `.github/workflows/cloudflare-pages.yml` and `package.json` `engines`.
+- `wrangler.jsonc` already contains the production D1 `database_id`. CI may override it with GitHub variable `CLOUDFLARE_D1_DATABASE_ID` when set; leave the committed ID as the source of truth for local/remote CLI deploys.
+- Copy `.dev.vars.example` to `.dev.vars` for local Worker secrets (`wrangler dev`). Never commit `.dev.vars`.
 
 ### Running the frontend (browser)
 

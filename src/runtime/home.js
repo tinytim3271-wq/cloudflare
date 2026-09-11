@@ -4,17 +4,11 @@
  * items, today's work, and recent activity — even when the shop is empty.
  */
 
-const CLOSED = new Set(['completed', 'invoiced']);
+import { escapeAttr, escapeHtml } from '../shared/html.js';
 
-export function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char]));
-}
+export { escapeAttr, escapeHtml };
+
+const CLOSED = new Set(['completed', 'invoiced']);
 
 export function emptyState(message) {
   return `<div class="empty-state"><h2>${escapeHtml(message)}</h2></div>`;
