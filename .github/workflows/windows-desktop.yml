@@ -123,14 +123,14 @@ jobs:
           path: dist/windows
       - name: Publish Windows installer exe to R2
         if: steps.creds.outputs.present == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}/downloads/MechPro-Setup-1.0.0.exe --remote --file dist/windows/MechPro-Setup-1.0.0.exe --content-type application/octet-stream --cache-control "public, max-age=300"
       - name: Publish Windows installer zip to R2
         if: steps.creds.outputs.present == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
