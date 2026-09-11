@@ -3873,14 +3873,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   stampDemoAppointments();
   async function startApp() {
-    if (!authSession()) {
-      try {
-        const session = await cloudflareAccessSignIn();
-        const user = await resolveAuthenticatedProfile(session);
-        if (user) state.currentUserId = user.id;
-      } catch (error) {
-        console.info("Cloudflare Access session not available", error.message);
+    try {
+      const session = await cloudflareAccessSignIn();
+      const user = await resolveAuthenticatedProfile(session);
+      if (user) {
+        state.currentUserId = user.id;
+        if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
       }
+    } catch (error) {
+      if (!authSession()) console.info("Cloudflare Access session not available", error.message);
     }
     if (isDesktopApp && authSession()) {
       try {

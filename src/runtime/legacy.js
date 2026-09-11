@@ -540,6 +540,25 @@ loadShopEntities=async function(){try{const types=Object.keys(shopEntityCollecti
 function stampDemoAppointments(){const samples=new Set(["apt-1048","apt-1049","apt-1052"]);if(!(state.appointments||[]).some(item=>samples.has(item.id)))return;const today=new Date(),iso=localIsoDate(today),tomorrow=new Date(today);tomorrow.setDate(today.getDate()+1);const next=localIsoDate(tomorrow);state.appointments=state.appointments.map(item=>item.id==="apt-1048"||item.id==="apt-1049"?{...item,date:iso}:item.id==="apt-1052"?{...item,date:next}:item)}
 stampDemoAppointments(); 
 
-async function startApp(){if(!authSession()){try{const session=await cloudflareAccessSignIn();const user=await resolveAuthenticatedProfile(session);if(user)state.currentUserId=user.id}catch(error){console.info("Cloudflare Access session not available",error.message)}}if(isDesktopApp&&authSession()){try{await verifyDesktopEntitlement()}catch(error){desktopLoginMessage=error.message;clearAuthSession()}}save();render()}
+async function startApp(){
+  // Always refresh /auth/session when possible so ACCESS_ADMIN_EMAILS promotions
+  // (and other claim changes) apply without requiring a full sign-out.
+  try{
+    const session=await cloudflareAccessSignIn();
+    const user=await resolveAuthenticatedProfile(session);
+    if(user){
+      state.currentUserId=user.id;
+      if(user.role==="super_admin"&&!canAccess(state.route))state.route="superadmin";
+    }
+  }catch(error){
+    if(!authSession())console.info("Cloudflare Access session not available",error.message);
+  }
+  if(isDesktopApp&&authSession()){
+    try{await verifyDesktopEntitlement()}
+    catch(error){desktopLoginMessage=error.message;clearAuthSession()}
+  }
+  save();
+  render();
+}
 if(isDesktopApp)setInterval(async()=>{if(!authSession())return;try{await verifyDesktopEntitlement()}catch(error){desktopLoginMessage=error.message;desktopEntitlementVerified=false;clearAuthSession();render()}},DESKTOP_ENTITLEMENT_INTERVAL);
 void startApp();
