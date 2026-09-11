@@ -19,7 +19,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy:worker": "wrangler deploy",
     "stage:pages": "node scripts/stage-pages.mjs",
-    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch",
+    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=production",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
     "validate": "npm run build:web && npm run test:config && npm run test:modules && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",

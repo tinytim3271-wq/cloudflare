@@ -1,23 +1,27 @@
-# MechPro Windows downloads
+# MechPro app downloads
 
-Installer binaries are **not** committed to git. They are published by GitHub Actions on every push to `main` (workflow: `windows-desktop.yml`):
+## Public install page
 
-- `MechPro-Setup-1.0.0.exe` — NSIS installer (built on `windows-latest`)
-- `MechPro-Setup-1.0.0.zip` — portable zip (same build)
+- https://www.yourcarguy806.com/downloads/
+- https://mechpro-dispatch.pages.dev/downloads/
 
-Public URLs (after publish):
+## Binaries
 
-- https://www.yourcarguy806.com/downloads/MechPro-Setup-1.0.0.exe
-- https://www.yourcarguy806.com/downloads/MechPro-Setup-1.0.0.zip
+| File | Source |
+| --- | --- |
+| `MechPro.apk` | Committed under `downloads/` and also mirrored to R2 `downloads/MechPro.apk` |
+| `MechPro-Setup-*.exe` / `.zip` | **Not** in git (too large). Published by `windows-desktop.yml` to R2 and GitHub Releases |
 
-GitHub Release (updated on each successful `main` build):
+On `www.yourcarguy806.com`, the Worker serves `/downloads/*.{exe,zip,apk}` from R2 (`mechpro-files`) before proxying other paths to Pages. The install page HTML still comes from Pages.
 
-- https://github.com/tinytim3271-wq/mechpro-dispatch/releases/tag/desktop-v1.0.0
+GitHub Release:
 
-Manual publish (requires AWS credentials with access to the site bucket):
+- https://github.com/tinytim3271-wq/cloudflare/releases/tag/desktop-v1.0.0
+
+Manual R2 upload:
 
 ```bash
-aws s3 cp dist/windows/MechPro-Setup-1.0.0.exe s3://<site-bucket>/downloads/MechPro-Setup-1.0.0.exe --content-type application/octet-stream
-aws s3 cp dist/windows/MechPro-Setup-1.0.0.zip s3://<site-bucket>/downloads/MechPro-Setup-1.0.0.zip --content-type application/zip
-aws cloudfront create-invalidation --distribution-id <distribution-id> --paths "/downloads/*"
+npx wrangler r2 object put "mechpro-files/downloads/MechPro-Setup-1.0.0.exe" --remote --file path/to/exe --content-type application/octet-stream
+npx wrangler r2 object put "mechpro-files/downloads/MechPro-Setup-1.0.0.zip" --remote --file path/to/zip --content-type application/zip
+npx wrangler r2 object put "mechpro-files/downloads/MechPro.apk" --remote --file downloads/MechPro.apk --content-type application/vnd.android.package-archive
 ```

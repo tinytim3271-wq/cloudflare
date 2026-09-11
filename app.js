@@ -34,11 +34,11 @@
     '"': "&quot;",
     "'": "&#39;"
   });
-  function escapeHtml(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+  function escapeHtml(value2) {
+    return String(value2 ?? "").replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
   }
-  function escapeAttr(value) {
-    return String(value ?? "").replace(/[&<"']/g, (char) => HTML_ESCAPES[char]);
+  function escapeAttr(value2) {
+    return String(value2 ?? "").replace(/[&<"']/g, (char) => HTML_ESCAPES[char]);
   }
 
   // src/modules/platform/detect.js
@@ -78,14 +78,14 @@
       return fallback;
     }
   }
-  function writeJson(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
+  function writeJson(key, value2) {
+    localStorage.setItem(key, JSON.stringify(value2));
   }
   function readDispatchState(fallback = null) {
     return readJson(storageKeys.dispatch, fallback);
   }
-  function writeDispatchState(value) {
-    writeJson(storageKeys.dispatch, value);
+  function writeDispatchState(value2) {
+    writeJson(storageKeys.dispatch, value2);
   }
   function readSession() {
     try {
@@ -238,14 +238,14 @@
     return emptyState2(message);
   }
   function localAssistantReply(message) {
-    const source = aiKeywords(message), order = state.orders.find((item) => [item.id, item.customer, item.vehicle].some((value) => source.includes(String(value || "").toLowerCase())));
+    const source = aiKeywords(message), order = state.orders.find((item) => [item.id, item.customer, item.vehicle].some((value2) => source.includes(String(value2 || "").toLowerCase())));
     if (order) return `${order.id} is ${statusLabel[order.status] || order.status} for ${order.customer}. Vehicle: ${order.vehicle}. Concern: ${order.complaint}. Technician: ${order.tech || "Unassigned"}. Promise: ${order.promise || "Not scheduled"}. Verify the record before acting.`;
     if (/diagnos|check engine|misfire|brake|rough idle|warning light/.test(source)) return "The cloud assistant is temporarily unavailable. Record the exact symptoms, DTCs, freeze-frame data, and vehicle VIN, then verify tests and specifications with current manufacturer service information.";
     if (/schedule|appointment|available|book/.test(source)) return `There are ${state.appointments.length} appointments loaded locally. Confirm the date, time, customer, and technician before booking.`;
     return "The cloud assistant is temporarily unavailable because the AI provider is rate-limited. Loaded work orders and local workflow guidance remain available; try again after the provider quota resets.";
   }
-  function cleanEmail(value) {
-    return String(value || "").trim().toLowerCase();
+  function cleanEmail(value2) {
+    return String(value2 || "").trim().toLowerCase();
   }
   function chatUser(email) {
     return state.users.find((user) => cleanEmail(user.email) === cleanEmail(email));
@@ -265,9 +265,9 @@
     const readAt = state.chatLastRead?.[conversation.id] || "";
     return conversationMessages(conversation.id).filter((message) => message.senderEmail !== cleanEmail(currentUser().email) && String(message.createdAt) > readAt).length;
   }
-  function chatTime(value) {
-    if (!value) return "";
-    return new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  function chatTime(value2) {
+    if (!value2) return "";
+    return new Date(value2).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
   function teamChat() {
     const conversations = [...state.conversations].sort((a, b) => conversationActivity(b).localeCompare(conversationActivity(a)));
@@ -721,8 +721,8 @@
   }
   function load() {
     try {
-      const value = JSON.parse(localStorage.getItem(STORE));
-      return value?.orders ? { ...seed, ...value, users: sanitizeUsers(value.users ?? seed.users), currentUserId: Object.hasOwn(value, "currentUserId") ? value.currentUserId : seed.currentUserId, chartOfAccounts: value.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value.journalEntries ?? seed.journalEntries, vehicles: value.vehicles ?? seed.vehicles, inventory: value.inventory ?? seed.inventory, vendors: value.vendors ?? seed.vendors, services: value.services ?? seed.services, inspectionTemplates: value.inspectionTemplates ?? seed.inspectionTemplates, inspections: value.inspections ?? seed.inspections, reminders: value.reminders ?? seed.reminders, appointments: value.appointments ?? seed.appointments, purchases: value.purchases ?? seed.purchases, shopSettingsRecords: value.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value.expenses ?? seed.expenses, payrollEntries: value.payrollEntries ?? seed.payrollEntries, shiftEntries: value.shiftEntries ?? seed.shiftEntries, jobClockEntries: value.jobClockEntries ?? seed.jobClockEntries, estimates: value.estimates ?? seed.estimates, payments: value.payments ?? seed.payments, conversations: value.conversations ?? seed.conversations, chatMessages: value.chatMessages ?? seed.chatMessages, chatLastRead: value.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value.taxSettings || {} } } : structuredClone(seed);
+      const value2 = JSON.parse(localStorage.getItem(STORE));
+      return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
     }
@@ -748,6 +748,18 @@
     if (!response.ok || !session.claims) throw new Error(session.message || "Cloudflare Access authentication failed");
     sessionStorage.setItem(storageKeys.session, JSON.stringify(session));
     return session;
+  }
+  async function requestMagicLinkSignIn(email) {
+    const response = await fetch(`${cloudflareConfig2.apiUrl}/auth/magic-link`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ email, returnTo: "/", return_to: "/" }) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || "Could not start sign-in");
+    const loginUrl = payload.loginUrl || payload.login_url || payload.url;
+    if (loginUrl) {
+      location.assign(loginUrl);
+      return { redirecting: true, email };
+    }
+    ;
+    throw new Error(payload.message || "Check your email for a sign-in link. If nothing arrives, ask an administrator to enable email delivery.");
   }
   var cloudflareSignIn = cloudflareAccessSignIn;
   function authSession() {
@@ -967,6 +979,13 @@
       console.error("Failed to load payments from API; using local data", error);
     }
   }
+  async function pushExpenseToApi(record) {
+    try {
+      await apiFetch("/entities/expenses", { method: "POST", body: JSON.stringify(record) });
+    } catch (error) {
+      console.error("Failed to sync expense to API", error);
+    }
+  }
   async function loadExpensesFromApi() {
     try {
       state.expenses = await apiFetch("/entities/expenses");
@@ -1065,11 +1084,11 @@
   }
   var shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
   async function saveShopEntity(type, record) {
-    const saved = await apiFetch(`/entities/${type}${record.updatedAt ? `/${encodeURIComponent(record.id)}` : ""}`, { method: record.updatedAt ? "PUT" : "POST", body: JSON.stringify(record) }), value = saved?.queued ? record : saved, collection = shopEntityCollections[type], index = state[collection].findIndex((item) => item.id === value.id);
-    if (index >= 0) state[collection][index] = value;
-    else state[collection].push(value);
+    const saved = await apiFetch(`/entities/${type}${record.updatedAt ? `/${encodeURIComponent(record.id)}` : ""}`, { method: record.updatedAt ? "PUT" : "POST", body: JSON.stringify(record) }), value2 = saved?.queued ? record : saved, collection = shopEntityCollections[type], index = state[collection].findIndex((item) => item.id === value2.id);
+    if (index >= 0) state[collection][index] = value2;
+    else state[collection].push(value2);
     save();
-    return value;
+    return value2;
   }
   async function loadShopEntities() {
     try {
@@ -1085,8 +1104,8 @@
   function icon(name, size = 18) {
     return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
   }
-  function money(value) {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+  function money(value2) {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value2);
   }
   function initials(name) {
     return name.split(/\s+/).map((x) => x[0]).slice(0, 2).join("").toUpperCase();
@@ -1234,6 +1253,13 @@
     const serviceItems = route === "settings" && canAccess("messaging") ? `<button class="nav-button ${state.route === "messaging" ? "active" : ""}" data-route="messaging">${icon("message-square-more")}<span>Messaging service</span></button><button class="nav-button ${state.route === "payments" ? "active" : ""}" data-route="payments">${icon("credit-card")}<span>Payment service</span></button>` : "";
     return `${serviceItems}${item}`;
   }
+  function syncStatusBadge() {
+    const pending = readMutationQueue().filter((item) => !item.conflict).length, conflicts = readMutationQueue().filter((item) => item.conflict).length, online = navigator.onLine;
+    if (conflicts) return `<span class="sync-pill conflict" title="Offline edits conflict with newer server data">${icon("triangle-alert", 14)} ${conflicts} conflict${conflicts === 1 ? "" : "s"}</span>`;
+    if (!online) return `<span class="sync-pill offline" title="Working offline">${icon("wifi-off", 14)} Offline${pending ? ` \xB7 ${pending} queued` : ""}</span>`;
+    if (pending) return `<span class="sync-pill pending" title="Waiting to sync offline changes">${icon("refresh-cw", 14)} Syncing ${pending}</span>`;
+    return `<span class="sync-pill online" title="Connected">${icon("cloud-check", 14)} Online</span>`;
+  }
   function shell(content) {
     const user = currentUser(), active = visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, shift = openShift(user.id);
     return `<div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="nav-label">Operations</div><nav class="nav">${nav("dispatch", "layout-dashboard", "Dispatch board", active)}${nav("orders", "clipboard-list", "Work orders", visibleOrders().length)}${nav("schedule", "calendar-days", "Schedule")}${nav("customers", "users", "Customers")}${nav("invoices", "receipt-text", "Invoices", state.invoices.filter((x) => x.status === "overdue").length)}</nav><div class="nav-label shop-label">Shop</div><nav class="nav">${nav("ai", "sparkles", "AI Workbench")}${nav("accounting", "landmark", "Accounting")}${nav("payroll", "wallet-cards", "Payroll")}${nav("imports", "file-up", "Import data")}${nav("employees", "user-round-cog", "Employees")}${nav("reports", "chart-no-axes-combined", "Reports")}${nav("settings", "settings", "Settings")}</nav><div class="sidebar-foot"><div class="shop-card"><strong>Your Car Guy</strong><span>Main Shop \xB7 Lubbock, TX</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${user.name}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill">${icon("map-pin", 15)} Main Shop ${icon("chevron-down", 13)}</button><button class="icon-button" type="button" aria-label="Notifications" title="Notifications">${icon("bell")}</button></div></header><div class="content">${content}</div></main></div>`;
@@ -1323,7 +1349,7 @@
       const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel2 = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate";
       return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` \xB7 current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel2}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>`;
     }).join("");
-    return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value, text]) => `<button class="tab ${reminderFilter === value ? "active" : ""}" data-reminder-filter="${value}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
+    return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value2, text]) => `<button class="tab ${reminderFilter === value2 ? "active" : ""}" data-reminder-filter="${value2}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
   }
   function operationsDiagnostics() {
     const output = state.elmOutput || "Connect an adapter to begin. Basic OBD-II data only; this does not provide OEM programming, coding, or bidirectional controls.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
@@ -1457,12 +1483,12 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
       };
     });
     document.querySelector("#template-picker")?.addEventListener("change", (event) => {
-      const value = event.target.value, grid = document.querySelector("#inspection-checklist"), heading2 = document.querySelector("#checklist-heading");
+      const value2 = event.target.value, grid = document.querySelector("#inspection-checklist"), heading2 = document.querySelector("#checklist-heading");
       let newItems;
-      if (value === "default") {
+      if (value2 === "default") {
         newItems = inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" }));
       } else {
-        const tpl = state.inspectionTemplates.find((t) => t.id === value);
+        const tpl = state.inspectionTemplates.find((t) => t.id === value2);
         newItems = (tpl?.items || []).map((item) => ({ name: item.name, status: "not_checked", note: "" }));
       }
       heading2.textContent = `${newItems.length}-point checklist`;
@@ -1554,16 +1580,16 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
     render();
   }
   function elmLineBytes(line, command = "") {
-    let value = String(line || "").toUpperCase().trim();
-    if (!value || value.replace(/\s/g, "") === String(command).toUpperCase().replace(/\s/g, "") || /^(SEARCHING|BUS INIT|STOPPED|OK\b|ELM327)/.test(value)) return [];
-    value = value.replace(/^\s*\d+\s*:\s*/, "");
+    let value2 = String(line || "").toUpperCase().trim();
+    if (!value2 || value2.replace(/\s/g, "") === String(command).toUpperCase().replace(/\s/g, "") || /^(SEARCHING|BUS INIT|STOPPED|OK\b|ELM327)/.test(value2)) return [];
+    value2 = value2.replace(/^\s*\d+\s*:\s*/, "");
     let header = false;
-    if (/^(?:[67][0-9A-F]{2}|18[0-9A-F]{6})[0-9A-F]{4,}$/.test(value.replace(/\s/g, ""))) {
-      const compact = value.replace(/\s/g, "");
-      value = compact.slice(compact.startsWith("18") ? 8 : 3);
+    if (/^(?:[67][0-9A-F]{2}|18[0-9A-F]{6})[0-9A-F]{4,}$/.test(value2.replace(/\s/g, ""))) {
+      const compact = value2.replace(/\s/g, "");
+      value2 = compact.slice(compact.startsWith("18") ? 8 : 3);
       header = true;
     }
-    let parts = value.match(/[0-9A-F]+/g) || [];
+    let parts = value2.match(/[0-9A-F]+/g) || [];
     if (!header && (parts[0]?.length === 3 || parts[0]?.length === 8)) {
       parts.shift();
       header = true;
@@ -1897,25 +1923,78 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Continue with Cloudflare Access</h1><p>Your organization identity provider handles sign-in, MFA, and session policy. MechPro never receives your password.</p><form id="login-form"><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Access must map your email to an active MechPro employee."}</span></div></section></main>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
+  }
+  async function upgradeShopPlan() {
+    try {
+      const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: "starter", successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+      toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
+      if (result.url) {
+        if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url);
+      }
+    } catch (error) {
+      toast(error.message || "Could not start upgrade");
+    }
+  }
+  async function platformApi(path, options = {}) {
+    const response = await authorizedApiRequest(path, options);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || payload.error || `Platform request failed (${response.status})`);
+    return payload;
+  }
+  async function loadPlatformAccounts() {
+    if (platformAccountsLoading) return;
+    platformAccountsLoading = true;
+    try {
+      const accounts = await platformApi("/admin/accounts");
+      platformAccounts = Array.isArray(accounts) ? accounts : accounts.accounts || [];
+    } catch (error) {
+      console.error(error);
+      platformAccounts = [];
+      toast(error.message || "Could not load customer accounts");
+    } finally {
+      platformAccountsLoading = false;
+      if (currentUser()?.role === "super_admin" && state.route === "superadmin") render();
+    }
+  }
+  function platformShell(content) {
+    const user = currentUser();
+    return `<div class="app-shell platform-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Platform console</small></div></div><div class="nav-label">Platform</div><nav class="nav">${nav("superadmin", "building-2", "Customer shops")}<a class="nav-button" href="/downloads" target="_blank" rel="noopener">${icon("download")} Downloads</a><a class="nav-button" href="/pricing" target="_blank" rel="noopener">${icon("badge-dollar-sign")} Pricing</a></nav><div class="sidebar-foot"><div class="shop-card"><strong>Platform admin</strong><span>${escapeHtml(user?.email || "")}</span></div><button class="user-row" id="sign-out" type="button"><div class="avatar">${initials(user?.name || "P")}</div><div><strong>${escapeHtml(user?.name || "Platform")}</strong><span>Sign out</span></div></button></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation">${icon("menu")}</button><div class="top-actions"><button class="secondary" id="refresh-platform" type="button">${icon("refresh-cw", 14)} Refresh</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 14)} Get apps</a></div></header><div class="content">${content}</div></main></div>`;
+  }
+  function subscriptionBadge(account) {
+    const status = String(account.subscriptionStatus || "missing");
+    const expires = account.subscriptionExpiresAt ? new Date(account.subscriptionExpiresAt) : null;
+    const expired = Boolean(expires && expires.getTime() <= Date.now());
+    const label2 = account.suspended ? "Suspended" : expired ? "Expired" : status === "active" ? "Paid" : status === "trialing" ? expires ? "Free trial" : "Free / comped" : status;
+    const cls = account.suspended || expired ? "overdue" : status === "active" ? "paid" : "estimate";
+    const detail = account.suspended ? "Access disabled" : expired ? `Ended ${expires.toLocaleDateString()}` : expires ? `Until ${expires.toLocaleDateString()}` : status === "active" ? "No end date" : "No expiry set";
+    return `<span class="badge ${cls}">${escapeHtml(label2)}</span><small>${escapeHtml(detail)}</small>`;
   }
   function superAdmin() {
     if (platformAccounts === null && !platformAccountsLoading) void loadPlatformAccounts();
-    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + account.users.length, 0), credits = accounts.reduce((sum, account) => sum + Number(account.creditBalance || 0), 0), rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td><span class="badge paid">${account.users.length} login${account.users.length === 1 ? "" : "s"}</span><small>${account.users.map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money(account.creditBalance || 0)}</b><small>Available account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Give credit</button>${account.users.map((user) => `<button class="mini-action" data-reset-user="${encodeURIComponent(user.username || user.email)}">${icon("key-round", 13)} Reset password</button>`).join("")}</div></td></tr>`).join("");
-    return platformShell(`${heading("Platform control", "Customer accounts", "Create subscribing shops, manage owner access, issue account credits, and send secure password resets.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article><article><span>Credits outstanding</span><strong>${money(credits)}</strong></article></div><button class="primary" id="new-customer-account">${icon("building-2", 15)} Add customer account</button></div><div class="access-note platform-security">${icon("shield-check", 15)} Every action is authorized server-side from the verified Cloudflare Access identity. Passwords are managed by the configured identity provider.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Login status</th><th>Credit balance</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">${platformAccountsLoading ? "Loading customer accounts..." : "No customer accounts yet."}</td></tr>`}</tbody></table></div>`);
+    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
+    return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
-    showModal(`<form class="modal" id="customer-account-form"><div class="modal-head"><h2>Add customer account</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label></div><div class="ledger-note">${icon("mail", 15)} Provision this email in the Cloudflare Access identity provider. MechPro maps it to the new shop owner profile.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create and invite</button></div></form>`);
-    document.querySelector("#customer-account-form").onsubmit = async (event) => {
+    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
+    const form = document.querySelector("#customer-account-form"), mode = form.elements.accountMode, days = form.elements.trialDays;
+    const syncMode = () => {
+      days.disabled = mode.value === "active";
+      if (mode.value === "comped") days.value = "0";
+      if (mode.value === "trialing" && !days.value) days.value = "30";
+    };
+    mode.onchange = syncMode;
+    syncMode();
+    form.onsubmit = async (event) => {
       event.preventDefault();
-      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#customer-account-error"), data = Object.fromEntries(new FormData(event.target));
+      const button = form.querySelector("button[type=submit]"), error = document.querySelector("#customer-account-error"), data = Object.fromEntries(new FormData(form));
       button.disabled = true;
       error.hidden = true;
       try {
-        await platformApi("/admin/accounts", { method: "POST", body: JSON.stringify(data) });
+        await platformApi("/admin/accounts", { method: "POST", body: JSON.stringify({ shopName: data.shopName, shopId: data.shopId, ownerName: data.ownerName, email: data.email, accountMode: data.accountMode, trialDays: data.trialDays, planId: data.planId }) });
         closeModal();
         platformAccounts = null;
-        toast("Customer account created and invitation sent");
+        toast("Customer shop created");
         render();
       } catch (requestError) {
         error.textContent = requestError.message;
@@ -1925,14 +2004,14 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     };
   }
   function openAccountCredit(shopId, shopName) {
-    showModal(`<form class="modal" id="account-credit-form"><div class="modal-head"><h2>Give account credit</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Credit amount *<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Reason *<input name="reason" required placeholder="Service adjustment"/></label></div><div class="ledger-note">${icon("file-check-2", 15)} Credits are additive and recorded in an immutable audit entry.</div><p class="login-error" id="account-credit-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-dollar-sign", 14)} Apply credit</button></div></form>`);
+    showModal(`<form class="modal" id="account-credit-form"><div class="modal-head"><h2>Give account credit</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Credit amount *<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Reason *<input name="reason" required placeholder="Service adjustment"/></label></div><p class="login-error" id="account-credit-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-dollar-sign", 14)} Apply credit</button></div></form>`);
     document.querySelector("#account-credit-form").onsubmit = async (event) => {
       event.preventDefault();
       const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#account-credit-error"), data = Object.fromEntries(new FormData(event.target));
       button.disabled = true;
       error.hidden = true;
       try {
-        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify(data) });
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify({ amount: Number(data.amount), reason: data.reason }) });
         closeModal();
         platformAccounts = null;
         toast(`${money(Number(data.amount))} credit applied`);
@@ -1944,21 +2023,58 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       }
     };
   }
-  function openSetPassword() {
-    openPasswordReset();
+  function openConvertPaid(shopId, shopName) {
+    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
+    document.querySelector("#convert-paid-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#convert-paid-error"), data = Object.fromEntries(new FormData(event.target));
+      button.disabled = true;
+      error.hidden = true;
+      try {
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/subscription`, { method: "POST", body: JSON.stringify({ mode: "active", planId: data.planId }) });
+        closeModal();
+        platformAccounts = null;
+        toast(`${shopName} is now a paid account`);
+        render();
+      } catch (requestError) {
+        error.textContent = requestError.message;
+        error.hidden = false;
+        button.disabled = false;
+      }
+    };
+  }
+  function openFreeTerm(shopId, shopName) {
+    showModal(`<form class="modal" id="free-term-form"><div class="modal-head"><h2>Set free / tester term</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Mode<select name="mode"><option value="trialing">Replace term from today</option><option value="extend">Extend from current end</option><option value="comped">Comped (no expiry)</option></select></label><label>Days<input name="trialDays" type="number" min="0" max="3650" value="30"/></label></div><div class="ledger-note">${icon("timer", 15)} Use this for tester shops. Zero days with Comped means unlimited free access until you convert them to paid.</div><p class="login-error" id="free-term-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save term</button></div></form>`);
+    document.querySelector("#free-term-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#free-term-error"), data = Object.fromEntries(new FormData(event.target));
+      button.disabled = true;
+      error.hidden = true;
+      try {
+        await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/subscription`, { method: "POST", body: JSON.stringify({ mode: data.mode, trialDays: data.trialDays }) });
+        closeModal();
+        platformAccounts = null;
+        toast("Free term updated");
+        render();
+      } catch (requestError) {
+        error.textContent = requestError.message;
+        error.hidden = false;
+        button.disabled = false;
+      }
+    };
   }
   function bindPlatformAdmin() {
-    if (typeof enrichPlatformControls === "function") enrichPlatformControls();
     document.querySelector("#refresh-platform")?.addEventListener("click", () => {
       platformAccounts = null;
       render();
     });
     document.querySelector("#new-customer-account")?.addEventListener("click", openCustomerAccount);
     document.querySelectorAll("[data-credit-shop]").forEach((button) => button.onclick = () => openAccountCredit(button.dataset.creditShop, button.dataset.shopName));
-    document.querySelectorAll("[data-set-password]").forEach((button) => button.onclick = () => openSetPassword(button.dataset.setPassword, button.dataset.userEmail));
+    document.querySelectorAll("[data-convert-shop]").forEach((button) => button.onclick = () => openConvertPaid(button.dataset.convertShop, button.dataset.shopName));
+    document.querySelectorAll("[data-trial-shop]").forEach((button) => button.onclick = () => openFreeTerm(button.dataset.trialShop, button.dataset.shopName));
     document.querySelectorAll("[data-account-status]").forEach((button) => button.onclick = async () => {
       const suspended = button.dataset.suspended === "true", action = suspended ? "suspend" : "reactivate";
-      if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}? ${suspended ? "Every login for this customer will be signed out and disabled." : "Every login for this customer will be enabled."}`)) return;
+      if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}?`)) return;
       button.disabled = true;
       try {
         await platformApi(`/admin/accounts/${encodeURIComponent(button.dataset.accountStatus)}/status`, { method: "POST", body: JSON.stringify({ suspended }) });
@@ -1970,21 +2086,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
         button.disabled = false;
       }
     });
-    document.querySelectorAll("[data-reset-user]").forEach((button) => button.onclick = async () => {
-      if (!confirm("Send password reset instructions to this account?")) return;
-      button.disabled = true;
-      try {
-        await platformApi(`/admin/accounts/${button.dataset.resetUser}/reset-password`, { method: "POST" });
-        toast("Password reset instructions sent");
-      } catch (error) {
-        toast(error.message);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  }
-  function openPasswordReset() {
-    showModal(`<div class="modal"><div class="modal-head"><h2>Password and MFA</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><p>MechPro authentication is managed by Cloudflare Access and your organization identity provider. Use your identity provider's account-recovery flow or contact your administrator.</p></div><div class="modal-actions"><button type="button" class="primary" data-close>Close</button></div></div>`);
   }
   function render() {
     const root = document.querySelector("#root");
@@ -2008,6 +2109,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
+    document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan);
     bindEstimateActions();
     bindMessagingService();
     bindPaymentService();
@@ -2523,7 +2625,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function exportCsv() {
-    const rows = [["RO", "Customer", "Vehicle", "Status", "Technician", "Promise", "Total"], ...state.orders.map((x) => [x.id, x.customer, x.vehicle, label(x.status), x.tech, x.promise, x.total])], csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
+    const rows = [["RO", "Customer", "Vehicle", "Status", "Technician", "Promise", "Total"], ...state.orders.map((x) => [x.id, x.customer, x.vehicle, label(x.status), x.tech, x.promise, x.total])], csv = rows.map((row) => row.map((value2) => `"${String(value2).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     link.download = "mechpro-work-orders.csv";
     link.click();
@@ -2531,7 +2633,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     toast("Work orders exported");
   }
   function exportLedger() {
-    const rows = [["Date", "Reference", "Description", "Debit account", "Credit account", "Amount"], ...ledger().map((x) => [x.date, x.reference || "JE", x.description, x.debitAccount, x.creditAccount, x.amount])], csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
+    const rows = [["Date", "Reference", "Description", "Debit account", "Credit account", "Amount"], ...ledger().map((x) => [x.date, x.reference || "JE", x.description, x.debitAccount, x.creditAccount, x.amount])], csv = rows.map((row) => row.map((value2) => `"${String(value2).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     link.download = "mechpro-general-ledger.csv";
     link.click();
@@ -2543,7 +2645,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const period = weekPeriod(), rows = [["Employee ID", "Employee", "Pay period", "Work order", "Customer", "Hours", "Rate", "Gross pay"], ...state.payrollEntries.filter((line) => line.periodKey === period.key).map((line) => {
       const user = state.users.find((item) => item.id === line.employeeId);
       return [user?.employeeId || "", user?.name || "", `${period.start} - ${period.end}`, line.roNumber, line.customer, line.hours, line.rate, line.amount];
-    })], csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
+    })], csv = rows.map((row) => row.map((value2) => `"${String(value2).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     link.download = `mechpro-payroll-${period.key}.csv`;
     link.click();
@@ -2823,46 +2925,54 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     original.replaceWith(form);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]");
+      const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
       errorEl.hidden = true;
       submitButton.disabled = true;
       desktopEntitlementVerified = !isDesktopApp;
       try {
-        if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required for Cloudflare Access.");
-        const session = await cloudflareSignIn();
-        if (isDesktopApp) await verifyDesktopEntitlement();
-        const user = await resolveAuthenticatedProfile(session);
-        if (!user) {
-          state.currentUserId = null;
+        if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in.");
+        if (isLocalShell()) {
+          const session = await cloudflareSignIn();
+          if (isDesktopApp) await verifyDesktopEntitlement();
+          const user = await resolveAuthenticatedProfile(session);
+          if (!user) {
+            state.currentUserId = null;
+            save();
+            render();
+            return;
+          }
+          pendingAuthProfile = null;
+          state.currentUserId = user.id;
+          state.route = roleRoutes[user.role]?.[0] || "dispatch";
+          query = "";
           save();
+          await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]);
           render();
           return;
         }
-        pendingAuthProfile = null;
-        state.currentUserId = user.id;
-        state.route = roleRoutes[user.role]?.[0] || "dispatch";
-        query = "";
-        save();
-        await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]);
-        render();
+        const email = String(emailInput?.value || "").trim().toLowerCase();
+        if (!email) throw new Error("Enter your work email to continue.");
+        const result = await requestMagicLinkSignIn(email);
+        if (result?.redirecting) return;
+        throw new Error("Check your email for a sign-in link.");
       } catch (error) {
         clearAuthSession();
         pendingAuthProfile = null;
         desktopEntitlementVerified = !isDesktopApp;
         desktopLoginMessage = isDesktopApp ? error.message : "";
-        errorEl.textContent = error.message || "Cloudflare Access sign-in failed.";
+        errorEl.textContent = error.message || "Sign-in failed.";
         errorEl.hidden = false;
         submitButton.disabled = false;
       }
     });
   };
   var shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, invoiceFooter: "Thank you for your business.", logoUrl: "", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
-  function safeHexColor(value, fallback) {
-    const color = String(value || "").trim();
+  function safeHexColor(value2, fallback) {
+    const color = String(value2 || "").trim();
     return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
   }
-  function safeHttpUrl(value) {
-    const source = String(value || "").trim();
+  function safeHttpUrl(value2) {
+    const source = String(value2 || "").trim();
     if (!source) return "";
     try {
       const url = new URL(source, globalThis.location?.href || "https://local.invalid/");
@@ -2871,8 +2981,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       return "";
     }
   }
-  function normalizedCoupons(value) {
-    return (Array.isArray(value) ? value : []).map((coupon) => ({ id: String(coupon.id || `coupon-${Date.now()}`), code: String(coupon.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24), percent: Math.min(100, Math.max(0, Number(coupon.percent) || 0)), active: coupon.active !== false })).filter((coupon) => coupon.code && coupon.percent > 0);
+  function normalizedCoupons(value2) {
+    return (Array.isArray(value2) ? value2 : []).map((coupon) => ({ id: String(coupon.id || `coupon-${Date.now()}`), code: String(coupon.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24), percent: Math.min(100, Math.max(0, Number(coupon.percent) || 0)), active: coupon.active !== false })).filter((coupon) => coupon.code && coupon.percent > 0);
   }
   function shopProfile() {
     const stored = state.shopSettingsRecords.find((item) => item.id === "profile") || {}, themeMode = ["device", "light", "dark"].includes(stored.themeMode) ? stored.themeMode : "device";
@@ -2905,6 +3015,240 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   async function saveProfilePatch(patch) {
     const current = shopProfile(), record = { ...current, ...patch, id: "profile", updatedAt: current.updatedAt ? now() : void 0 };
     return saveShopEntity("shopsettings", record);
+  }
+  function employees() {
+    const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role])}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><button class="mini-action" data-toggle-user="${escapeHtml(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></td></tr>`).join("");
+    return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Admin sees all data. Technicians see only assigned jobs. Office sees customers, invoices, and accounting. Service writers manage service operations.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Create login</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`);
+  }
+  function payroll() {
+    syncAllPayroll();
+    const period = weekPeriod(), admin = currentUser().role === "admin", people = admin ? state.users.filter((user) => user.active) : [currentUser()], stubs = people.map((user) => payStub(user, period));
+    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
+  }
+  function payStub(user, period) {
+    const lines = state.payrollEntries.filter((entry) => entry.employeeId === user.id && entry.periodKey === period.key), hours = lines.reduce((sum, line) => sum + line.hours, 0), shiftHours = state.shiftEntries.filter((entry) => entry.userId === user.id && entry.clockOut && String(entry.clockIn).slice(0, 10) >= period.key).reduce((sum, entry) => sum + Number(entry.hours || 0), 0), jobPay = lines.reduce((sum, line) => sum + line.amount, 0), salaryPay = user.employmentType === "Salary" ? Number(user.payRate || 0) / 52 : 0, gross = jobPay + salaryPay, federal = Math.round(gross * 0.12 * 100) / 100, fica = Math.round(gross * 0.0765 * 100) / 100, other = 0;
+    return { user, period, lines, hours, shiftHours, gross, federal, fica, other, net: Math.max(0, gross - federal - fica - other), salaryPay };
+  }
+  function payStubMarkup(stub) {
+    const user = stub.user, lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${line.hours.toFixed(2)}</td><td>${money(line.rate)}</td><td><b>${money(line.amount)}</b></td></tr>`).join("");
+    return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / year" : money(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
+  }
+  function openEmployee() {
+    showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full">Email address *<input type="email" name="email" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
+    document.querySelector("#employee-form").onsubmit = (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target)), email = data.email.trim().toLowerCase();
+      if (state.users.some((user) => user.email.toLowerCase() === email)) {
+        toast("An employee profile already uses that email");
+        return;
+      }
+      if (state.users.some((user) => user.employeeId === data.employeeId.trim())) {
+        toast("An employee already uses that employee ID");
+        return;
+      }
+      if (data.role === "technician" && !data.techName.trim()) {
+        toast("Add the technician dispatch name to create this profile");
+        return;
+      }
+      state.users.push({ id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(), active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate, employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(), emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus });
+      save();
+      closeModal();
+      toast(`${data.name} profile created as ${roleLabel[data.role]}`);
+      render();
+    };
+  }
+  function paymentRecords() {
+    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
+    return [...legacy, ...state.payments.filter((payment) => payment.status === "completed")];
+  }
+  function finance() {
+    const paid = paymentRecords(), open = state.invoices.filter((invoice) => invoiceBalance(invoice) > 0), income = paid.reduce((s, payment) => s + payment.amount, 0), expenses = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0), tax = paid.reduce((s, payment) => {
+      const invoice = state.invoices.find((item) => item.number === payment.invoiceNumber), bd = invoiceTaxBreakdown(invoice), ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0;
+      return s + bd.tax * ratio;
+    }, 0), manualIncome = state.journalEntries.filter((x) => x.creditAccount === "4000").reduce((s, x) => s + x.amount, 0), manualExpense = state.journalEntries.filter((x) => /^5|^6/.test(x.debitAccount)).reduce((s, x) => s + x.amount, 0);
+    return { income: income + manualIncome, expenses: expenses + manualExpense, net: income + manualIncome - expenses - manualExpense, receivable: open.reduce((s, invoice) => s + invoiceBalance(invoice), 0), overdue: open.filter((invoice) => invoice.status === "overdue").reduce((s, invoice) => s + invoiceBalance(invoice), 0), tax, open };
+  }
+  function expenseAccount(category) {
+    const name = String(category || "").toLowerCase();
+    return name.includes("utilit") ? "6200" : name.includes("tool") ? "6300" : name.includes("part") ? "5000" : "6100";
+  }
+  function accounting() {
+    const data = finance(), tabs = [["overview", "Overview"], ["receivables", "Receivables"], ["expenses", "Expenses"], ["ledger", "General ledger"], ["accounts", "Chart of accounts"]], views = { overview: profitLoss(data), receivables: arView(data), expenses: expenseView(), ledger: ledgerView(), accounts: accountView() };
+    return shell(`${heading("Financial operations", "Accounting", "Income, expenses, receivables, and books for Your Car Guy.", false)}<div class="accounting-actions"><button class="secondary" id="accounting-export">${icon("download", 14)} Export ledger</button><button class="secondary" id="journal-entry">${icon("book-open-check", 14)} Journal entry</button><button class="primary" id="record-expense">${icon("plus", 14)} Record expense</button></div><div class="accounting-tabs">${tabs.map((x) => `<button class="tab ${accountingTab === x[0] ? "active" : ""}" data-accounting-tab="${x[0]}">${x[1]}</button>`).join("")}</div>${views[accountingTab]}`);
+  }
+  function profitLoss(data) {
+    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money(data.income)}</strong><small>Paid invoices and posted income</small></article><article><span>Operating expenses</span><strong>${money(data.expenses)}</strong><small>${state.expenses.length} recorded expenses</small></article><article class="${data.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money(data.net)}</strong><small>Cash-basis operating result</small></article><article><span>Accounts receivable</span><strong>${money(data.receivable)}</strong><small>${money(data.overdue)} overdue</small></article><article><span>Sales tax payable</span><strong>${money(data.tax)}</strong><small>From paid work orders</small></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Profit & loss</div><h2>Current activity</h2></div><span class="badge paid">Cash basis</span></div><div class="statement-line"><span>Service revenue</span><b>${money(data.income)}</b></div><div class="statement-line"><span>Operating expenses</span><b>(${money(data.expenses)})</b></div><div class="statement-line total"><span>Net income</span><b>${money(data.net)}</b></div></section><section class="statement"><div class="statement-head"><div><div class="eyebrow">Controls</div><h2>Month-end checklist</h2></div>${icon("list-checks", 18)}</div><p>Review overdue receivables, reconcile the operating account, and set aside sales tax before filing.</p><small>Financial reporting is generated from records stored in this application.</small></section></div>`;
+  }
+  function arView(data) {
+    const rows = data.open.map((x) => `<tr><td class="mono"><b>${x.number}</b></td><td>${x.customer}</td><td>${x.due}</td><td>${badge(x.status)}</td><td><b>${money(x.amount)}</b></td></tr>`).join("");
+    return `<div class="accounting-summary"><span>${data.open.length} open invoices</span><strong>${money(data.receivable)} outstanding</strong></div><div class="data-panel"><table><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No open receivables.</td></tr>`}</tbody></table></div>`;
+  }
+  function expenseView() {
+    const rows = [...state.expenses].reverse().map((x) => `<tr><td>${x.date}</td><td><b>${x.vendor}</b><small>${x.memo || "No memo"}</small></td><td>${x.category}</td><td class="mono">${x.account || expenseAccount(x.category)}</td><td><b>${money(x.amount)}</b></td></tr>`).join(""), total = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
+    return `<div class="accounting-summary"><span>${state.expenses.length} recorded expenses</span><strong>${money(total)} total</strong></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Vendor & memo</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No expenses recorded.</td></tr>`}</tbody></table></div>`;
+  }
+  function ledger() {
+    const receipts = paymentRecords().map((payment) => ({ date: payment.receivedAt, reference: payment.reference || payment.invoiceNumber, description: `${payment.method === "cash" ? "Cash" : "Processor"} payment \u2014 ${payment.customer} \xB7 ${payment.invoiceNumber}`, debitAccount: payment.method === "cash" ? "1010" : "1020", creditAccount: "1100", amount: payment.amount })), expense = state.expenses.map((x) => ({ date: x.date, reference: "EXP", description: `${x.vendor}${x.memo ? ` \u2014 ${x.memo}` : ""}`, debitAccount: x.account || expenseAccount(x.category), creditAccount: "1000", amount: Number(x.amount) }));
+    return [...receipts, ...expense, ...state.journalEntries].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }
+  function ledgerView() {
+    const rows = ledger().map((x) => `<tr><td>${x.date}</td><td class="mono">${x.reference || "JE"}</td><td>${x.description}</td><td class="mono">${x.debitAccount}</td><td class="mono">${x.creditAccount}</td><td><b>${money(x.amount)}</b></td></tr>`).join("");
+    return `<div class="ledger-note">${icon("scale", 15)} Every entry is balanced: equal debit and credit amounts are posted.</div><div class="data-panel"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Debit</th><th>Credit</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No journal activity.</td></tr>`}</tbody></table></div>`;
+  }
+  function accountView() {
+    const d = finance(), balance = (x) => x.code === "1000" ? d.income - d.expenses : x.code === "1100" ? d.receivable : x.code === "2100" ? d.tax : x.code === "4000" ? d.income : ["5000", "6100", "6200", "6300"].includes(x.code) ? state.expenses.filter((e) => (e.account || expenseAccount(e.category)) === x.code).reduce((s, e) => s + Number(e.amount), 0) : 0, rows = state.chartOfAccounts.map((x) => `<tr><td class="mono"><b>${x.code}</b></td><td><b>${x.name}</b></td><td>${x.type}</td><td><b>${money(balance(x))}</b></td></tr>`).join("");
+    return `<div class="data-panel"><table><thead><tr><th>Account</th><th>Name</th><th>Type</th><th>Activity balance</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  function openExpense() {
+    showModal(`<form class="modal" id="expense-form"><div class="modal-head"><h2>Record expense</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Date<input type="date" name="date" value="2026-08-14" required/></label><label>Amount *<input name="amount" type="number" step=".01" min=".01" required/></label><label>Vendor *<input name="vendor" required/></label><label>Category<select name="category"><option>Parts & supplies</option><option>Shop supplies</option><option>Utilities</option><option>Tools & equipment</option><option>Insurance</option><option>Marketing</option><option>Other</option></select></label><label class="full">Memo<textarea name="memo" placeholder="What was this business expense for?"></textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("save", 14)} Record expense</button></div></form>`);
+    document.querySelector("#expense-form").onsubmit = (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target)), record = { date: d.date, vendor: d.vendor, category: d.category, memo: d.memo, amount: Number(d.amount), account: expenseAccount(d.category) };
+      state.expenses.push(record);
+      pushExpenseToApi(record);
+      save();
+      closeModal();
+      toast("Expense recorded in the general ledger");
+      render();
+    };
+  }
+  function openJournal() {
+    const options = state.chartOfAccounts.map((x) => `<option value="${x.code}">${x.code} \xB7 ${x.name}</option>`).join("");
+    showModal(`<form class="modal" id="journal-form"><div class="modal-head"><h2>Journal entry</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="ledger-note">${icon("scale", 15)} Post equal debit and credit amounts for an adjustment.</div><div class="form-grid" style="margin-top:14px"><label>Date<input type="date" name="date" value="2026-08-14" required/></label><label>Amount *<input name="amount" type="number" step=".01" min=".01" required/></label><label class="full">Description *<input name="description" required placeholder="e.g. Owner contribution"/></label><label>Debit account<select name="debitAccount">${options}</select></label><label>Credit account<select name="creditAccount">${options}</select></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("book-open-check", 14)} Post entry</button></div></form>`);
+    document.querySelector("#journal-form").onsubmit = (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      if (d.debitAccount === d.creditAccount) {
+        toast("Choose different debit and credit accounts");
+        return;
+      }
+      state.journalEntries.push({ date: d.date, reference: `JE-${String(state.journalEntries.length + 1).padStart(4, "0")}`, description: d.description, debitAccount: d.debitAccount, creditAccount: d.creditAccount, amount: Number(d.amount) });
+      save();
+      closeModal();
+      toast("Balanced journal entry posted");
+      render();
+    };
+  }
+  var importTypes = { customers: { title: "Customers", icon: "users", columns: "name, phone, email", required: "name", sample: "name,phone,email\nDemo Customer,555-0123,demo.customer@example.com" }, vehicles: { title: "Vehicles", icon: "car-front", columns: "customer, year, make, model, vin, plate", required: "customer, year, make, model", sample: "customer,year,make,model,vin,plate\nDemo Customer,2020,Ford,Escape,DEMOVIN000000010,ABC-1234" }, orders: { title: "Work orders", icon: "clipboard-list", columns: "ro_number, customer, vehicle, complaint, status, total", required: "customer, vehicle, complaint", sample: "ro_number,customer,vehicle,complaint,status,total\nRO-1053,Demo Customer,2020 Ford Escape,Oil change,approved,89.95" }, expenses: { title: "Expenses", icon: "wallet-cards", columns: "date, vendor, category, memo, amount", required: "vendor, amount", sample: "date,vendor,category,memo,amount\n2026-08-14,Demo Tool Supply,Tools,Socket set,149.99" } };
+  function imports() {
+    const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join("");
+    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>Imports are stored in this browser. Review each batch before confirming it.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
+  }
+  function entityName(type) {
+    return type === "orders" ? "work order" : type.slice(0, -1);
+  }
+  function previewMarkup() {
+    const p = importPreview, rows = p.records.slice(0, 5).map((record, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(Object.values(record).slice(0, 4).join(" \xB7 "))}</td></tr>`).join("");
+    return `<section class="import-preview"><div><div class="eyebrow">Ready to import</div><h2>${p.records.length} valid ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"}</h2><p>${p.skipped} duplicate or invalid row${p.skipped === 1 ? "" : "s"} will not be imported.</p></div><div class="import-preview-actions"><button class="secondary" id="cancel-import">Cancel</button><button class="primary" id="confirm-import">${icon("check", 15)} Import ${p.records.length} records</button></div><table><thead><tr><th>Row</th><th>Preview</th></tr></thead><tbody>${rows || `<tr><td colspan="2">No valid rows found.</td></tr>`}</tbody></table>${p.errors.length ? `<div class="import-errors"><strong>${p.errors.length} row issue${p.errors.length === 1 ? "" : "s"}</strong>${p.errors.slice(0, 4).map((error) => `<span>${escapeHtml(error)}</span>`).join("")}</div>` : ""}</section>`;
+  }
+  function parseCsv(text) {
+    const rows = [], row = [];
+    let cell = "", quoted = false, current = row;
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i], next = text[i + 1];
+      if (char === '"' && quoted && next === '"') {
+        cell += '"';
+        i++;
+      } else if (char === '"') {
+        quoted = !quoted;
+      } else if (char === "," && !quoted) {
+        current.push(cell.trim());
+        cell = "";
+      } else if ((char === "\n" || char === "\r") && !quoted) {
+        if (char === "\r" && next === "\n") i++;
+        current.push(cell.trim());
+        if (current.some(Boolean)) rows.push(current.slice());
+        current.length = 0;
+        cell = "";
+      } else cell += char;
+    }
+    current.push(cell.trim());
+    if (current.some(Boolean)) rows.push(current.slice());
+    return rows;
+  }
+  function rowData(text) {
+    const rows = parseCsv(text);
+    if (rows.length < 2) return [];
+    const headers = rows.shift().map((value2) => value2.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
+    return rows.map((row) => Object.fromEntries(headers.map((key, index) => [key, row[index] || ""])));
+  }
+  function value(row, ...keys) {
+    return keys.map((key) => row[key]).find((item) => item !== void 0 && item !== "") || "";
+  }
+  function nextRo() {
+    return `RO-${Math.max(1e3, ...state.orders.map((order) => Number(String(order.id).split("-")[1]) || 0)) + 1}`;
+  }
+  function prepareImport(type, text) {
+    const errors = [], records = [];
+    let skipped = 0;
+    const rows = rowData(text);
+    if (!rows.length) return { type, records, errors: ["The file needs a header row and at least one data row."], skipped };
+    rows.forEach((row, index) => {
+      const line = index + 2, customer = value(row, "customer", "customer_name", "name"), amount = Number(value(row, "amount", "total").replace(/[$,]/g, ""));
+      let record, error = "";
+      if (type === "customers") {
+        const name = value(row, "name", "customer", "customer_name");
+        if (!name) error = "Customer name is required";
+        else if (state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) skipped++;
+        else record = { name, phone: value(row, "phone", "mobile"), email: value(row, "email"), vehicles: 0, visits: 0, spend: 0 };
+      } else if (type === "vehicles") {
+        const year = value(row, "year"), make = value(row, "make"), model = value(row, "model"), vin = value(row, "vin");
+        if (!customer || !year || !make || !model) error = "Customer, year, make, and model are required";
+        else if (vin && state.vehicles.some((item) => item.vin.toLowerCase() === vin.toLowerCase())) skipped++;
+        else record = { customer, year, make, model, vin, plate: value(row, "plate", "license_plate") };
+      } else if (type === "orders") {
+        const id = value(row, "ro_number", "ro", "work_order") || nextRo(), vehicle = value(row, "vehicle", "vehicle_description"), status = value(row, "status").toLowerCase().replace(/\s+/g, "_") || "estimate";
+        if (!customer || !vehicle || !value(row, "complaint", "description", "concern")) error = "Customer, vehicle, and complaint are required";
+        else if (state.orders.some((item) => item.id.toLowerCase() === id.toLowerCase())) skipped++;
+        else record = { id, customer, phone: value(row, "phone"), vehicle, vin: value(row, "vin") || "VIN pending", complaint: value(row, "complaint", "description", "concern"), status: ["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(status) ? status : "estimate", priority: "normal", tech: value(row, "tech", "technician") || "Unassigned", bay: value(row, "bay") || "Unassigned", mobile: value(row, "mobile").toLowerCase() === "true", promise: value(row, "promise") || "Unscheduled", total: Number.isFinite(amount) ? amount : 0, scheduled: value(row, "scheduled") || "Unscheduled", notes: value(row, "notes"), labor: 0, parts: 0, tax: 0 };
+      } else {
+        if (!value(row, "vendor", "payee") || !Number.isFinite(amount)) error = "Vendor and numeric amount are required";
+        else record = { date: value(row, "date") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), vendor: value(row, "vendor", "payee"), category: value(row, "category") || "Uncategorized", memo: value(row, "memo", "description", "notes"), amount };
+      }
+      if (error) {
+        errors.push(`Row ${line}: ${error}`);
+        skipped++;
+      } else if (record) records.push(record);
+    });
+    return { type, records, errors, skipped };
+  }
+  function downloadTemplate(type) {
+    const link = document.createElement("a"), file = importTypes[type];
+    link.href = URL.createObjectURL(new Blob([file.sample], { type: "text/csv" }));
+    link.download = `mechpro-${type}-template.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+  function applyImport() {
+    const p = importPreview;
+    if (!p?.records.length) return;
+    const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", expenses: "expenses" }[p.type];
+    state[collection].push(...p.records);
+    if (p.type === "customers") p.records.forEach(pushCustomerToApi);
+    if (p.type === "vehicles") p.records.forEach((vehicle) => {
+      const customer = state.customers.find((item) => item.name.toLowerCase() === vehicle.customer.toLowerCase());
+      if (customer) customer.vehicles += 1;
+    });
+    if (p.type === "orders") p.records.forEach((order) => {
+      pushOrderToApi(order);
+      if (!state.customers.some((item) => item.name.toLowerCase() === order.customer.toLowerCase())) {
+        const record = { name: order.customer, phone: order.phone, email: "Not provided", vehicles: 0, visits: 0, spend: 0 };
+        state.customers.push(record);
+        pushCustomerToApi(record);
+      }
+    });
+    save();
+    toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
+    importPreview = null;
+    render();
+  }
+  function appearanceFieldset(profile = shopProfile()) {
+    const mode = ["device", "light", "dark"].includes(profile?.themeMode) ? profile.themeMode : "device";
+    return `<fieldset class="full appearance-settings"><legend>Appearance</legend><div class="appearance-options">${[["device", "monitor-smartphone", "Device setting"], ["light", "sun", "Light"], ["dark", "moon", "Dark"]].map(([value2, iconName, label2]) => `<label class="appearance-option"><input type="radio" name="themeMode" value="${value2}" ${mode === value2 ? "checked" : ""}/><span>${icon(iconName, 17)}<b>${label2}</b></span></label>`).join("")}</div></fieldset>`;
+  }
+  function bindAppearanceControls(root = document) {
+    if (!root?.querySelectorAll) return;
+    root.querySelectorAll("[name=themeMode]").forEach((input) => input.addEventListener("change", () => applyAppearance(input.value)));
   }
   settings = function() {
     const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
@@ -2944,7 +3288,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       lucide.createIcons();
       bindAppearanceControls(profileForm);
     }
-    bindAppearanceControls(profileForm);
+    if (profileForm) bindAppearanceControls(profileForm);
     profileForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -3161,10 +3505,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return customer.id || customer.name;
   }
   async function saveCustomerChanges(customer, changes) {
-    const isNew = !customer.id, record = { ...customer, ...changes, id: customer.id || mutationId() }, saved = await apiFetch(`/entities/customers${isNew ? "" : `/${encodeURIComponent(record.id)}`}`, { method: isNew ? "POST" : "PUT", body: JSON.stringify(record) }), value = saved?.queued ? record : saved, index = state.customers.indexOf(customer);
-    state.customers[index] = value;
+    const isNew = !customer.id, record = { ...customer, ...changes, id: customer.id || mutationId() }, saved = await apiFetch(`/entities/customers${isNew ? "" : `/${encodeURIComponent(record.id)}`}`, { method: isNew ? "POST" : "PUT", body: JSON.stringify(record) }), value2 = saved?.queued ? record : saved, index = state.customers.indexOf(customer);
+    state.customers[index] = value2;
     save();
-    return value;
+    return value2;
   }
   function openCustomerEditor(key) {
     const customer = state.customers.find((item) => customerRecordKey(item) === key);
@@ -3215,8 +3559,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function invoiceRecordKey(invoice) {
     return invoice.id || invoice.number;
   }
-  function invoiceDateValue(value) {
-    const date = new Date(value);
+  function invoiceDateValue(value2) {
+    const date = new Date(value2);
     return Number.isNaN(date.valueOf()) ? "" : date.toISOString().slice(0, 10);
   }
   function openInvoiceEditor(key) {
@@ -3368,6 +3712,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const page = settingsAgentPhoneCore();
     if (currentUser()?.role !== "admin") return page;
     return page.replace("</main>", `<section class="settings-panel agentphone-settings"><div class="statement-head"><div><div class="eyebrow">Voice and messaging</div><h2>Connect AgentPhone.ai</h2><p>Give this shop's AgentPhone agent access to the live MechPro assistant for calls and messages. Credentials are encrypted by the Worker and never stored in the browser.</p></div>${icon("phone-call", 20)}</div><form class="form-grid" id="agentphone-config-form"><label>AgentPhone API key *<input name="apiKey" type="password" autocomplete="new-password" placeholder="ap_..." required/></label><label>Agent ID *<input name="agentId" placeholder="agt_..." required/></label><label>Conversation history<input name="contextLimit" type="number" min="0" max="50" value="10"/></label><label>Voice response timeout<input name="timeout" type="number" min="5" max="120" value="30"/></label><div class="full agentphone-webhook-preview"><span>Webhook URL</span><code>${cloudflareConfig2.apiUrl}/agentphone/webhook/${escapeHtml(authSession()?.claims?.["custom:shopId"] || "")}</code></div><div class="full"><button class="primary" type="submit">${icon("plug-zap", 14)} Connect AgentPhone</button><small class="form-help">The AgentPhone webhook signing secret is generated and encrypted and stored in D1 by the Worker.</small></div></form></section></main>`);
+  };
+  var settingsAppsBillingCore = settings;
+  settings = function() {
+    const page = settingsAppsBillingCore();
+    if (!["admin", "super_admin"].includes(currentUser()?.role || "")) return page;
+    return page.replace("</main>", `<section class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Apps and subscription</div><h2>Install MechPro and manage plan</h2><p>Download Windows or Android apps, install the web app on a phone home screen, or convert a free shop to paid.</p></div></div><div class="download-actions"><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 14)} Open downloads page</a><a class="secondary" href="/downloads/MechPro.apk">${icon("smartphone", 14)} Android APK</a><a class="secondary" href="/downloads/MechPro-Setup-1.0.0.exe">${icon("monitor", 14)} Windows setup</a><button type="button" class="primary" id="upgrade-shop-plan">${icon("sparkles", 14)} Upgrade to paid</button></div></section></main>`);
   };
   var bindAgentPhoneSettingsCore = bindExpandedFeatures;
   bindExpandedFeatures = function() {
@@ -3523,14 +3873,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   stampDemoAppointments();
   async function startApp() {
-    if (!authSession()) {
-      try {
-        const session = await cloudflareAccessSignIn();
-        const user = await resolveAuthenticatedProfile(session);
-        if (user) state.currentUserId = user.id;
-      } catch (error) {
-        console.info("Cloudflare Access session not available", error.message);
+    try {
+      const session = await cloudflareAccessSignIn();
+      const user = await resolveAuthenticatedProfile(session);
+      if (user) {
+        state.currentUserId = user.id;
+        if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
       }
+    } catch (error) {
+      if (!authSession()) console.info("Cloudflare Access session not available", error.message);
     }
     if (isDesktopApp && authSession()) {
       try {

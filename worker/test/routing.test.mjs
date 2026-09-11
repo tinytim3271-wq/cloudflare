@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isApiPath, isApiRequest, pagesProxyUrl } from '../src/routing.mjs';
+import { isApiPath, isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from '../src/routing.mjs';
 
 test('API paths stay on the Worker route', () => {
   assert.equal(isApiPath('/api'), true);
@@ -22,4 +22,14 @@ test('non-API requests proxy to the Pages origin', () => {
     pagesProxyUrl('https://www.yourcarguy806.com/app?tab=home', 'https://mechpro-dispatch.pages.dev/'),
     'https://mechpro-dispatch.pages.dev/app?tab=home',
   );
+});
+
+test('public download paths map to R2 object keys', () => {
+  assert.equal(publicDownloadObjectKey('/downloads/MechPro-Setup-1.0.0.exe'), 'downloads/MechPro-Setup-1.0.0.exe');
+  assert.equal(publicDownloadObjectKey('/downloads/MechPro-Setup-1.0.0.zip'), 'downloads/MechPro-Setup-1.0.0.zip');
+  assert.equal(publicDownloadObjectKey('/downloads/MechPro.apk'), 'downloads/MechPro.apk');
+  assert.equal(publicDownloadObjectKey('/downloads/'), null);
+  assert.equal(publicDownloadObjectKey('/downloads/index.html'), null);
+  assert.equal(publicDownloadObjectKey('/downloads/../secret.exe'), null);
+  assert.equal(publicDownloadObjectKey('/app/MechPro.apk'), null);
 });
