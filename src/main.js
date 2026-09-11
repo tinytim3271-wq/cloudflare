@@ -3,8 +3,10 @@
  * Order: shared config + platform modules → home helpers → legacy SPA.
  */
 import { cloudflareConfig, storageKeys } from './shared/config.js';
+import { escapeAttr, escapeHtml } from './shared/html.js';
 import './modules/register.js';
 import './runtime/home.js';
 
 window.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
+window.__MECHPRO_HTML__ = { escapeAttr, escapeHtml };
 import './runtime/legacy.js';
