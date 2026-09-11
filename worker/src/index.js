@@ -1,5 +1,5 @@
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
-import { isApiRequest, pagesProxyUrl } from './routing.mjs';
+import { isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from './routing.mjs';
 import {
   ENTITY_TYPES,
   buildTaxReport,
@@ -1032,6 +1032,30 @@ async function route(request, env) {
   throw new HttpError(404, 'Not found');
 }
 
+async function servePublicDownload(request, env) {
+  if (!['GET', 'HEAD'].includes(request.method)) return null;
+  const key = publicDownloadObjectKey(new URL(request.url).pathname);
+  if (!key || !env.FILES) return null;
+  const object = request.method === 'HEAD'
+    ? await env.FILES.head(key)
+    : await env.FILES.get(key);
+  if (!object) return null;
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('ETag', object.httpEtag);
+  headers.set('Cache-Control', 'public, max-age=300');
+  headers.set('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
+  if (!headers.has('Content-Type')) {
+    if (key.endsWith('.apk')) headers.set('Content-Type', 'application/vnd.android.package-archive');
+    else if (key.endsWith('.zip')) headers.set('Content-Type', 'application/zip');
+    else headers.set('Content-Type', 'application/octet-stream');
+  }
+  if (request.method === 'HEAD') {
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(object.body, { status: 200, headers });
+}
+
 async function proxyPagesRequest(request, env) {
   if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'Method not allowed');
   const target = pagesProxyUrl(request.url, env.PAGES_ORIGIN);
@@ -1054,7 +1078,11 @@ async function proxyPagesRequest(request, env) {
 export default {
   async fetch(request, env) {
     try {
-      if (!isApiRequest(request)) return proxyPagesRequest(request, env);
+      if (!isApiRequest(request)) {
+        const download = await servePublicDownload(request, env);
+        if (download) return download;
+        return proxyPagesRequest(request, env);
+      }
       return withCors(await route(request, env), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;

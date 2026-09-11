@@ -1,5 +1,8 @@
 node_modules/
 dist/
+downloads/*.exe
+downloads/*.zip
+shop_pages_demo.mp4
 diagnostics/j2534-service/publish/
 diagnostics/j2534-service/**/bin/
 diagnostics/j2534-service/**/obj/
