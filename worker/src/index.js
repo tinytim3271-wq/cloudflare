@@ -102,9 +102,32 @@ async function resolveAppSession(request, env) {
   };
 }
 
+function platformAdminEmails(env) {
+  return String(env.ACCESS_ADMIN_EMAILS || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isPlatformAdminEmail(email, env) {
+  return platformAdminEmails(env).includes(String(email || '').trim().toLowerCase());
+}
+
 async function resolveContext(request, env) {
   const appSession = await resolveAppSession(request, env);
   if (appSession) {
+    // Magic-link / cookie sessions must honor ACCESS_ADMIN_EMAILS the same way Access JWT does.
+    if (isPlatformAdminEmail(appSession.email, env)) {
+      return {
+        shopId: 'platform',
+        role: 'super_admin',
+        userId: appSession.userId,
+        email: appSession.email,
+        name: appSession.name || 'Platform Administrator',
+        claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
+        sessionId: appSession.sessionId,
+      };
+    }
     return {
       shopId: appSession.shopId,
       role: appSession.role,
@@ -133,8 +156,7 @@ async function resolveContext(request, env) {
   }
   const email = String(claims.email || '').trim().toLowerCase();
   if (!email) throw new HttpError(401, 'Cloudflare Access identity has no email claim');
-  const superAdmins = String(env.ACCESS_ADMIN_EMAILS || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean);
-  if (superAdmins.includes(email)) {
+  if (isPlatformAdminEmail(email, env)) {
     return { shopId: 'platform', role: 'super_admin', userId: String(claims.sub || email), email, name: claims.name || 'Platform Administrator', claims };
   }
   const mapping = await env.DB.prepare(
