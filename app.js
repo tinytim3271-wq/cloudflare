@@ -749,6 +749,18 @@
     sessionStorage.setItem(storageKeys.session, JSON.stringify(session));
     return session;
   }
+  async function requestMagicLinkSignIn(email) {
+    const response = await fetch(`${cloudflareConfig2.apiUrl}/auth/magic-link`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ email, returnTo: "/", return_to: "/" }) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || "Could not start sign-in");
+    const loginUrl = payload.loginUrl || payload.login_url || payload.url;
+    if (loginUrl) {
+      location.assign(loginUrl);
+      return { redirecting: true, email };
+    }
+    ;
+    throw new Error(payload.message || "Check your email for a sign-in link. If nothing arrives, ask an administrator to enable email delivery.");
+  }
   var cloudflareSignIn = cloudflareAccessSignIn;
   function authSession() {
     try {
@@ -1897,7 +1909,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Continue with Cloudflare Access</h1><p>Your organization identity provider handles sign-in, MFA, and session policy. MechPro never receives your password.</p><form id="login-form"><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Access must map your email to an active MechPro employee."}</span></div></section></main>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
   }
   function superAdmin() {
     if (platformAccounts === null && !platformAccountsLoading) void loadPlatformAccounts();
@@ -2823,34 +2835,42 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     original.replaceWith(form);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]");
+      const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
       errorEl.hidden = true;
       submitButton.disabled = true;
       desktopEntitlementVerified = !isDesktopApp;
       try {
-        if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required for Cloudflare Access.");
-        const session = await cloudflareSignIn();
-        if (isDesktopApp) await verifyDesktopEntitlement();
-        const user = await resolveAuthenticatedProfile(session);
-        if (!user) {
-          state.currentUserId = null;
+        if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in.");
+        if (isLocalShell()) {
+          const session = await cloudflareSignIn();
+          if (isDesktopApp) await verifyDesktopEntitlement();
+          const user = await resolveAuthenticatedProfile(session);
+          if (!user) {
+            state.currentUserId = null;
+            save();
+            render();
+            return;
+          }
+          pendingAuthProfile = null;
+          state.currentUserId = user.id;
+          state.route = roleRoutes[user.role]?.[0] || "dispatch";
+          query = "";
           save();
+          await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]);
           render();
           return;
         }
-        pendingAuthProfile = null;
-        state.currentUserId = user.id;
-        state.route = roleRoutes[user.role]?.[0] || "dispatch";
-        query = "";
-        save();
-        await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]);
-        render();
+        const email = String(emailInput?.value || "").trim().toLowerCase();
+        if (!email) throw new Error("Enter your work email to continue.");
+        const result = await requestMagicLinkSignIn(email);
+        if (result?.redirecting) return;
+        throw new Error("Check your email for a sign-in link.");
       } catch (error) {
         clearAuthSession();
         pendingAuthProfile = null;
         desktopEntitlementVerified = !isDesktopApp;
         desktopLoginMessage = isDesktopApp ? error.message : "";
-        errorEl.textContent = error.message || "Cloudflare Access sign-in failed.";
+        errorEl.textContent = error.message || "Sign-in failed.";
         errorEl.hidden = false;
         submitButton.disabled = false;
       }

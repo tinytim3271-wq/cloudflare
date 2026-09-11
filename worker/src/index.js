@@ -672,7 +672,7 @@ async function handleMagicLink(request, env) {
     }
   }
   const email = String(body.email || '').trim().toLowerCase();
-  const returnTo = String(body.returnTo || '/app').trim() || '/app';
+  const returnTo = String(body.returnTo || body.return_to || body.redirectTo || '/').trim() || '/';
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
   const token = crypto.randomUUID().replaceAll('-', '');
   const tokenHash = await hashValue(token);
@@ -688,7 +688,20 @@ async function handleMagicLink(request, env) {
       used_at = NULL,
       created_at = excluded.created_at
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
-  return json({ ok: true, sent: true, email, returnTo, message: 'If the email matches an account, a sign-in link was sent.' });
+  const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
+  loginUrl.searchParams.set('token', token);
+  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1' || !env.AUTH_EMAIL_WEBHOOK;
+  const payload = {
+    ok: true,
+    sent: true,
+    email,
+    returnTo,
+    message: exposeLoginLink
+      ? 'Open the sign-in link to continue. Email delivery is not configured yet.'
+      : 'If the email matches an account, a sign-in link was sent.',
+  };
+  if (exposeLoginLink) payload.loginUrl = loginUrl.toString();
+  return json(payload);
 }
 
 async function handleAuthCallback(request, env) {
