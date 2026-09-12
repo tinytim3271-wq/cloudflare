@@ -33,7 +33,8 @@
     "merge:open-prs": "bash scripts/merge-open-prs.sh",
     "test:html": "node --test src/shared/html.test.mjs",
     "test:storage": "node --test src/modules/storage.test.mjs",
-    "test:modules": "npm run test:home && npm run test:html && npm run test:storage"
+    "test:desktop": "node --test desktop/start-url.test.js",
+    "test:modules": "npm run test:home && npm run test:html && npm run test:storage && npm run test:desktop"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
