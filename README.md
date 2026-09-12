@@ -131,11 +131,12 @@ the Settings screen stores its returned signing secret the same way.
 
 `.github/workflows/cloudflare-pages.yml` validates the web bundle and Worker,
 applies D1 migrations, deploys the Worker, and publishes Pages on `main`.
-Configure repository **Actions** credentials (not the unused `production`
-environment):
+Configure these **Actions** credentials for the publish job. The job targets the
+`production` environment, so environment secrets with the same names override
+repository secrets:
 
 - secret: `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, R2, and Pages edit)
-- variable or secret: `CLOUDFLARE_ACCOUNT_ID`
+- secret: `CLOUDFLARE_ACCOUNT_ID` (`0c31efca6f8739ca301b222f3d68cff4`)
 - variables: optional `CLOUDFLARE_DEPLOY_ENABLED=false` to skip publish,
   `CLOUDFLARE_D1_DATABASE_ID`, optional `CLOUDFLARE_PAGES_PROJECT`, and optional
   `CLOUDFLARE_ALLOWED_ORIGINS`
@@ -146,6 +147,20 @@ If the token is missing, validate still runs and publish is skipped instead of
 failing the workflow. Worker runtime secrets are configured with
 `wrangler secret put`, not GitHub variables. The Windows workflow publishes
 installers to the configured `CLOUDFLARE_R2_BUCKET` when the same token is set.
+
+Cloudflare API errors `10000` or `9109` mean the configured token is invalid or
+lacks access to the account. Rotate both Actions secrets above in the scope
+consumed by the `production` job; do not copy an OAuth token from a developer
+machine into GitHub. Until CI is rotated, an account owner with an existing
+Wrangler OAuth login can deploy from the repository root:
+
+```bash
+npm ci
+npm run build:web
+npm run db:migrate:remote
+npm run deploy:worker
+npm run deploy:pages
+```
 
 ## Desktop and mobile
 
