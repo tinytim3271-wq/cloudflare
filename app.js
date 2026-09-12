@@ -750,7 +750,13 @@
     return session;
   }
   async function requestMagicLinkSignIn(email) {
-    const response = await fetch(`${cloudflareConfig2.apiUrl}/auth/magic-link`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ email, returnTo: "/", return_to: "/" }) });
+    let response;
+    try {
+      response = await fetch(`${cloudflareConfig2.apiUrl}/auth/magic-link`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ email, returnTo: "/", return_to: "/" }) });
+    } catch (error) {
+      if (error instanceof TypeError) throw new Error("Could not reach MechPro sign-in. Check your internet connection and try again.");
+      throw error;
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || "Could not start sign-in");
     const loginUrl = payload.loginUrl || payload.login_url || payload.url;
@@ -2875,6 +2881,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         state.users = sanitizeUsers(state.users);
         return local;
       }
+      if (error instanceof TypeError) throw new Error("Could not reach MechPro. Sign in from the online desktop window or check your internet connection.");
       throw error;
     }
     const active = employees2.find((user) => user.active && String(user.email || "").trim().toLowerCase() === normalized);
