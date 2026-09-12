@@ -13,6 +13,8 @@
       a { color: #7dd3fc; }
       .error { color: #fecaca; margin-top: 12px; }
       .hint { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
+      label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
+      label + input { margin-top: 6px; }
     </style>
   </head>
   <body>
@@ -20,6 +22,7 @@
       <h1>Sign in to MechPro</h1>
       <p class="hint">Enter your work email. We will open a one-time sign-in link for this browser.</p>
       <form id="login-form">
+        <label for="email">Work email</label>
         <input id="email" type="email" name="email" placeholder="name@shop.com" autocomplete="username" required />
         <button type="submit">Continue securely</button>
       </form>

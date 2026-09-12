@@ -1,9 +1,8 @@
-# `/api/*` is served by the mechpro-api Worker route on the production hostname.
-/pricing        /pricing.html     200
-/features       /features.html    200
-/login          /login.html       200
-/signup         /signup.html      200
-/terms          /terms.html       200
-/privacy        /privacy.html     200
+# Marketing pages are folders with index.html (e.g. /pricing/index.html).
+# Cloudflare serves /pricing/ and 308s /pricing → /pricing/.
+# Do not add `/pricing → /pricing.html` rewrites — that loops with pretty URLs.
+#
+# `/api/*` is served by the mechpro-api Worker on the production hostname.
+
+# Optional explicit entry for the SPA shell.
 /app            /index.html       200
-/*              /index.html       200
