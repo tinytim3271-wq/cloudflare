@@ -62,6 +62,7 @@ jobs:
       - name: Build web bundle
         run: npm run build:web
       - name: Bake diagnostics capability secret for packaged desktop
+        shell: bash
         env:
           DIAGNOSTICS_CAPABILITY_SECRET: ${{ secrets.DIAGNOSTICS_CAPABILITY_SECRET }}
         run: |
