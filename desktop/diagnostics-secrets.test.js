@@ -5,46 +5,48 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveDiagnosticsPublicKey } = require('./diagnostics-secrets');
+const { DEV_FALLBACK_SECRET, resolveDiagnosticsCapabilitySecret } = require('./diagnostics-secrets');
 
-describe('resolveDiagnosticsPublicKey', () => {
+describe('resolveDiagnosticsCapabilitySecret', () => {
   it('prefers environment variables', () => {
-    const result = resolveDiagnosticsPublicKey({
-      env: { DIAGNOSTICS_SIGNING_PUBLIC_KEY: ' public-key-from-env ' },
+    const result = resolveDiagnosticsCapabilitySecret({
+      env: { MECHPRO_DIAG_CAPABILITY_SECRET: ' from-env ' },
       packaged: true,
     });
-    assert.equal(result.publicKey, 'public-key-from-env');
+    assert.equal(result.secret, 'from-env');
     assert.equal(result.source, 'env');
   });
 
-  it('uses the packaged public key file when present', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mechpro-diag-key-'));
+  it('uses the packaged secret file when present', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mechpro-diag-secret-'));
+    const filePath = path.join(dir, 'capability-secret.txt');
+    fs.writeFileSync(filePath, 'packaged-secret\n');
+    const previous = process.resourcesPath;
+    process.resourcesPath = dir;
     try {
-      const nested = path.join(dir, 'diagnostics-keys');
+      // Place where packagedSecretCandidates looks first: resources/diagnostics-secrets/
+      const nested = path.join(dir, 'diagnostics-secrets');
       fs.mkdirSync(nested);
-      const publicKeyPath = path.join(nested, 'capability-public-key.pem');
-      fs.writeFileSync(publicKeyPath, 'packaged-public-key\n');
-      const result = resolveDiagnosticsPublicKey({
-        env: {},
-        packaged: true,
-        candidates: [publicKeyPath],
-      });
-      assert.equal(result.publicKey, 'packaged-public-key');
-      assert.match(result.source, /capability-public-key\.pem$/);
+      fs.writeFileSync(path.join(nested, 'capability-secret.txt'), 'nested-packaged-secret\n');
+      const result = resolveDiagnosticsCapabilitySecret({ env: {}, packaged: true });
+      assert.equal(result.secret, 'nested-packaged-secret');
+      assert.match(result.source, /capability-secret\.txt$/);
     } finally {
+      if (previous === undefined) delete process.resourcesPath;
+      else process.resourcesPath = previous;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('does not throw when the packaged public key is missing', () => {
-    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: true, candidates: [] });
-    assert.equal(result.publicKey, '');
+  it('does not throw when packaged secret is missing', () => {
+    const result = resolveDiagnosticsCapabilitySecret({ env: {}, packaged: true });
+    assert.equal(result.secret, '');
     assert.equal(result.source, 'missing-packaged');
   });
 
-  it('fails closed without a public key in unpackaged builds', () => {
-    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: false, candidates: [] });
-    assert.equal(result.publicKey, '');
-    assert.equal(result.source, 'missing-dev');
+  it('falls back to the shared dev secret for unpackaged builds', () => {
+    const result = resolveDiagnosticsCapabilitySecret({ env: {}, packaged: false });
+    assert.equal(result.secret, DEV_FALLBACK_SECRET);
+    assert.equal(result.source, 'dev-fallback');
   });
 });

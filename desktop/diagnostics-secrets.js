@@ -42,8 +42,7 @@ function resolveDiagnosticsPublicKey(options = {}) {
   const fromEnv = String(env.DIAGNOSTICS_SIGNING_PUBLIC_KEY || '').trim();
   if (fromEnv) return { publicKey: fromEnv, source: 'env' };
 
-  const candidates = Array.isArray(options.candidates) ? options.candidates : publicKeyCandidates();
-  for (const candidate of candidates) {
+  for (const candidate of publicKeyCandidates()) {
     const fromFile = readFile(candidate);
     if (fromFile) return { publicKey: fromFile, source: candidate };
   }
