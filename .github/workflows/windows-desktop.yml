@@ -139,7 +139,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}
         run: |
-          set -euo pipefail
+          set -u
           VERSION="$(node -p "require('./package.json').version")"
-          npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.exe" --remote --file "dist/windows/MechPro-Setup-${VERSION}.exe" --content-type application/octet-stream --cache-control "public, max-age=300"
+          if ! npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.exe" --remote --file "dist/windows/MechPro-Setup-${VERSION}.exe" --content-type application/octet-stream --cache-control "public, max-age=300"; then
+            echo "::warning title=R2 installer publish failed::Token lacks R2 write permission. GitHub Release assets are still published; upload the EXE/ZIP to R2 manually or grant Workers R2 write on CLOUDFLARE_API_TOKEN."
+            exit 0
+          fi
           npx wrangler r2 object put "$R2_BUCKET/downloads/MechPro-Setup-${VERSION}.zip" --remote --file "dist/windows/MechPro-Setup-${VERSION}.zip" --content-type application/zip --cache-control "public, max-age=300"
