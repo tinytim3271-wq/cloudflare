@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// CI rebuild trigger: bake DIAGNOSTICS_CAPABILITY_SECRET into packaged desktop.
 /**
  * Ensure desktop/packaged-secrets/capability-secret.txt exists so electron-builder
  * extraResources does not fail on an empty filter. Prefer env; otherwise leave
