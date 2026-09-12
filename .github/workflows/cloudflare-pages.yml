@@ -55,6 +55,7 @@ jobs:
       - run: npm ci
       - run: npm run build:web
       - run: npm run test:config
+      - run: npm run test:modules
       - run: npm run test:worker
       - run: npm run stage:pages
       - run: npx wrangler deploy --dry-run
@@ -63,7 +64,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CLOUDFLARE_DEPLOY_ENABLED != 'false'
     needs: validate
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
