@@ -66,6 +66,36 @@ export async function hmacBase64Url(secret, value) {
   return base64UrlEncode(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value))));
 }
 
+function base64ToBytes(value) {
+  const normalized = String(value || '').replace(/\s+/g, '');
+  return Uint8Array.from(atob(normalized), character => character.charCodeAt(0));
+}
+
+/**
+ * Import a PKCS#8 (base64 DER) ECDSA P-256 private key for signing capability
+ * tokens. The private key lives only in the Worker (never shipped to clients),
+ * so diagnostic clients can verify tokens but cannot mint them.
+ */
+export async function importEcdsaPrivateKey(pkcs8Base64) {
+  return crypto.subtle.importKey(
+    'pkcs8',
+    base64ToBytes(pkcs8Base64),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+}
+
+/** Sign `data` with an ECDSA P-256 key, returning a base64url IEEE-P1363 (r||s) signature. */
+export async function ecdsaP256SignBase64Url(privateKey, data) {
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    encoder.encode(data),
+  );
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
 export function constantTimeEqual(left, right) {
   const a = encoder.encode(String(left));
   const b = encoder.encode(String(right));
