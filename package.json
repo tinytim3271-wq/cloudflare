@@ -27,13 +27,13 @@
     "build:android": "npm run sync",
     "desktop": "electron .",
     "build:j2534": "node scripts/build-j2534.mjs",
-    "build:windows": "npm run build:web && npm run build:j2534 && electron-builder --win nsis --publish never",
-    "build:windows:zip": "npm run build:web && npm run build:j2534 && electron-builder --win zip --publish never",
+    "build:windows": "npm run build:web && npm run build:j2534 && node scripts/bake-diagnostics-secret.mjs && electron-builder --win nsis --publish never",
+    "build:windows:zip": "npm run build:web && npm run build:j2534 && node scripts/bake-diagnostics-secret.mjs && electron-builder --win zip --publish never",
     "test:j2534": "node diagnostics/j2534-host-node/test/host.test.js",
     "merge:open-prs": "bash scripts/merge-open-prs.sh",
     "test:html": "node --test src/shared/html.test.mjs",
     "test:storage": "node --test src/modules/storage.test.mjs",
-    "test:desktop": "node --test desktop/start-url.test.js",
+    "test:desktop": "node --test desktop/start-url.test.js desktop/diagnostics-secrets.test.js",
     "test:modules": "npm run test:home && npm run test:html && npm run test:storage && npm run test:desktop"
   },
   "devDependencies": {
@@ -79,6 +79,13 @@
         "to": "j2534-host",
         "filter": [
           "J2534.Host.exe"
+        ]
+      },
+      {
+        "from": "desktop/packaged-secrets",
+        "to": "diagnostics-secrets",
+        "filter": [
+          "capability-secret.txt"
         ]
       }
     ],

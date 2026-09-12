@@ -61,6 +61,14 @@ jobs:
       - run: npm ci
       - name: Build web bundle
         run: npm run build:web
+      - name: Bake diagnostics capability secret for packaged desktop
+        env:
+          DIAGNOSTICS_CAPABILITY_SECRET: ${{ secrets.DIAGNOSTICS_CAPABILITY_SECRET }}
+        run: |
+          if [ -z "${DIAGNOSTICS_CAPABILITY_SECRET:-}" ]; then
+            echo "::warning title=Diagnostics capability secret missing::Add repository secret DIAGNOSTICS_CAPABILITY_SECRET (must match Worker) so Clear DTC works in packaged builds. Read-only J2534 ops still work."
+          fi
+          node scripts/bake-diagnostics-secret.mjs
       - name: Build NSIS installer and portable zip
         run: npx electron-builder --win nsis zip --publish never
       - uses: actions/upload-artifact@v4
