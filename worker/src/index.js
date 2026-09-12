@@ -282,6 +282,7 @@ async function handleDiagnostics(request, env, context, segments) {
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
   if (action === 'coverage') return handleCoverage(request, segments);
+  if (action === 'autoauth') return handleAutoAuth(request, env, context);
   if (action === 'audit' && request.method === 'POST') {
     const id = await recordDiagnosticAudit(env, context, await requestJson(request));
     return json({ id, recorded: true }, 201);
@@ -299,11 +300,11 @@ async function handleDiagnostics(request, env, context, segments) {
     // credentials provisioned for the shop. SIMULATE always drives the bench
     // simulator only, so it is safe to authorize without OEM credentials.
     if (mode === 'live' && spec.autoAuth) {
-      const autoAuth = await getIntegrationSecret(env, context.shopId, 'autoauth-stellantis-token');
-      if (!autoAuth) {
+      const login = await readAutoAuthLogin(env, context.shopId);
+      if (!login) {
         return json({
           authorized: false,
-          message: 'Live programming requires Stellantis AutoAuth credentials configured for this shop. Configure AutoAuth in Settings, or use Simulate mode.',
+          message: 'Live programming requires your shop to sign in to a vehicle security (AutoAuth) account. Connect it in OEM Diagnostics, or use Simulate mode.',
         }, 501);
       }
     }
@@ -462,6 +463,55 @@ async function getIntegrationSecret(env, shopId, name) {
     'SELECT ciphertext, iv FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
   ).bind(shopId, name).first();
   return row ? decryptSecret(row.ciphertext, row.iv, env.INTEGRATION_ENCRYPTION_KEY) : '';
+}
+
+async function deleteIntegrationSecret(env, shopId, name) {
+  await env.DB.prepare(
+    'DELETE FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
+  ).bind(shopId, name).run();
+}
+
+// Per-shop "vehicle security access" login (AutoAuth). Each shop connects its
+// own OEM/AutoAuth account; that login is what unlocks LIVE immobilizer/
+// programming/flash for the shop. Credentials are encrypted at rest in D1.
+const AUTOAUTH_SECRET_NAME = 'autoauth-login';
+
+async function readAutoAuthLogin(env, shopId) {
+  const raw = await getIntegrationSecret(env, shopId, AUTOAUTH_SECRET_NAME);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function handleAutoAuth(request, env, context) {
+  // Any shop-floor role can see connection status; only shop admins (or the
+  // platform) can connect/disconnect the shop's own security-access login.
+  if (request.method === 'GET') {
+    const login = await readAutoAuthLogin(env, context.shopId);
+    return json({
+      connected: Boolean(login),
+      provider: login?.provider || null,
+      accountId: login?.accountId || null,
+      connectedAt: login?.connectedAt || null,
+    });
+  }
+  requireRole(context, ['admin', 'super_admin']);
+  if (request.method === 'POST') {
+    const body = await requestJson(request);
+    const provider = String(body.provider || 'autoauth_stellantis').trim();
+    const accountId = String(body.accountId || '').trim();
+    const apiKey = String(body.apiKey || body.password || '').trim();
+    if (!accountId || !apiKey) throw new HttpError(400, 'accountId and apiKey are required to connect a vehicle security login');
+    const record = { provider, accountId, apiKey, connectedAt: new Date().toISOString(), connectedBy: context.userId };
+    await saveIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME, JSON.stringify(record));
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.connect', provider, accountId });
+    return json({ connected: true, provider, accountId, connectedAt: record.connectedAt }, 201);
+  }
+  if (request.method === 'DELETE') {
+    await deleteIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME);
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.disconnect' });
+    return json({ connected: false });
+  }
+  throw new HttpError(405, 'Method not allowed');
 }
 
 async function handleAgentPhoneConfigure(request, env, context) {

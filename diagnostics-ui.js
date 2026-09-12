@@ -141,6 +141,28 @@ function friendlyOemError(error) {
 
 const KEY_PROCEDURES = ['add_key', 'all_keys_lost', 'program_remote', 'erase_keys'];
 
+function oemSecurityLoginCard(diag) {
+  const auth = diag.autoAuth || {};
+  if (auth.connected) {
+    const since = auth.connectedAt ? ` · since ${new Date(auth.connectedAt).toLocaleDateString()}` : '';
+    return `<section class="oem-panel oem-panel-wide oem-security-login">
+        <h3>${icon('shield-check', 16)} Vehicle security access (this shop's login)</h3>
+        <div class="messaging-status ready">${icon('circle-check', 17)}<div><strong>Connected</strong><span>${escapeHtml(auth.provider || 'AutoAuth')} · ${escapeHtml(auth.accountId || '')}${escapeHtml(since)}</span></div></div>
+        <div class="ledger-note">${icon('info', 15)} Live immobilizer, key programming, and module flashing are unlocked for this shop using your account.</div>
+        <div class="ops-actions"><button class="secondary danger" id="oem-autoauth-disconnect">${icon('log-out', 14)} Disconnect account</button></div>
+      </section>`;
+  }
+  return `<section class="oem-panel oem-panel-wide oem-security-login">
+      <h3>${icon('shield-check', 16)} Vehicle security access (this shop's login)</h3>
+      <div class="messaging-status idle">${icon('lock', 17)}<div><strong>Not connected</strong><span>Sign in with your shop's vehicle security (AutoAuth) account to enable live programming.</span></div></div>
+      <form id="oem-autoauth-form" class="form-grid">
+        <label>Provider<select name="provider"><option value="autoauth_stellantis">Stellantis AutoAuth</option><option value="autoauth_generic">Other AutoAuth</option></select></label>
+        <label>Account ID / username<input name="accountId" autocomplete="off" required /></label>
+        <label>API key / password<input name="apiKey" type="password" autocomplete="off" required /></label>
+        <button class="primary" type="submit">${icon('log-in', 14)} Connect account</button>
+      </form>`;
+}
+
 function oemProgrammingPanel(diag, coverage, vehicle, status) {
   const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
   const security = diag.security || {};
@@ -248,6 +270,7 @@ function oemDiagnosticsView() {
             <button class="secondary danger" id="oem-clear-dtcs" ${status.connected ? '' : 'disabled'}>${icon('eraser', 14)} Clear DTCs</button>
           </div>
         </section>
+        ${oemSecurityLoginCard(diag)}
         ${oemProgrammingPanel(diag, coverage, vehicle, status)}
         <section class="oem-panel oem-panel-wide">
           <h3>${icon('radio', 16)} Communication log</h3>
@@ -351,6 +374,35 @@ async function oemPollLog() {
   });
 }
 
+async function oemLoadAutoAuth() {
+  try {
+    const auth = await apiFetch('/diagnostics/autoauth');
+    saveOemDiagState({ autoAuth: auth });
+    return auth;
+  } catch {
+    return null; // offline / unauthenticated — treat as not connected
+  }
+}
+
+async function oemConnectAutoAuth(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const auth = await apiFetch('/diagnostics/autoauth', {
+    method: 'POST',
+    body: JSON.stringify({ provider: data.provider, accountId: data.accountId, apiKey: data.apiKey }),
+  });
+  saveOemDiagState({
+    autoAuth: { connected: true, provider: auth.provider, accountId: auth.accountId, connectedAt: auth.connectedAt },
+    lastError: null,
+  });
+  toast('Vehicle security account connected');
+}
+
+async function oemDisconnectAutoAuth() {
+  await apiFetch('/diagnostics/autoauth', { method: 'DELETE' });
+  saveOemDiagState({ autoAuth: { connected: false }, programmingMode: 'simulate' });
+  toast('Vehicle security account disconnected');
+}
+
 async function oemAuthorize(procedure) {
   const diag = loadOemDiagState();
   const vin = diag.vehicleIdentification?.vin;
@@ -415,6 +467,16 @@ async function oemFlashModule() {
 
 function bindOemDiagnostics() {
   if (!isOemDiagnosticsAvailable()) return;
+  document.querySelector('#oem-autoauth-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try { await oemConnectAutoAuth(event.target); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  document.querySelector('#oem-autoauth-disconnect')?.addEventListener('click', async () => {
+    try { await oemDisconnectAutoAuth(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  if (loadOemDiagState().autoAuth === undefined) {
+    oemLoadAutoAuth().then((auth) => { if (auth && state.route === 'oem-diagnostics') render(); });
+  }
   document.querySelectorAll('[data-prog-mode]').forEach((button) => button.addEventListener('click', () => {
     saveOemDiagState({ programmingMode: button.dataset.progMode, programmingResult: null, flashProgress: 0 });
     render();
