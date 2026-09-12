@@ -54,7 +54,10 @@
           }
           throw new Error(payload.message || 'Check your email for a sign-in link.');
         } catch (error) {
-          errorEl.textContent = error.message || 'Sign-in failed.';
+          const raw = String(error?.message || '');
+          errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)
+            ? 'Could not reach MechPro sign-in. Use the latest Windows installer from /downloads, or open https://www.yourcarguy806.com/login in a browser.'
+            : (raw || 'Sign-in failed.');
           errorEl.hidden = false;
           button.disabled = false;
         }
