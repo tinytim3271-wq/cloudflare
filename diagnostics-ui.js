@@ -127,6 +127,17 @@ function formatCommEntry(entry) {
   return `[${time}] ${dir} ${entry.address} ${entry.data} — ${entry.description}`;
 }
 
+function friendlyOemError(error) {
+  const message = String(error?.message || error || 'Diagnostic operation failed');
+  if (/MECHPRO_DIAG_CAPABILITY_SECRET|DIAGNOSTICS_CAPABILITY_SECRET|capability secret/i.test(message)) {
+    return `${message} Reinstall MechPro Desktop from Downloads after CI rebuilds the Windows installer with the shop API secret.`;
+  }
+  if (/did not become ready|host script not found|J2534 RPC timeout/i.test(message)) {
+    return `${message} Confirm J2534.Host.exe is present, vendor drivers are installed, and antivirus is not blocking the diagnostic host.`;
+  }
+  return message;
+}
+
 function oemDiagnosticsView() {
   const diag = loadOemDiagState();
   const status = diag.connectionStatus || {};
@@ -301,22 +312,22 @@ async function oemPollLog() {
 function bindOemDiagnostics() {
   if (!isOemDiagnosticsAvailable()) return;
   document.querySelector('#oem-refresh-adapters')?.addEventListener('click', async () => {
-    try { await refreshOemAdapters(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await refreshOemAdapters(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-connect')?.addEventListener('click', async () => {
-    try { await oemConnect(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemConnect(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-disconnect')?.addEventListener('click', async () => {
-    try { await oemDisconnect(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemDisconnect(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-identify')?.addEventListener('click', async () => {
-    try { await oemIdentifyVehicle(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemIdentifyVehicle(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-read-dtcs')?.addEventListener('click', async () => {
-    try { await oemReadDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemReadDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-clear-dtcs')?.addEventListener('click', async () => {
-    try { await oemClearDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemClearDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-start-log')?.addEventListener('click', async () => {
     try {
@@ -327,14 +338,14 @@ function bindOemDiagnostics() {
         try { await oemPollLog(); const el = document.querySelector('#oem-comm-log'); if (el) el.textContent = (loadOemDiagState().commLog || []).slice(-100).map(formatCommEntry).join('\n'); } catch { /* ignore poll errors */ }
       }, 1500);
       toast('Live communication log started');
-    } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-stop-log')?.addEventListener('click', async () => {
     try {
       await oemDiagApi().stopLiveLog();
       if (window._oemLogTimer) clearInterval(window._oemLogTimer);
       toast('Live log stopped');
-    } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-export-log')?.addEventListener('click', () => {
     const log = (loadOemDiagState().commLog || []).map(formatCommEntry).join('\n');

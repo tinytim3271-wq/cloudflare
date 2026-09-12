@@ -3,6 +3,8 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const { resolveDiagnosticsCapabilitySecret } = require('./diagnostics-secrets');
 
 const sessionId = crypto.randomBytes(8).toString('hex');
 const hostToken = crypto.randomBytes(24).toString('base64url');
@@ -12,6 +14,7 @@ const PIPE_UNIX = path.join(os.tmpdir(), `mechpro-j2534-${sessionId}.sock`);
 let hostProcess = null;
 let requestId = 0;
 let powerSaveBlockerId = null;
+let appliedCapabilitySecret = false;
 
 function pipePath() {
   return process.platform === 'win32' ? PIPE_WIN : PIPE_UNIX;
@@ -22,47 +25,57 @@ function csharpPipeName() {
 }
 
 function hostScriptPath() {
-  return path.join(__dirname, '..', 'diagnostics', 'j2534-host-node', 'bin', 'start.js');
+  const candidates = [
+    path.join(__dirname, '..', 'diagnostics', 'j2534-host-node', 'bin', 'start.js'),
+  ];
+  if (typeof process.resourcesPath === 'string' && process.resourcesPath) {
+    candidates.unshift(path.join(process.resourcesPath, 'j2534-host-node', 'bin', 'start.js'));
+  }
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[candidates.length - 1];
 }
 
 function csharpHostPath() {
-  const fs = require('node:fs');
   const { app } = require('electron');
   const packaged = path.join(process.resourcesPath, 'j2534-host', 'J2534.Host.exe');
   if (app?.isPackaged && fs.existsSync(packaged)) return packaged;
   return path.join(__dirname, '..', 'diagnostics', 'j2534-service', 'publish', 'win-x64', 'J2534.Host.exe');
 }
 
+/**
+ * Resolve and optionally apply the capability secret to process.env so the
+ * Node host + capability-token verifier share the Worker signing key.
+ * Never throws when packaged secret is missing — read-only J2534 ops must work.
+ */
 function diagnosticsCapabilitySecret() {
-  const configured = process.env.MECHPRO_DIAG_CAPABILITY_SECRET
-    || process.env.DIAGNOSTICS_CAPABILITY_SECRET
-    || '';
-  if (configured) return configured;
-  let packaged = false;
-  try {
-    packaged = Boolean(require('electron').app?.isPackaged);
-  } catch {
-    packaged = false;
+  const { secret, source } = resolveDiagnosticsCapabilitySecret();
+  if (secret && !appliedCapabilitySecret) {
+    process.env.MECHPRO_DIAG_CAPABILITY_SECRET = secret;
+    process.env.DIAGNOSTICS_CAPABILITY_SECRET = secret;
+    appliedCapabilitySecret = true;
   }
-  if (packaged) {
-    throw new Error(
-      'MECHPRO_DIAG_CAPABILITY_SECRET must be set for packaged desktop builds (must match API diagnosticsCapabilitySecret)',
+  if (!secret && source === 'missing-packaged') {
+    process.stderr.write(
+      '[j2534] DIAGNOSTICS_CAPABILITY_SECRET missing from packaged build; clear DTC disabled\n',
     );
   }
-  return 'mechpro-dev-diagnostics-capability-v1';
+  return secret;
 }
 
 function startHostProcess() {
   if (hostProcess) return hostProcess;
 
-  const fs = require('node:fs');
   const csharp = csharpHostPath();
+  const capabilitySecret = diagnosticsCapabilitySecret();
   const hostEnv = {
     ...process.env,
     MECHPRO_J2534_PIPE: process.platform === 'win32' ? csharpPipeName() : pipePath(),
     MECHPRO_J2534_TOKEN: hostToken,
-    MECHPRO_DIAG_CAPABILITY_SECRET: diagnosticsCapabilitySecret(),
   };
+  if (capabilitySecret) {
+    hostEnv.MECHPRO_DIAG_CAPABILITY_SECRET = capabilitySecret;
+    hostEnv.DIAGNOSTICS_CAPABILITY_SECRET = capabilitySecret;
+  }
+
   if (process.platform === 'win32' && fs.existsSync(csharp)) {
     hostProcess = spawn(csharp, [], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -70,9 +83,19 @@ function startHostProcess() {
       env: hostEnv,
     });
   } else {
-    hostProcess = spawn(process.execPath, [hostScriptPath()], {
+    const script = hostScriptPath();
+    if (!fs.existsSync(script)) {
+      throw new Error(
+        `J2534 host script not found at ${script}. Reinstall MechPro Desktop or run from a full checkout.`,
+      );
+    }
+    hostProcess = spawn(process.execPath, [script], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...hostEnv, MECHPRO_J2534_PIPE: pipePath() },
+      env: {
+        ...hostEnv,
+        MECHPRO_J2534_PIPE: pipePath(),
+        ELECTRON_RUN_AS_NODE: '1',
+      },
     });
   }
 
@@ -199,6 +222,12 @@ async function clearDtcs(params = {}) {
   const authorizationToken = String(params.authorizationToken || '').trim();
   if (!authorizationToken) {
     throw new Error('clearDtcs requires an authorization token from /diagnostics/authorize');
+  }
+  const secret = diagnosticsCapabilitySecret();
+  if (!secret) {
+    throw new Error(
+      'Clear DTC is unavailable: DIAGNOSTICS_CAPABILITY_SECRET is not configured in this desktop build. Reinstall from Downloads after the shop rebuilds the Windows installer with the matching API secret.',
+    );
   }
   const { verifyClearDtcsToken } = require('../diagnostics/j2534-host-node/capability-token');
   // Signature/expiry check only — host enforces single-use consumption.
