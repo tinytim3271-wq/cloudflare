@@ -4,7 +4,8 @@ const { spawn } = require('node:child_process');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const { resolveDiagnosticsCapabilitySecret } = require('./diagnostics-secrets');
+const { resolveDiagnosticsPublicKey } = require('./diagnostics-secrets');
+const { verifyCapabilityToken } = require('../diagnostics/j2534-host-node/capability-token');
 
 const sessionId = crypto.randomBytes(8).toString('hex');
 const hostToken = crypto.randomBytes(24).toString('base64url');
@@ -14,7 +15,7 @@ const PIPE_UNIX = path.join(os.tmpdir(), `mechpro-j2534-${sessionId}.sock`);
 let hostProcess = null;
 let requestId = 0;
 let powerSaveBlockerId = null;
-let appliedCapabilitySecret = false;
+let appliedPublicKey = false;
 
 function pipePath() {
   return process.platform === 'win32' ? PIPE_WIN : PIPE_UNIX;
@@ -42,38 +43,37 @@ function csharpHostPath() {
 }
 
 /**
- * Resolve and optionally apply the capability secret to process.env so the
- * Node host + capability-token verifier share the Worker signing key.
- * Never throws when packaged secret is missing — read-only J2534 ops must work.
+ * Resolve the capability-token PUBLIC verification key and apply it to
+ * process.env so the host process (Node or .NET) can verify Worker-issued
+ * tokens. Only the public key is present on the client; it cannot mint tokens.
+ * Never throws when the key is missing — read-only J2534 ops must still work.
  */
-function diagnosticsCapabilitySecret() {
-  const { secret, source } = resolveDiagnosticsCapabilitySecret();
-  if (secret && !appliedCapabilitySecret) {
-    process.env.MECHPRO_DIAG_CAPABILITY_SECRET = secret;
-    process.env.DIAGNOSTICS_CAPABILITY_SECRET = secret;
-    appliedCapabilitySecret = true;
+function diagnosticsPublicKey() {
+  const { publicKey, source } = resolveDiagnosticsPublicKey();
+  if (publicKey && !appliedPublicKey) {
+    process.env.DIAGNOSTICS_SIGNING_PUBLIC_KEY = publicKey;
+    appliedPublicKey = true;
   }
-  if (!secret && source === 'missing-packaged') {
+  if (!publicKey && source === 'missing-packaged') {
     process.stderr.write(
-      '[j2534] DIAGNOSTICS_CAPABILITY_SECRET missing from packaged build; clear DTC disabled\n',
+      '[j2534] DIAGNOSTICS_SIGNING_PUBLIC_KEY missing from packaged build; authorized procedures disabled\n',
     );
   }
-  return secret;
+  return publicKey;
 }
 
 function startHostProcess() {
   if (hostProcess) return hostProcess;
 
   const csharp = csharpHostPath();
-  const capabilitySecret = diagnosticsCapabilitySecret();
+  const publicKey = diagnosticsPublicKey();
   const hostEnv = {
     ...process.env,
     MECHPRO_J2534_PIPE: process.platform === 'win32' ? csharpPipeName() : pipePath(),
     MECHPRO_J2534_TOKEN: hostToken,
   };
-  if (capabilitySecret) {
-    hostEnv.MECHPRO_DIAG_CAPABILITY_SECRET = capabilitySecret;
-    hostEnv.DIAGNOSTICS_CAPABILITY_SECRET = capabilitySecret;
+  if (publicKey) {
+    hostEnv.DIAGNOSTICS_SIGNING_PUBLIC_KEY = publicKey;
   }
 
   if (process.platform === 'win32' && fs.existsSync(csharp)) {
@@ -217,23 +217,64 @@ async function readDtcs() {
   return rpcCall('readDtcs');
 }
 
-/** Mutating UDS — requires a cloud /diagnostics/authorize capability token from the renderer. */
-async function clearDtcs(params = {}) {
+/**
+ * Pre-flight a mutating procedure: ensure the capability public key is present
+ * and the token's signature/expiry/procedure are valid before touching the bus.
+ * The host enforces single-use consumption, so this check does not consume.
+ */
+function preflightAuthorization(procedure, params = {}) {
   const authorizationToken = String(params.authorizationToken || '').trim();
   if (!authorizationToken) {
-    throw new Error('clearDtcs requires an authorization token from /diagnostics/authorize');
+    throw new Error(`${procedure} requires an authorization token from /diagnostics/authorize`);
   }
-  const secret = diagnosticsCapabilitySecret();
-  if (!secret) {
+  if (!diagnosticsPublicKey()) {
     throw new Error(
-      'Clear DTC is unavailable: DIAGNOSTICS_CAPABILITY_SECRET is not configured in this desktop build. Reinstall from Downloads after the shop rebuilds the Windows installer with the matching API secret.',
+      `${procedure} is unavailable: the diagnostics capability public key is not configured in this desktop build. Reinstall from Downloads after the shop rebuilds the installer.`,
     );
   }
-  const { verifyClearDtcsToken } = require('../diagnostics/j2534-host-node/capability-token');
-  // Signature/expiry check only — host enforces single-use consumption.
-  verifyClearDtcsToken(authorizationToken, { consume: false });
+  verifyCapabilityToken(authorizationToken, { procedure, consume: false });
+  return authorizationToken;
+}
+
+/** Clear DTCs — requires a cloud /diagnostics/authorize capability token. */
+async function clearDtcs(params = {}) {
+  const authorizationToken = preflightAuthorization('clear_dtcs', params);
   await ensureHost();
   return rpcCall('clearDtcs', { authorizationToken });
+}
+
+/** UDS SecurityAccess (immobilizer or flash scope) — no capability token needed to request a seed. */
+async function securityAccess(params = {}) {
+  await ensureHost();
+  return rpcCall('securityAccess', { scope: params.scope === 'flash' ? 'flash' : 'immobilizer' });
+}
+
+const KEY_PROCEDURE_RPC = {
+  add_key: 'addKey',
+  all_keys_lost: 'allKeysLost',
+  program_remote: 'programRemote',
+  erase_keys: 'eraseKeys',
+};
+
+/** Immobilizer key/remote programming — requires a scoped capability token. */
+async function programKey(params = {}) {
+  const procedure = String(params.procedure || '').trim();
+  const method = KEY_PROCEDURE_RPC[procedure];
+  if (!method) throw new Error(`Unsupported key procedure: ${procedure}`);
+  const authorizationToken = preflightAuthorization(procedure, params);
+  await ensureHost();
+  return rpcCall(method, { authorizationToken });
+}
+
+/** ECU reflash via the UDS programming sequence — requires a module_flash token. */
+async function flashModule(params = {}) {
+  const authorizationToken = preflightAuthorization('module_flash', params);
+  await ensureHost();
+  return rpcCall('flashModule', {
+    authorizationToken,
+    target: params.target,
+    firmware: params.firmware,
+  });
 }
 
 async function startLiveLog() {
@@ -280,6 +321,9 @@ module.exports = {
   identifyEcus,
   readDtcs,
   clearDtcs,
+  securityAccess,
+  programKey,
+  flashModule,
   startLiveLog,
   stopLiveLog,
   pollLiveLog,

@@ -24,14 +24,42 @@ import {
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { getEntity, handleEntities, listEntities, putEntity } from './routes/entities.mjs';
 import { handleFiles } from './routes/files.mjs';
+import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
-const MUTATING_DIAGNOSTIC_PROCEDURES = new Set([
-  'clear_dtcs', 'clearDtcs', 'program_key', 'add_key', 'all_keys_lost',
-  'program_remote', 'erase_keys', 'flash', 'uds_write',
+
+// Recursively redact sensitive fields before persisting diagnostic audit events.
+const SENSITIVE_AUDIT_KEYS = new Set([
+  'pin', 'token', 'securitytoken', 'password', 'credential', 'secret',
+  'seed', 'authorizationtoken', 'capabilitytoken', 'privatekey',
 ]);
+
+function redactSensitive(value) {
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      SENSITIVE_AUDIT_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : redactSensitive(item),
+    ]));
+  }
+  return value;
+}
+
+// Accept both snake_case and camelCase procedure names from clients.
+function normalizeProcedure(value) {
+  const raw = String(value || '').trim();
+  return ({
+    clearDtcs: 'clear_dtcs',
+    addKey: 'add_key',
+    allKeysLost: 'all_keys_lost',
+    programRemote: 'program_remote',
+    eraseKeys: 'erase_keys',
+    moduleFlash: 'module_flash',
+    flash: 'module_flash',
+  })[raw] || raw;
+}
 
 
 function allowedOrigin(request, env) {
@@ -241,38 +269,55 @@ async function handleCoverage(request, segments) {
   return json(match);
 }
 
+async function recordDiagnosticAudit(env, context, event) {
+  const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
+  await env.DB.prepare(
+    'INSERT INTO audit_log (id, shop_id, actor_id, actor_email, event_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(id, context.shopId, context.userId, context.email, JSON.stringify(redactSensitive(event)), new Date().toISOString()).run();
+  return id;
+}
+
 async function handleDiagnostics(request, env, context, segments) {
   const action = segments[1];
-  if (action === 'coverage') return handleCoverage(request, segments);
+  // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
+  if (action === 'coverage') return handleCoverage(request, segments);
+  if (action === 'autoauth') return handleAutoAuth(request, env, context);
   if (action === 'audit' && request.method === 'POST') {
-    const event = await requestJson(request);
-    ['pin', 'token', 'securityToken', 'password', 'credential'].forEach(key => {
-      if (key in event) event[key] = '[REDACTED]';
-    });
-    const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
-    await env.DB.prepare(
-      'INSERT INTO audit_log (id, shop_id, actor_id, actor_email, event_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(id, context.shopId, context.userId, context.email, JSON.stringify(event), new Date().toISOString()).run();
+    const id = await recordDiagnosticAudit(env, context, await requestJson(request));
     return json({ id, recorded: true }, 201);
   }
   if (action === 'authorize' && request.method === 'POST') {
     const body = await requestJson(request);
     const vin = String(body.vin || '').trim().toUpperCase();
-    const procedure = String(body.procedure || '').trim();
-    if (!vin || !procedure || !/^[A-HJ-NPR-Z0-9]{11,17}$/.test(vin)) throw new HttpError(400, 'vin and procedure are required and must be valid');
-    if (MUTATING_DIAGNOSTIC_PROCEDURES.has(procedure) && !['clear_dtcs', 'clearDtcs'].includes(procedure)) {
-      return json({ message: 'OEM AutoAuth integration is not configured.', authorized: false }, 501);
+    const procedure = normalizeProcedure(body.procedure);
+    const mode = PROGRAMMING_MODES.has(body.mode) ? body.mode : 'simulate';
+    if (!validVin(vin)) throw new HttpError(400, 'A valid 17-character VIN is required');
+    const spec = procedureSpec(procedure);
+    if (!spec) throw new HttpError(400, `Unsupported diagnostic procedure: ${body.procedure}`);
+    if (!env.DIAGNOSTICS_SIGNING_PRIVATE_KEY) throw new HttpError(503, 'Diagnostics capability signing is not configured');
+    // LIVE programming against real modules requires licensed OEM AutoAuth
+    // credentials provisioned for the shop. SIMULATE always drives the bench
+    // simulator only, so it is safe to authorize without OEM credentials.
+    if (mode === 'live' && spec.autoAuth) {
+      const login = await readAutoAuthLogin(env, context.shopId);
+      if (!login) {
+        return json({
+          authorized: false,
+          message: 'Live programming requires your shop to sign in to a vehicle security (AutoAuth) account. Connect it in OEM Diagnostics, or use Simulate mode.',
+        }, 501);
+      }
     }
-    if (!['clear_dtcs', 'clearDtcs'].includes(procedure)) throw new HttpError(400, 'Unsupported procedure for local authorization');
-    if (!env.DIAGNOSTICS_CAPABILITY_SECRET) throw new HttpError(503, 'Diagnostics capability signing is not configured');
-    const payload = {
-      v: 1, procedure: 'clear_dtcs', vin, shopId: context.shopId,
-      exp: Date.now() + 5 * 60 * 1000, jti: crypto.randomUUID().replaceAll('-', ''),
-    };
-    const payloadJson = JSON.stringify(payload);
-    const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
-    return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
+    const { token, payload } = await mintCapabilityToken(env, {
+      procedure, vin, shopId: context.shopId, mode, actor: context.userId,
+    });
+    await recordDiagnosticAudit(env, context, {
+      kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
+    });
+    return json({
+      authorized: true, procedure, scope: spec.klass, mode, vin, token,
+      expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId,
+    });
   }
   throw new HttpError(405, 'Method not allowed');
 }
@@ -418,6 +463,55 @@ async function getIntegrationSecret(env, shopId, name) {
     'SELECT ciphertext, iv FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
   ).bind(shopId, name).first();
   return row ? decryptSecret(row.ciphertext, row.iv, env.INTEGRATION_ENCRYPTION_KEY) : '';
+}
+
+async function deleteIntegrationSecret(env, shopId, name) {
+  await env.DB.prepare(
+    'DELETE FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
+  ).bind(shopId, name).run();
+}
+
+// Per-shop "vehicle security access" login (AutoAuth). Each shop connects its
+// own OEM/AutoAuth account; that login is what unlocks LIVE immobilizer/
+// programming/flash for the shop. Credentials are encrypted at rest in D1.
+const AUTOAUTH_SECRET_NAME = 'autoauth-login';
+
+async function readAutoAuthLogin(env, shopId) {
+  const raw = await getIntegrationSecret(env, shopId, AUTOAUTH_SECRET_NAME);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function handleAutoAuth(request, env, context) {
+  // Any shop-floor role can see connection status; only shop admins (or the
+  // platform) can connect/disconnect the shop's own security-access login.
+  if (request.method === 'GET') {
+    const login = await readAutoAuthLogin(env, context.shopId);
+    return json({
+      connected: Boolean(login),
+      provider: login?.provider || null,
+      accountId: login?.accountId || null,
+      connectedAt: login?.connectedAt || null,
+    });
+  }
+  requireRole(context, ['admin', 'super_admin']);
+  if (request.method === 'POST') {
+    const body = await requestJson(request);
+    const provider = String(body.provider || 'autoauth_stellantis').trim();
+    const accountId = String(body.accountId || '').trim();
+    const apiKey = String(body.apiKey || body.password || '').trim();
+    if (!accountId || !apiKey) throw new HttpError(400, 'accountId and apiKey are required to connect a vehicle security login');
+    const record = { provider, accountId, apiKey, connectedAt: new Date().toISOString(), connectedBy: context.userId };
+    await saveIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME, JSON.stringify(record));
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.connect', provider, accountId });
+    return json({ connected: true, provider, accountId, connectedAt: record.connectedAt }, 201);
+  }
+  if (request.method === 'DELETE') {
+    await deleteIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME);
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.disconnect' });
+    return json({ connected: false });
+  }
+  throw new HttpError(405, 'Method not allowed');
 }
 
 async function handleAgentPhoneConfigure(request, env, context) {

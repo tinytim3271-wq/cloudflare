@@ -8,6 +8,7 @@ const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 
 const PIPE_NAME = process.env.MECHPRO_J2534_PIPE || (process.platform === 'win32'
   ? '\\\\.\\pipe\\mechpro-j2534'
@@ -79,6 +80,19 @@ function dispatch(method, params) {
       return readDtcs();
     case 'clearDtcs':
       return clearDtcs(params);
+    case 'securityAccess':
+      return securityAccess(params);
+    case 'programKey':
+    case 'addKey':
+      return programKey('add_key', params);
+    case 'allKeysLost':
+      return programKey('all_keys_lost', params);
+    case 'programRemote':
+      return programKey('program_remote', params);
+    case 'eraseKeys':
+      return programKey('erase_keys', params);
+    case 'flashModule':
+      return flashModule(params);
     case 'startLiveLog':
       if (!sim?.connected) throw new Error('Not connected to vehicle bus');
       sim.liveLogActive = true;
@@ -265,14 +279,137 @@ function readDtcs() {
   };
 }
 
+function verifyProcedureToken(procedure, params = {}) {
+  const { verifyCapabilityToken } = require('./capability-token');
+  // The Node host is the bench simulator, so it only accepts SIMULATE-mode
+  // tokens. Real hardware programming runs through the .NET host with a
+  // LIVE-mode token and licensed AutoAuth credentials.
+  return verifyCapabilityToken(params.authorizationToken, { procedure, mode: 'simulate' });
+}
+
 function clearDtcs(params = {}) {
-  const { verifyClearDtcsToken } = require('./capability-token');
-  verifyClearDtcsToken(params.authorizationToken);
+  verifyProcedureToken('clear_dtcs', params);
   requireConnection();
   logEntry('tx', '0x7E0', '14FFFFFF', 'Clear DTCs (UDS 0x14 FF FF FF)');
   logEntry('rx', '0x7E8', '54', 'DTCs cleared');
   sim.dtcs = [];
   return { cleared: true };
+}
+
+const SECURITY_LEVELS = {
+  immobilizer: { requestSid: '2703', level: 0x03, name: 'immobilizer/SGW' },
+  flash: { requestSid: '2705', level: 0x05, name: 'programming' },
+};
+
+/**
+ * Simulated UDS SecurityAccess (service 0x27): seed request + key response.
+ * On real hardware the seed→key transform is provided by the licensed OEM
+ * AutoAuth provider; the simulator derives a deterministic bench key.
+ */
+function securityAccess(params = {}) {
+  requireConnection();
+  const scope = params.scope === 'flash' ? 'flash' : 'immobilizer';
+  const level = SECURITY_LEVELS[scope];
+  const seed = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const key = Buffer.from(seed, 'hex').map((b) => (b ^ 0x5a) & 0xff).toString('hex').toUpperCase();
+  logEntry('tx', '0x7E0', level.requestSid, `SecurityAccess requestSeed (${level.name})`);
+  logEntry('rx', '0x7E8', `67${level.level.toString(16).padStart(2, '0')}${seed}`, 'Seed');
+  logEntry('tx', '0x7E0', `27${(level.level + 1).toString(16).padStart(2, '0')}${key}`, 'sendKey');
+  logEntry('rx', '0x7E8', `67${(level.level + 1).toString(16).padStart(2, '0')}`, 'SecurityAccess granted');
+  sim.security = { scope, unlockedAt: Date.now() };
+  return { unlocked: true, scope, level: level.level };
+}
+
+function requireSecurity(scope) {
+  if (!sim?.security || sim.security.scope !== scope) {
+    throw new Error(`SecurityAccess (${scope}) required before this procedure`);
+  }
+  // Unlock is valid for the length of the session; expire after 10 minutes idle.
+  if (Date.now() - sim.security.unlockedAt > 10 * 60 * 1000) {
+    sim.security = null;
+    throw new Error('SecurityAccess session expired; re-authenticate');
+  }
+}
+
+function programKey(procedure, params = {}) {
+  const payload = verifyProcedureToken(procedure, params);
+  requireConnection();
+  requireSecurity('immobilizer');
+  if (!sim.immobilizer) sim.immobilizer = { keys: [], remotes: [] };
+  const routine = {
+    add_key: { id: '0x0301', label: 'Program spare key' },
+    all_keys_lost: { id: '0x0302', label: 'All keys lost — provision new key' },
+    program_remote: { id: '0x0303', label: 'Program RF remote' },
+    erase_keys: { id: '0x0304', label: 'Erase and relearn keys' },
+  }[procedure];
+  logEntry('tx', '0x7E4', `3101${routine.id.slice(2)}`, `RoutineControl start: ${routine.label}`);
+  logEntry('rx', '0x7EC', `7101${routine.id.slice(2)}`, 'Routine accepted');
+  const now = new Date().toISOString();
+  if (procedure === 'erase_keys') {
+    sim.immobilizer = { keys: [], remotes: [] };
+  } else if (procedure === 'all_keys_lost') {
+    sim.immobilizer.keys = [{ id: `key-${Date.now()}`, type: 'transponder', programmedAt: now }];
+  } else if (procedure === 'add_key') {
+    sim.immobilizer.keys.push({ id: `key-${Date.now()}`, type: 'transponder', programmedAt: now });
+  } else if (procedure === 'program_remote') {
+    sim.immobilizer.remotes.push({ id: `rke-${Date.now()}`, type: 'rf_hub', programmedAt: now });
+  }
+  logEntry('rx', '0x7EC', `7103${routine.id.slice(2)}00`, 'Routine result: success');
+  return {
+    procedure,
+    completed: true,
+    vin: payload.vin,
+    keys: sim.immobilizer.keys.length,
+    remotes: sim.immobilizer.remotes.length,
+    routine: routine.id,
+    completedAt: now,
+  };
+}
+
+/**
+ * Simulated ECU reflash via the UDS programming sequence:
+ * RequestDownload (0x34) -> TransferData (0x36) chunks -> RequestTransferExit
+ * (0x37). Returns per-block progress so the UI can render a progress bar.
+ */
+function flashModule(params = {}) {
+  const payload = verifyProcedureToken('module_flash', params);
+  requireConnection();
+  requireSecurity('flash');
+  const target = String(params.target || '0x7E1');
+  const firmware = params.firmware || {};
+  const size = Math.max(1, Number(firmware.size) || (firmware.data ? Buffer.byteLength(String(firmware.data), 'base64') : 0));
+  if (!size) throw new Error('Firmware payload (size or data) is required for module flash');
+  const blockSize = 0x400;
+  const blocks = Math.ceil(size / blockSize);
+  if (!sim.modules) sim.modules = {};
+  logEntry('tx', target, '1002', 'Programming session start (0x10 0x02)');
+  logEntry('rx', target.replace('0x7E', '0x7E8'), '5002', 'Programming session active');
+  logEntry('tx', target, `34${(size).toString(16).padStart(8, '0')}`, `RequestDownload: ${size} bytes`);
+  logEntry('rx', target.replace('0x7E', '0x7E8'), '7420', 'Download accepted, maxBlock=0x0400');
+  const progress = [];
+  for (let index = 1; index <= blocks; index += 1) {
+    const seq = (index & 0xff).toString(16).padStart(2, '0');
+    logEntry('tx', target, `36${seq}`, `TransferData block ${index}/${blocks}`);
+    logEntry('rx', target.replace('0x7E', '0x7E8'), `76${seq}`, 'Block accepted');
+    progress.push({ block: index, blocks, percent: Math.round((index / blocks) * 100) });
+  }
+  logEntry('tx', target, '37', 'RequestTransferExit');
+  logEntry('rx', target.replace('0x7E', '0x7E8'), '77', 'Transfer complete');
+  logEntry('tx', target, '3101FF01', 'RoutineControl: verify programming dependencies');
+  logEntry('rx', target.replace('0x7E', '0x7E8'), '7101FF0100', 'Verification passed');
+  const version = firmware.version || `sim-${Date.now()}`;
+  sim.modules[target] = { softwareVersion: version, flashedAt: new Date().toISOString(), bytes: size };
+  return {
+    procedure: 'module_flash',
+    completed: true,
+    vin: payload.vin,
+    target,
+    bytes: size,
+    blocks,
+    softwareVersion: version,
+    progress,
+    completedAt: sim.modules[target].flashedAt,
+  };
 }
 
 function pollLiveLog(since = 0) {

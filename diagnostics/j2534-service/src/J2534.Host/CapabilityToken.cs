@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using System.Linq;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,83 +7,137 @@ using System.Text.Json;
 namespace MechPro.J2534.Host;
 
 /// <summary>
-/// HMAC-signed clear_dtcs capability tokens. Compatible with
-/// infra/lambda/diagnostics/capability-token.ts and the Node host verifier.
+/// ECDSA P-256 (ES256) capability tokens (format v2.&lt;payload&gt;.&lt;sig&gt;).
+///
+/// The Cloudflare Worker signs with a private key that never leaves the server;
+/// this host holds only the PUBLIC key and can verify but not mint tokens.
+/// Fail-closed: without a configured public key, every authorized procedure is
+/// refused. Compatible with the Node verifier and Worker minter.
 /// </summary>
 public static class CapabilityToken
 {
-    static readonly ConcurrentDictionary<string, byte> Consumed = new();
+    static readonly ConcurrentDictionary<string, long> Consumed = new();
+    static readonly Lazy<ECDsa?> PublicKey = new(LoadPublicKey);
 
-    public static void VerifyClearDtcs(string? token)
+    public sealed record Payload(string Procedure, string Vin, string ShopId, string Mode, string Scope);
+
+    /// <summary>Verify a token scoped to <paramref name="procedure"/> and (optionally) mode/vin. Single-use unless consume=false.</summary>
+    public static Payload Verify(string? token, string procedure, string? expectedMode = null, string? expectedVin = null, bool consume = true)
     {
         var raw = (token ?? string.Empty).Trim();
         var parts = raw.Split('.');
-        if (parts.Length != 3 || parts[0] != "v1")
+        if (parts.Length != 3 || parts[0] != "v2")
         {
             throw new UnauthorizedAccessException("Invalid diagnostics capability token");
         }
 
-        var payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
-        var expectedSig = Sign(payloadJson);
-        if (!FixedTimeEquals(expectedSig, parts[2]))
+        var key = PublicKey.Value
+            ?? throw new UnauthorizedAccessException("Diagnostics capability public key is not configured; refusing to authorize.");
+
+        var signingInput = Encoding.UTF8.GetBytes($"{parts[0]}.{parts[1]}");
+        var signature = Base64UrlDecode(parts[2]);
+        if (!key.VerifyData(signingInput, signature, HashAlgorithmName.SHA256))
         {
             throw new UnauthorizedAccessException("Invalid diagnostics capability token signature");
         }
 
-        using var doc = JsonDocument.Parse(payloadJson);
+        using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(Base64UrlDecode(parts[1])));
         var root = doc.RootElement;
-        if (root.GetProperty("v").GetInt32() != 1
-            || root.GetProperty("procedure").GetString() != "clear_dtcs")
+        if (root.GetProperty("v").GetInt32() != 2)
         {
-            throw new UnauthorizedAccessException("Capability token is not valid for clearDtcs");
+            throw new UnauthorizedAccessException("Unsupported capability token version");
         }
 
+        var proc = root.GetProperty("procedure").GetString();
         var vin = root.GetProperty("vin").GetString();
         var shopId = root.GetProperty("shopId").GetString();
+        var mode = root.GetProperty("mode").GetString();
+        var scope = root.TryGetProperty("scope", out var s) ? s.GetString() ?? "" : "";
         var jti = root.GetProperty("jti").GetString();
         var exp = root.GetProperty("exp").GetInt64();
-        if (string.IsNullOrWhiteSpace(vin) || string.IsNullOrWhiteSpace(shopId) || string.IsNullOrWhiteSpace(jti))
+
+        if (string.IsNullOrWhiteSpace(proc) || string.IsNullOrWhiteSpace(vin)
+            || string.IsNullOrWhiteSpace(shopId) || string.IsNullOrWhiteSpace(mode) || string.IsNullOrWhiteSpace(jti))
         {
             throw new UnauthorizedAccessException("Capability token payload is incomplete");
         }
-
         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > exp)
         {
             throw new UnauthorizedAccessException("Capability token expired");
         }
-
-        if (!Consumed.TryAdd(jti, 0))
+        if (!string.Equals(proc, procedure, StringComparison.Ordinal))
         {
-            throw new UnauthorizedAccessException("Capability token already used");
+            throw new UnauthorizedAccessException($"Capability token is not valid for {procedure}");
+        }
+        if (expectedMode is not null && !string.Equals(mode, expectedMode, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Capability token mode mismatch");
+        }
+        if (expectedVin is not null && !string.Equals(vin, expectedVin.Trim().ToUpperInvariant(), StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Capability token VIN mismatch");
         }
 
-        if (Consumed.Count > 500)
+        if (consume)
         {
-            foreach (var key in Consumed.Keys.Take(50))
+            PruneConsumed();
+            if (!Consumed.TryAdd(jti!, exp))
             {
-                Consumed.TryRemove(key, out _);
+                throw new UnauthorizedAccessException("Capability token already used");
             }
         }
+
+        return new Payload(proc!, vin!, shopId!, mode!, scope);
     }
 
-    static string Sign(string payloadJson)
+    static void PruneConsumed()
     {
-        var secret = Environment.GetEnvironmentVariable("MECHPRO_DIAG_CAPABILITY_SECRET")
-            ?? Environment.GetEnvironmentVariable("DIAGNOSTICS_CAPABILITY_SECRET")
-            ?? "mechpro-dev-diagnostics-capability-v1";
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        return Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(payloadJson)));
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var kv in Consumed)
+        {
+            if (kv.Value <= now) Consumed.TryRemove(kv.Key, out _);
+        }
     }
 
-    static bool FixedTimeEquals(string a, string b)
+    static ECDsa? LoadPublicKey()
     {
-        var left = Encoding.UTF8.GetBytes(a);
-        var right = Encoding.UTF8.GetBytes(b);
-        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+        var inline = Environment.GetEnvironmentVariable("DIAGNOSTICS_SIGNING_PUBLIC_KEY");
+        if (!string.IsNullOrWhiteSpace(inline))
+        {
+            return ImportPublicKey(inline);
+        }
+
+        var candidates = new List<string>();
+        var explicitFile = Environment.GetEnvironmentVariable("DIAGNOSTICS_SIGNING_PUBLIC_KEY_FILE");
+        if (!string.IsNullOrWhiteSpace(explicitFile)) candidates.Add(explicitFile);
+        var baseDir = AppContext.BaseDirectory;
+        candidates.Add(Path.Combine(baseDir, "diagnostics-keys", "capability-public-key.pem"));
+        candidates.Add(Path.Combine(baseDir, "capability-public-key.pem"));
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                if (File.Exists(candidate)) return ImportPublicKey(File.ReadAllText(candidate));
+            }
+            catch { /* try next candidate */ }
+        }
+        return null;
     }
 
-    static string Base64UrlEncode(byte[] data) =>
-        Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    static ECDsa ImportPublicKey(string material)
+    {
+        var ecdsa = ECDsa.Create();
+        if (material.Contains("BEGIN"))
+        {
+            ecdsa.ImportFromPem(material);
+        }
+        else
+        {
+            ecdsa.ImportSubjectPublicKeyInfo(Convert.FromBase64String(material.Trim()), out _);
+        }
+        return ecdsa;
+    }
 
     static byte[] Base64UrlDecode(string input)
     {
