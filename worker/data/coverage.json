@@ -16,7 +16,8 @@
         "add_key": { "supported": true, "authorizationRequired": "autoauth_stellantis" },
         "all_keys_lost": { "supported": true, "authorizationRequired": "autoauth_stellantis" },
         "program_remote": { "supported": true, "authorizationRequired": "autoauth_stellantis" },
-        "erase_keys": { "supported": false, "authorizationRequired": null }
+        "erase_keys": { "supported": false, "authorizationRequired": null },
+        "module_flash": { "supported": true, "authorizationRequired": "autoauth_stellantis" }
       },
       "preconditions": [
         "Regulated 12V+ power supply connected",

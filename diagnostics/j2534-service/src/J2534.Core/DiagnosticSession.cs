@@ -158,6 +158,112 @@ public sealed class DiagnosticSession : IDisposable
         return new { cleared = true };
     }
 
+    // --- Programming: security access, key programming, and module reflash ---
+
+    string? _securityScope;
+    long _securityUnlockedAt;
+    readonly List<object> _keys = [];
+    readonly List<object> _remotes = [];
+
+    ISecurityAccessProvider SecurityProvider() =>
+        _simulator ? new SimulatorSecurityAccessProvider() : new FailClosedSecurityAccessProvider();
+
+    static int SecurityLevel(string scope) => scope == "flash" ? 0x05 : 0x03;
+
+    public Task<object> SecurityAccessAsync(string scope)
+    {
+        RequireConnected();
+        var normalized = scope == "flash" ? "flash" : "immobilizer";
+        var level = SecurityLevel(normalized);
+        var provider = SecurityProvider();
+        if (_simulator)
+        {
+            Log("tx", "0x7E0", $"27{level:X2}", $"SecurityAccess requestSeed ({normalized})");
+            Log("rx", "0x7E8", $"67{level:X2}A1B2C3D4", "Seed");
+            Log("tx", "0x7E0", $"27{level + 1:X2}", "sendKey");
+            Log("rx", "0x7E8", $"67{level + 1:X2}", "SecurityAccess granted");
+        }
+        else
+        {
+            var client = new UdsClient(CreateChannel());
+            client.DiagnosticSessionControl(0x02, "0x7E0", "0x7E8");
+            client.SecurityAccess(level, provider, "", "0x7E0", "0x7E8");
+            Log("tx", "0x7E0", $"27{level:X2}", $"SecurityAccess ({provider.Name})");
+        }
+        _securityScope = normalized;
+        _securityUnlockedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return Task.FromResult<object>(new { unlocked = true, scope = normalized, level });
+    }
+
+    void RequireSecurity(string scope)
+    {
+        if (_securityScope != scope)
+            throw new InvalidOperationException($"SecurityAccess ({scope}) required before this procedure");
+        if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _securityUnlockedAt > 10 * 60 * 1000)
+        {
+            _securityScope = null;
+            throw new InvalidOperationException("SecurityAccess session expired; re-authenticate");
+        }
+    }
+
+    public Task<object> ProgramKeyAsync(string procedure, string vin)
+    {
+        RequireConnected();
+        RequireSecurity("immobilizer");
+        var routine = procedure switch
+        {
+            "add_key" => (Id: (ushort)0x0301, Label: "Program spare key"),
+            "all_keys_lost" => (Id: (ushort)0x0302, Label: "All keys lost — provision new key"),
+            "program_remote" => (Id: (ushort)0x0303, Label: "Program RF remote"),
+            "erase_keys" => (Id: (ushort)0x0304, Label: "Erase and relearn keys"),
+            _ => throw new InvalidOperationException($"Unsupported key procedure: {procedure}"),
+        };
+        if (!_simulator)
+        {
+            var client = new UdsClient(CreateChannel());
+            client.StartRoutine(routine.Id, [], "0x7E4", "0x7EC");
+        }
+        Log("tx", "0x7E4", $"3101{routine.Id:X4}", $"RoutineControl: {routine.Label}");
+        Log("rx", "0x7EC", $"7101{routine.Id:X4}00", "Routine result: success");
+        var now = DateTime.UtcNow.ToString("o");
+        switch (procedure)
+        {
+            case "erase_keys": _keys.Clear(); _remotes.Clear(); break;
+            case "all_keys_lost": _keys.Clear(); _keys.Add(new { id = $"key-{now}", type = "transponder", programmedAt = now }); break;
+            case "add_key": _keys.Add(new { id = $"key-{now}", type = "transponder", programmedAt = now }); break;
+            case "program_remote": _remotes.Add(new { id = $"rke-{now}", type = "rf_hub", programmedAt = now }); break;
+        }
+        return Task.FromResult<object>(new
+        {
+            procedure, completed = true, vin, keys = _keys.Count, remotes = _remotes.Count, routine = $"0x{routine.Id:X4}", completedAt = now,
+        });
+    }
+
+    public Task<object> FlashModuleAsync(string target, byte[] firmware, string version, string vin)
+    {
+        RequireConnected();
+        RequireSecurity("flash");
+        var size = firmware.Length;
+        var blocks = Math.Max(1, (size + 0x3FF) / 0x400);
+        if (!_simulator)
+        {
+            var client = new UdsClient(CreateChannel());
+            client.DownloadFirmware(firmware, target, target.Replace("0x7E", "0x7E8"),
+                (block, total) => Log("tx", target, $"36{block & 0xFF:X2}", $"TransferData block {block}/{total}"));
+        }
+        else
+        {
+            Log("tx", target, $"34{size:X8}", $"RequestDownload: {size} bytes");
+            for (var i = 1; i <= blocks; i++) Log("tx", target, $"36{i & 0xFF:X2}", $"TransferData block {i}/{blocks}");
+            Log("tx", target, "37", "RequestTransferExit");
+        }
+        var now = DateTime.UtcNow.ToString("o");
+        return Task.FromResult<object>(new
+        {
+            procedure = "module_flash", completed = true, vin, target, bytes = size, blocks, softwareVersion = version, completedAt = now,
+        });
+    }
+
     public object StartLiveLog()
     {
         RequireConnected();

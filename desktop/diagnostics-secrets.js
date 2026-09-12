@@ -3,8 +3,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DEV_FALLBACK_SECRET = 'mechpro-dev-diagnostics-capability-v1';
-
 function isPackagedApp() {
   try {
     return Boolean(require('electron').app?.isPackaged);
@@ -13,17 +11,18 @@ function isPackagedApp() {
   }
 }
 
-function packagedSecretCandidates() {
+function publicKeyCandidates() {
   const candidates = [];
   if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'diagnostics-secrets', 'capability-secret.txt'));
-    candidates.push(path.join(process.resourcesPath, 'capability-secret.txt'));
+    candidates.push(path.join(process.resourcesPath, 'diagnostics-keys', 'capability-public-key.pem'));
+    candidates.push(path.join(process.resourcesPath, 'capability-public-key.pem'));
   }
-  candidates.push(path.join(__dirname, 'packaged-secrets', 'capability-secret.txt'));
+  candidates.push(path.join(__dirname, '..', 'diagnostics', 'keys', 'local-capability-public-key.pem'));
+  candidates.push(path.join(__dirname, '..', 'diagnostics', 'keys', 'capability-public-key.pem'));
   return candidates;
 }
 
-function readSecretFile(filePath) {
+function readFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) return '';
     return String(fs.readFileSync(filePath, 'utf8') || '').trim();
@@ -33,33 +32,22 @@ function readSecretFile(filePath) {
 }
 
 /**
- * Resolve the HMAC secret used to verify Worker-issued clear-DTC capability tokens.
- * Packaged builds should receive the production secret via CI as
- * resources/diagnostics-secrets/capability-secret.txt (must match Worker
- * DIAGNOSTICS_CAPABILITY_SECRET). Missing secrets must not block read-only
- * J2534 operations (list/connect/identify/read DTCs).
+ * Resolve the ECDSA P-256 PUBLIC key used to VERIFY Worker-issued capability
+ * tokens. Only the public key ships with the client — it cannot mint tokens —
+ * which removes the previous risk of a shared signing secret in the installer.
+ * Missing keys must not block read-only J2534 operations.
  */
-function resolveDiagnosticsCapabilitySecret(options = {}) {
+function resolveDiagnosticsPublicKey(options = {}) {
   const env = options.env || process.env;
-  const fromEnv = String(
-    env.MECHPRO_DIAG_CAPABILITY_SECRET
-    || env.DIAGNOSTICS_CAPABILITY_SECRET
-    || '',
-  ).trim();
-  if (fromEnv) return { secret: fromEnv, source: 'env' };
+  const fromEnv = String(env.DIAGNOSTICS_SIGNING_PUBLIC_KEY || '').trim();
+  if (fromEnv) return { publicKey: fromEnv, source: 'env' };
 
-  for (const candidate of packagedSecretCandidates()) {
-    const fromFile = readSecretFile(candidate);
-    if (fromFile) return { secret: fromFile, source: candidate };
+  for (const candidate of publicKeyCandidates()) {
+    const fromFile = readFile(candidate);
+    if (fromFile) return { publicKey: fromFile, source: candidate };
   }
 
-  if (options.packaged ?? isPackagedApp()) {
-    return { secret: '', source: 'missing-packaged' };
-  }
-  return { secret: DEV_FALLBACK_SECRET, source: 'dev-fallback' };
+  return { publicKey: '', source: (options.packaged ?? isPackagedApp()) ? 'missing-packaged' : 'missing-dev' };
 }
 
-module.exports = {
-  DEV_FALLBACK_SECRET,
-  resolveDiagnosticsCapabilitySecret,
-};
+module.exports = { resolveDiagnosticsPublicKey };

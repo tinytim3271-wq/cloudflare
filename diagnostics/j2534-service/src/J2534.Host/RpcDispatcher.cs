@@ -23,6 +23,13 @@ public static class RpcDispatcher
                 "identifyEcus" => await session.IdentifyEcusAsync(),
                 "readDtcs" => await session.ReadDtcsAsync(),
                 "clearDtcs" => await ClearDtcs(request.Params, session),
+                "securityAccess" => await session.SecurityAccessAsync(GetString(request.Params, "scope") ?? "immobilizer"),
+                "addKey" => await ProgramKey("add_key", request.Params, session),
+                "programKey" => await ProgramKey("add_key", request.Params, session),
+                "allKeysLost" => await ProgramKey("all_keys_lost", request.Params, session),
+                "programRemote" => await ProgramKey("program_remote", request.Params, session),
+                "eraseKeys" => await ProgramKey("erase_keys", request.Params, session),
+                "flashModule" => await FlashModule(request.Params, session),
                 "startLiveLog" => session.StartLiveLog(),
                 "stopLiveLog" => session.StopLiveLog(),
                 "pollLiveLog" => session.PollLiveLog(ParseSince(request.Params)),
@@ -37,15 +44,64 @@ public static class RpcDispatcher
         }
     }
 
+    // Tokens are scoped to a mode: the simulator accepts SIMULATE tokens; real
+    // hardware requires LIVE tokens (and a licensed AutoAuth security provider).
+    static string ExpectedMode(DiagnosticSession session) => session.IsSimulator ? "simulate" : "live";
+
     static async Task<object> ClearDtcs(JsonElement? element, DiagnosticSession session)
     {
-        string? authorizationToken = null;
-        if (element is not null && element.Value.TryGetProperty("authorizationToken", out var token))
-        {
-            authorizationToken = token.GetString();
-        }
-        CapabilityToken.VerifyClearDtcs(authorizationToken);
+        CapabilityToken.Verify(GetString(element, "authorizationToken"), "clear_dtcs", ExpectedMode(session));
         return await session.ClearDtcsAsync();
+    }
+
+    static async Task<object> ProgramKey(string procedure, JsonElement? element, DiagnosticSession session)
+    {
+        var payload = CapabilityToken.Verify(GetString(element, "authorizationToken"), procedure, ExpectedMode(session));
+        return await session.ProgramKeyAsync(procedure, payload.Vin);
+    }
+
+    static async Task<object> FlashModule(JsonElement? element, DiagnosticSession session)
+    {
+        var payload = CapabilityToken.Verify(GetString(element, "authorizationToken"), "module_flash", ExpectedMode(session));
+        var target = GetString(element, "target") ?? "0x7E1";
+        var firmware = ReadFirmware(element);
+        var version = GetFirmwareVersion(element) ?? $"live-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        return await session.FlashModuleAsync(target, firmware, version, payload.Vin);
+    }
+
+    static byte[] ReadFirmware(JsonElement? element)
+    {
+        if (element is not null && element.Value.TryGetProperty("firmware", out var fw))
+        {
+            if (fw.TryGetProperty("data", out var data) && data.GetString() is { Length: > 0 } b64)
+            {
+                return Convert.FromBase64String(b64);
+            }
+            if (fw.TryGetProperty("size", out var size) && size.TryGetInt32(out var n) && n > 0)
+            {
+                return new byte[n];
+            }
+        }
+        throw new InvalidOperationException("Firmware payload (data or size) is required for module flash");
+    }
+
+    static string? GetFirmwareVersion(JsonElement? element)
+    {
+        if (element is not null && element.Value.TryGetProperty("firmware", out var fw)
+            && fw.TryGetProperty("version", out var v))
+        {
+            return v.GetString();
+        }
+        return null;
+    }
+
+    static string? GetString(JsonElement? element, string name)
+    {
+        if (element is not null && element.Value.TryGetProperty(name, out var value))
+        {
+            return value.GetString();
+        }
+        return null;
     }
 
     static void AssertAuth(JsonElement? element)
