@@ -30,9 +30,14 @@ jobs:
           apt-get update && apt-get install -y zip
           zip -r publish.zip publish
 
-      - name: Install AWS CLI
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install AWS CLI via pip
         run: |
-          sudo apt-get update && sudo apt-get install -y awscli
+          python -m pip install --upgrade pip awscli
 
       - name: Upload zip to Cloudflare R2
         env:
