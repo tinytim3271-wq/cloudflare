@@ -39,13 +39,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip awscli
 
-      - name: Upload zip to Cloudflare R2
+      - name: Upload zip to Cloudflare R2 (verbose)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
+          set -eux
+          echo "ACCOUNT_ID=$ACCOUNT_ID"
+          echo "BUCKET=$BUCKET"
+          aws --version
+          # Try listing the bucket (may fail if permissions are restricted)
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY --debug
           echo "Uploaded s3://$BUCKET/$KEY"
