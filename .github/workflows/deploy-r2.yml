@@ -1,0 +1,46 @@
+name: Build and deploy to Cloudflare R2
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore & build
+        run: |
+          dotnet restore diagnostics/j2534-service/J2534Service.sln
+          dotnet build diagnostics/j2534-service/J2534Service.sln -c Release --no-restore
+
+      - name: Publish
+        run: dotnet publish diagnostics/j2534-service/J2534Service.sln -c Release -o ./artifacts/publish
+
+      - name: Create zip
+        run: |
+          cd artifacts
+          apt-get update && apt-get install -y zip
+          zip -r publish.zip publish
+
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update && sudo apt-get install -y awscli
+
+      - name: Upload zip to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          KEY="j2534-service/publish-${{ github.run_id }}.zip"
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY
+          echo "Uploaded s3://$BUCKET/$KEY"
