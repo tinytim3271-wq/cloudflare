@@ -49,12 +49,15 @@ Set Worker secrets interactively:
 ```bash
 npx wrangler secret put INTEGRATION_ENCRYPTION_KEY
 npx wrangler secret put DIAGNOSTICS_CAPABILITY_SECRET
+npx wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
 npx wrangler secret put ACCESS_TEAM_DOMAIN
 npx wrangler secret put ACCESS_AUD
 npx wrangler secret put ACCESS_ADMIN_EMAILS
 ```
 
 `INTEGRATION_ENCRYPTION_KEY` should be a generated high-entropy value.
+`DIAGNOSTICS_SIGNING_PRIVATE_KEY` must be a PKCS#8 base64 DER ECDSA P-256 private
+key used by `/api/diagnostics/authorize`; without it, authorize returns HTTP 503.
 `ACCESS_TEAM_DOMAIN` is the full team domain, such as
 `https://example.cloudflareaccess.com`; `ACCESS_AUD` is the Access application
 audience. `ACCESS_ADMIN_EMAILS` is a comma-separated bootstrap list of platform

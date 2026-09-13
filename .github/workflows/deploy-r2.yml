@@ -7,6 +7,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,10 +44,14 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          BUCKET: ${{ secrets.R2_BUCKET }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CF_ACCOUNT_ID }}
+          BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || secrets.R2_BUCKET }}
         run: |
           set -eux
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${ACCOUNT_ID:-}" ] || [ -z "${BUCKET:-}" ]; then
+            echo "::notice title=R2 upload skipped::Set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID), and CLOUDFLARE_R2_BUCKET (or R2_BUCKET) to enable this workflow."
+            exit 0
+          fi
           echo "ACCOUNT_ID=$ACCOUNT_ID"
           echo "BUCKET=$BUCKET"
           aws --version
