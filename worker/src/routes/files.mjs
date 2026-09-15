@@ -8,6 +8,13 @@ const ALLOWED_CONTENT_TYPES = new Set([
   'application/pdf',
 ]);
 
+class UploadTooLargeError extends Error {
+  constructor() {
+    super('File exceeds 15 MB');
+    this.name = 'UploadTooLargeError';
+  }
+}
+
 /** Validate declared upload size — used by routes and tests. */
 export function assertUploadSize(contentLength, maxBytes = MAX_UPLOAD_BYTES) {
   const size = Number(contentLength || 0);
@@ -23,6 +30,31 @@ export function assertUploadContentType(contentType) {
     throw new HttpError(400, 'Unsupported file type');
   }
   return normalized;
+}
+
+function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES) {
+  if (!body) return body;
+  const reader = body.getReader();
+  let total = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        controller.error(new UploadTooLargeError());
+        return;
+      }
+      controller.enqueue(value);
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 export async function handleFiles(request, env, context, segments) {
@@ -45,10 +77,15 @@ export async function handleFiles(request, env, context, segments) {
   if (action === 'upload' && request.method === 'PUT') {
     const contentLength = Number(request.headers.get('Content-Length') || 0);
     if (contentLength > MAX_UPLOAD_BYTES) throw new HttpError(413, 'File exceeds 15 MB');
-    await env.FILES.put(key, request.body, {
-      httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-      customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
-    });
+    try {
+      await env.FILES.put(key, createSizeLimitedBody(request.body), {
+        httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
+        customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+      });
+    } catch (error) {
+      if (error instanceof UploadTooLargeError) throw new HttpError(413, 'File exceeds 15 MB');
+      throw error;
+    }
     return new Response(null, { status: 204 });
   }
   if (action === 'presign-download' && request.method === 'GET') {
