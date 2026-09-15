@@ -67,4 +67,5 @@ jobs:
           aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
           aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY --debug
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null
           echo "Uploaded s3://$BUCKET/$KEY"

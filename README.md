@@ -29,7 +29,7 @@ queues non-sensitive entity mutations until connectivity returns.
 | Android APK | Builds Android package from Capacitor wrapper | `.github/workflows/android-apk.yml`, `android/` |
 | Windows Desktop | Builds desktop installer and release artifacts | `.github/workflows/windows-desktop.yml`, `desktop/` |
 
-`amplify.yml` is currently treated as a **legacy candidate** because active deployment flows are Cloudflare-based. Keep it only if there is still an intentional Amplify deployment path; otherwise remove it in a follow-up cleanup PR.
+`amplify.yml` was removed as a legacy configuration to prevent deployment-source drift; active deployment paths are Cloudflare workflows and `wrangler.jsonc`.
 
 ## Local Development
 
@@ -51,7 +51,7 @@ npm run lint --if-present
 npm run dev:worker --if-present
 ```
 
-`lint` currently maps to `npm run test:config` as a baseline config sanity check until a dedicated lint tool is adopted.
+`lint` runs ESLint across the modular `src/` entry/shared/runtime seams while intentionally excluding generated `app.js` and the current legacy runtime monolith file.
 
 ### Serve the local frontend shell
 
@@ -74,6 +74,7 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 | `CLOUDFLARE_ACCOUNT_ID` | Selects target Cloudflare account in CI/deploy scripts | GitHub Actions + local deploy CLI |
 | `CLOUDFLARE_D1_DATABASE_ID` | Optional CI override for Worker D1 binding `database_id` | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_PAGES_PROJECT` | Optional Pages project name override | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_APP_ORIGIN` | Optional smoke-check origin used by deploy verification (`/` + `/api/healthz`) | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_ALLOWED_ORIGINS` | Optional Worker CORS origins override in CI deploy | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `false` to skip production Cloudflare publish | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | S3-compatible credentials for `deploy-r2.yml` uploads | GitHub Actions secrets (`deploy-r2.yml`) |

@@ -78,6 +78,14 @@ jobs:
           node scripts/bake-diagnostics-secret.mjs
       - name: Build NSIS installer and portable zip
         run: npx electron-builder --win nsis zip --publish never
+      - name: Smoke test Windows artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="$(ls dist/windows/*.exe | head -n1)"
+          ZIP="$(ls dist/windows/*.zip | head -n1)"
+          test -s "$EXE"
+          test -s "$ZIP"
       - uses: actions/upload-artifact@v4
         with:
           name: mechpro-windows-installer

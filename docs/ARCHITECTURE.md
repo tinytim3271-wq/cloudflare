@@ -10,6 +10,7 @@
 
 ## Current monolith note
 The committed root `app.js` is a generated bundle and remains large because it still packages legacy runtime behavior. This PR keeps behavior unchanged while adding a clear bootstrap seam in `src/main.js` for future extraction work.
+An initial chat utility slice now lives in `src/modules/chat/utils.js`, imported by legacy runtime to prove the extraction pattern with tests.
 
 ## Incremental modularization path (non-breaking)
 1. Keep `src/main.js` as the stable bootstrap boundary and module registration seam.
