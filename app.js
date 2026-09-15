@@ -232,6 +232,20 @@
     };
   }
 
+  // src/modules/chat/utils.js
+  function cleanEmail(value2) {
+    return String(value2 || "").trim().toLowerCase();
+  }
+  function chatTime(value2) {
+    if (!value2) return "";
+    return new Date(value2).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
+  }
+
   // src/runtime/legacy.js
   var { buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2 } = window.__MECHPRO_HOME__;
   function empty(message) {
@@ -243,9 +257,6 @@
     if (/diagnos|check engine|misfire|brake|rough idle|warning light/.test(source)) return "The cloud assistant is temporarily unavailable. Record the exact symptoms, DTCs, freeze-frame data, and vehicle VIN, then verify tests and specifications with current manufacturer service information.";
     if (/schedule|appointment|available|book/.test(source)) return `There are ${state.appointments.length} appointments loaded locally. Confirm the date, time, customer, and technician before booking.`;
     return "The cloud assistant is temporarily unavailable because the AI provider is rate-limited. Loaded work orders and local workflow guidance remain available; try again after the provider quota resets.";
-  }
-  function cleanEmail(value2) {
-    return String(value2 || "").trim().toLowerCase();
   }
   function chatUser(email) {
     return state.users.find((user) => cleanEmail(user.email) === cleanEmail(email));
@@ -264,10 +275,6 @@
   function chatUnread(conversation) {
     const readAt = state.chatLastRead?.[conversation.id] || "";
     return conversationMessages(conversation.id).filter((message) => message.senderEmail !== cleanEmail(currentUser().email) && String(message.createdAt) > readAt).length;
-  }
-  function chatTime(value2) {
-    if (!value2) return "";
-    return new Date(value2).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
   function teamChat() {
     const conversations = [...state.conversations].sort((a, b) => conversationActivity(b).localeCompare(conversationActivity(a)));
@@ -3917,4 +3924,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   // src/main.js
   window.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
   window.__MECHPRO_HTML__ = { escapeAttr, escapeHtml };
+  var bootstrapHooks = {
+    beforeLegacyAppMount: () => {
+    },
+    afterLegacyAppMount: () => {
+    },
+    registerFeatureModule: () => {
+    }
+  };
+  window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
+  window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
+  window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
 })();

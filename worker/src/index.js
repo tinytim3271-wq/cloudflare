@@ -22,8 +22,6 @@ import {
   verifyAccessJwt,
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
-import { getEntity, handleEntities, listEntities, putEntity } from './routes/entities.mjs';
-import { handleFiles } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
