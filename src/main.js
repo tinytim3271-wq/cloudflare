@@ -9,4 +9,14 @@ import './runtime/home.js';
 
 window.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
 window.__MECHPRO_HTML__ = { escapeAttr, escapeHtml };
+
+const bootstrapHooks = {
+  beforeLegacyAppMount: () => {},
+  afterLegacyAppMount: () => {},
+  registerFeatureModule: () => {},
+};
+
+window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
+window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
 import './runtime/legacy.js';
+window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();

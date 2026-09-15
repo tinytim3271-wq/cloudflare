@@ -3917,4 +3917,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   // src/main.js
   window.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
   window.__MECHPRO_HTML__ = { escapeAttr, escapeHtml };
+  var bootstrapHooks = {
+    beforeLegacyAppMount: () => {
+    },
+    afterLegacyAppMount: () => {
+    },
+    registerFeatureModule: () => {
+    }
+  };
+  window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
+  window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
+  window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
 })();
