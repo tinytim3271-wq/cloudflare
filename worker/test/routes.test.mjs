@@ -23,6 +23,15 @@ function mockDb() {
   };
 }
 
+function streamFromChunks(chunks) {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+}
+
 test('employee delete also revokes the Access user row', () => {
   const env = { DB: mockDb() };
   const context = { shopId: 'shop-1' };
@@ -66,5 +75,55 @@ test('files route rejects keys outside the authenticated shop', async () => {
   await assert.rejects(
     () => handleFiles(request, { FILES: {} }, context, ['files', 'object']),
     (error) => error instanceof HttpError && error.status === 403,
+  );
+});
+
+test('files route rejects streamed uploads that exceed the 15 MB limit', async () => {
+  const request = new Request('https://example.test/api/files/upload?key=shops/shop-1/file/upload.bin', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/pdf' },
+    body: streamFromChunks([
+      new Uint8Array(10 * 1024 * 1024),
+      new Uint8Array(6 * 1024 * 1024),
+    ]),
+    duplex: 'half',
+  });
+  const context = { shopId: 'shop-1', userId: 'u1' };
+  const env = {
+    FILES: {
+      async put(_key, body) {
+        const reader = body.getReader();
+        while (!(await reader.read()).done);
+      },
+    },
+  };
+  await assert.rejects(
+    () => handleFiles(request, env, context, ['files', 'upload']),
+    (error) => error instanceof HttpError && error.status === 413,
+  );
+});
+
+test('files route preserves non-size upload storage failures', async () => {
+  const request = new Request('https://example.test/api/files/upload?key=shops/shop-1/file/upload.bin', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Length': '1024',
+    },
+    body: new Uint8Array(1024),
+    duplex: 'half',
+  });
+  const context = { shopId: 'shop-1', userId: 'u1' };
+  const expected = new Error('R2 unavailable');
+  const env = {
+    FILES: {
+      async put() {
+        throw expected;
+      },
+    },
+  };
+  await assert.rejects(
+    () => handleFiles(request, env, context, ['files', 'upload']),
+    (error) => error === expected,
   );
 });
