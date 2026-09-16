@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "sync:config": "node scripts/sync-frontend-config.mjs",
-    "test:config": "node scripts/sync-frontend-config.test.mjs",
+    "test:config": "node scripts/sync-frontend-config.test.mjs && node scripts/resolve-r2-upload-env.test.mjs",
     "build:web": "node scripts/sync-frontend-config.mjs && node scripts/build-web.mjs",
     "dev:web": "node scripts/build-web.mjs --watch",
     "copy:web": "node scripts/copy-web.mjs",

@@ -44,12 +44,15 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CF_ACCOUNT_ID }}
-          BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || secrets.R2_BUCKET }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -eux
-          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${ACCOUNT_ID:-}" ] || [ -z "${BUCKET:-}" ]; then
-            echo "::notice title=R2 upload skipped::Set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID), and CLOUDFLARE_R2_BUCKET (or R2_BUCKET) to enable this workflow."
+          eval "$(node scripts/resolve-r2-upload-env.mjs)"
+          if [ "${SKIP_UPLOAD}" = "1" ]; then
+            echo "::notice title=R2 upload skipped::${SKIP_REASON}"
             exit 0
           fi
           echo "ACCOUNT_ID=$ACCOUNT_ID"

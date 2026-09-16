@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+import assert from 'node:assert/strict';
+
+import { resolveR2UploadEnv } from './resolve-r2-upload-env.mjs';
+
+{
+  const resolved = resolveR2UploadEnv({
+    AWS_ACCESS_KEY_ID: ' access-key ',
+    AWS_SECRET_ACCESS_KEY: '\nsecret-key\t',
+    CLOUDFLARE_ACCOUNT_ID: '\n account-id \r\n',
+    CLOUDFLARE_R2_BUCKET: ' bucket-name ',
+  });
+
+  assert.equal(resolved.accessKeyId, 'access-key');
+  assert.equal(resolved.secretAccessKey, 'secret-key');
+  assert.equal(resolved.accountId, 'account-id');
+  assert.equal(resolved.bucket, 'bucket-name');
+  assert.deepEqual(resolved.missing, []);
+}
+
+{
+  const resolved = resolveR2UploadEnv({
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+    CLOUDFLARE_ACCOUNT_ID: ' \n ',
+    CF_ACCOUNT_ID: ' legacy-account ',
+    CLOUDFLARE_R2_BUCKET: '\t',
+    R2_BUCKET: ' legacy-bucket ',
+  });
+
+  assert.equal(resolved.accountId, 'legacy-account');
+  assert.equal(resolved.bucket, 'legacy-bucket');
+  assert.deepEqual(resolved.missing, []);
+}
+
+{
+  const resolved = resolveR2UploadEnv({
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+    CLOUDFLARE_ACCOUNT_ID: '\n',
+    CLOUDFLARE_R2_BUCKET: ' ',
+  });
+
+  assert.equal(resolved.accountId, '');
+  assert.equal(resolved.bucket, '');
+  assert.deepEqual(resolved.missing, [
+    'CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)',
+    'CLOUDFLARE_R2_BUCKET (or R2_BUCKET)',
+  ]);
+}
+
+console.log('resolve-r2-upload-env tests passed');
