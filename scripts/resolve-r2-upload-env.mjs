@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export function normalizeEnvValue(value) {
@@ -32,23 +33,28 @@ function shellAssignment(name, value) {
   return `${name}=${JSON.stringify(value)}`;
 }
 
-function main() {
-  const { accountId, bucket, missing } = resolveR2UploadEnv();
-
+export function formatResolvedR2UploadEnv({ accountId, bucket, missing }) {
   if (missing.length) {
-    console.log('SKIP_UPLOAD=1');
-    console.log(
-      shellAssignment(
-        'SKIP_REASON',
-        `Set ${missing.join(', ')} to enable this workflow.`
-      )
-    );
-    return;
+    return [
+      'SKIP_UPLOAD=1',
+      shellAssignment('SKIP_REASON', `Set ${missing.join(', ')} to enable this workflow.`),
+    ].join('\n');
   }
 
-  console.log('SKIP_UPLOAD=0');
-  console.log(shellAssignment('ACCOUNT_ID', accountId));
-  console.log(shellAssignment('BUCKET', bucket));
+  return [
+    'SKIP_UPLOAD=0',
+    shellAssignment('ACCOUNT_ID', accountId),
+    shellAssignment('BUCKET', bucket),
+  ].join('\n');
+}
+
+function main() {
+  const outputPath = process.argv[2];
+  if (!outputPath) {
+    console.error('Usage: resolve-r2-upload-env.mjs <output-path>');
+    process.exit(1);
+  }
+  writeFileSync(outputPath, `${formatResolvedR2UploadEnv(resolveR2UploadEnv())}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

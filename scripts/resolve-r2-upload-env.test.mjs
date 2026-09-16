@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 
-import { resolveR2UploadEnv } from './resolve-r2-upload-env.mjs';
+import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-upload-env.mjs';
 
 {
   const resolved = resolveR2UploadEnv({
@@ -47,6 +47,26 @@ import { resolveR2UploadEnv } from './resolve-r2-upload-env.mjs';
     'CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)',
     'CLOUDFLARE_R2_BUCKET (or R2_BUCKET)',
   ]);
+
+  assert.equal(
+    formatResolvedR2UploadEnv(resolved),
+    'SKIP_UPLOAD=1\n'
+      + 'SKIP_REASON="Set CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID), CLOUDFLARE_R2_BUCKET (or R2_BUCKET) to enable this workflow."',
+  );
+}
+
+{
+  const resolved = resolveR2UploadEnv({
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+    CLOUDFLARE_ACCOUNT_ID: 'account-id',
+    CLOUDFLARE_R2_BUCKET: 'bucket-name',
+  });
+
+  assert.equal(
+    formatResolvedR2UploadEnv(resolved),
+    'SKIP_UPLOAD=0\nACCOUNT_ID="account-id"\nBUCKET="bucket-name"',
+  );
 }
 
 console.log('resolve-r2-upload-env tests passed');

@@ -50,7 +50,9 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -eux
-          eval "$(node scripts/resolve-r2-upload-env.mjs)"
+          R2_ENV_FILE="$RUNNER_TEMP/r2-upload-env"
+          node scripts/resolve-r2-upload-env.mjs "$R2_ENV_FILE"
+          . "$R2_ENV_FILE"
           if [ "${SKIP_UPLOAD}" = "1" ]; then
             echo "::notice title=R2 upload skipped::${SKIP_REASON}"
             exit 0
