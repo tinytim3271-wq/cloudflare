@@ -21,4 +21,8 @@ window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
 import('./runtime/legacy.js')
   .then(() => {
     window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
+  })
+  .catch((error) => {
+    console.error('Legacy app bootstrap failed', error);
+    throw error;
   });
