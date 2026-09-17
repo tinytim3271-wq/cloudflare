@@ -57,8 +57,7 @@ jobs:
             echo "::notice title=R2 upload skipped::${SKIP_REASON}"
             exit 0
           fi
-          echo "ACCOUNT_ID=$ACCOUNT_ID"
-          echo "BUCKET=$BUCKET"
+          echo "Resolved R2 upload target configuration."
           aws --version
           # Try listing the bucket (may fail if permissions are restricted)
           aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
