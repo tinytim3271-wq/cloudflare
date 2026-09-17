@@ -60,7 +60,20 @@ jobs:
           echo "Resolved R2 upload target configuration."
           aws --version
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
-          if ! aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip "s3://$BUCKET/$KEY" >/dev/null 2>&1; then
+          UPLOAD_STDERR="$RUNNER_TEMP/r2-upload.stderr"
+          if ! aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip "s3://$BUCKET/$KEY" >/dev/null 2>"$UPLOAD_STDERR"; then
+            python - "$UPLOAD_STDERR" "$ACCOUNT_ID" "$BUCKET" <<'PY'
+            import pathlib
+            import sys
+
+            log_path, account_id, bucket = sys.argv[1:]
+            log_text = pathlib.Path(log_path).read_text(encoding='utf-8', errors='replace')
+            for value in (account_id, bucket):
+                if value:
+                    log_text = log_text.replace(value, '[REDACTED]')
+            if log_text.strip():
+                print(log_text.rstrip())
+            PY
             echo "::error title=R2 upload failed::Artifact upload to Cloudflare R2 failed."
             exit 1
           fi
