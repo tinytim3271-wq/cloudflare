@@ -18,5 +18,7 @@ const bootstrapHooks = {
 
 window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
 window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
-await import('./runtime/legacy.js');
-window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
+import('./runtime/legacy.js')
+  .then(() => {
+    window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
+  });
