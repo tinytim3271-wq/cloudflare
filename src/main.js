@@ -16,7 +16,7 @@ const bootstrapHooks = {
   registerFeatureModule: () => {},
 };
 
-window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
+window.__MECHPRO_BOOTSTRAP__ = { ...bootstrapHooks };
 window.__MECHPRO_BOOTSTRAP_READY__ = (async () => {
   window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
   try {
