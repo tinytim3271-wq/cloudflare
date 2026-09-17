@@ -30,7 +30,7 @@ export function resolveR2UploadEnv(env = process.env) {
 }
 
 function shellAssignment(name, value) {
-  return `${name}=${JSON.stringify(value)}`;
+  return `${name}='${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 export function formatResolvedR2UploadEnv({ accountId, bucket, missing }) {
