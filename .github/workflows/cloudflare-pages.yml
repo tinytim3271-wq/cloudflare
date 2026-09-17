@@ -122,7 +122,8 @@ jobs:
           const raw = fs.readFileSync(path, 'utf8');
           const jsonText = raw
             .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/^\s*\/\/.*$/gm, '');
+            .replace(/^\s*\/\/.*$/gm, '')
+            .replace(/,\s*([}\]])/g, '$1');
           const config = JSON.parse(jsonText);
           const placeholder = '00000000-0000-0000-0000-000000000000';
           const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
