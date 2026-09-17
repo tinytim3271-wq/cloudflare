@@ -20,17 +20,36 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
 {
   const resolved = resolveR2UploadEnv({
-    AWS_ACCESS_KEY_ID: 'key',
-    AWS_SECRET_ACCESS_KEY: 'secret',
+    R2_ACCESS_KEY_ID: ' legacy-key ',
+    R2_SECRET_ACCESS_KEY: '\tlegacy-secret\n',
     CLOUDFLARE_ACCOUNT_ID: ' \n ',
     CF_ACCOUNT_ID: ' legacy-account ',
     CLOUDFLARE_R2_BUCKET: '\t',
     R2_BUCKET: ' legacy-bucket ',
   });
 
+  assert.equal(resolved.accessKeyId, 'legacy-key');
+  assert.equal(resolved.secretAccessKey, 'legacy-secret');
   assert.equal(resolved.accountId, 'legacy-account');
   assert.equal(resolved.bucket, 'legacy-bucket');
   assert.deepEqual(resolved.missing, []);
+}
+
+{
+  const resolved = resolveR2UploadEnv({
+    CLOUDFLARE_ACCOUNT_ID: 'account-id',
+    CLOUDFLARE_R2_BUCKET: 'bucket-name',
+  });
+
+  assert.deepEqual(resolved.missing, [
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+  ]);
+
+  assert.equal(
+    formatResolvedR2UploadEnv(resolved),
+    "SKIP_UPLOAD=1\nSKIP_REASON='Set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY to enable this workflow.'",
+  );
 }
 
 {
@@ -65,18 +84,20 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
   assert.equal(
     formatResolvedR2UploadEnv(resolved),
-    "SKIP_UPLOAD=0\nACCOUNT_ID='account-id'\nBUCKET='bucket-name'",
+    "SKIP_UPLOAD=0\nAWS_ACCESS_KEY_ID='key'\nAWS_SECRET_ACCESS_KEY='secret'\nACCOUNT_ID='account-id'\nBUCKET='bucket-name'",
   );
 }
 
 {
   assert.equal(
     formatResolvedR2UploadEnv({
+      accessKeyId: "tech's-key",
+      secretAccessKey: "super'secret",
       accountId: "shop's-account",
       bucket: "tech's-bucket",
       missing: [],
     }),
-    "SKIP_UPLOAD=0\nACCOUNT_ID='shop'\"'\"'s-account'\nBUCKET='tech'\"'\"'s-bucket'",
+    "SKIP_UPLOAD=0\nAWS_ACCESS_KEY_ID='tech'\"'\"'s-key'\nAWS_SECRET_ACCESS_KEY='super'\"'\"'secret'\nACCOUNT_ID='shop'\"'\"'s-account'\nBUCKET='tech'\"'\"'s-bucket'",
   );
 }
 
