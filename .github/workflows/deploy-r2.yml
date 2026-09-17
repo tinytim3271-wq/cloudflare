@@ -40,7 +40,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip awscli
 
-      - name: Upload zip to Cloudflare R2 (verbose)
+      - name: Upload zip to Cloudflare R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -49,7 +49,7 @@ jobs:
           CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          set -eux
+          set -eu
           R2_ENV_FILE="$RUNNER_TEMP/r2-upload-env"
           node scripts/resolve-r2-upload-env.mjs "$R2_ENV_FILE"
           . "$R2_ENV_FILE"
@@ -59,8 +59,9 @@ jobs:
           fi
           echo "Resolved R2 upload target configuration."
           aws --version
-          # Try listing the bucket (may fail if permissions are restricted)
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY --debug
-          echo "Uploaded s3://$BUCKET/$KEY"
+          if ! aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip "s3://$BUCKET/$KEY" >/dev/null 2>&1; then
+            echo "::error title=R2 upload failed::Artifact upload to Cloudflare R2 failed."
+            exit 1
+          fi
+          echo "Uploaded publish artifact to Cloudflare R2."
