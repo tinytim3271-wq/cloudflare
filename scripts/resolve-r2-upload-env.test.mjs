@@ -51,7 +51,7 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
   assert.equal(
     formatResolvedR2UploadEnv(resolved),
     'SKIP_UPLOAD=1\n'
-      + 'SKIP_REASON="Set CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID), CLOUDFLARE_R2_BUCKET (or R2_BUCKET) to enable this workflow."',
+      + "SKIP_REASON='Set CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID), CLOUDFLARE_R2_BUCKET (or R2_BUCKET) to enable this workflow.'",
   );
 }
 
@@ -65,7 +65,18 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
   assert.equal(
     formatResolvedR2UploadEnv(resolved),
-    'SKIP_UPLOAD=0\nACCOUNT_ID="account-id"\nBUCKET="bucket-name"',
+    "SKIP_UPLOAD=0\nACCOUNT_ID='account-id'\nBUCKET='bucket-name'",
+  );
+}
+
+{
+  assert.equal(
+    formatResolvedR2UploadEnv({
+      accountId: "shop's-account",
+      bucket: "tech's-bucket",
+      missing: [],
+    }),
+    "SKIP_UPLOAD=0\nACCOUNT_ID='shop'\"'\"'s-account'\nBUCKET='tech'\"'\"'s-bucket'",
   );
 }
 
