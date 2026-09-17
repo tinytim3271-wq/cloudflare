@@ -42,13 +42,13 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
   });
 
   assert.deepEqual(resolved.missing, [
-    'R2_ACCESS_KEY_ID',
-    'R2_SECRET_ACCESS_KEY',
+    'AWS_ACCESS_KEY_ID (or R2_ACCESS_KEY_ID)',
+    'AWS_SECRET_ACCESS_KEY (or R2_SECRET_ACCESS_KEY)',
   ]);
 
   assert.equal(
     formatResolvedR2UploadEnv(resolved),
-    "SKIP_UPLOAD=1\nSKIP_REASON='Set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY to enable this workflow.'",
+    "SKIP_UPLOAD=1\nSKIP_REASON='Set AWS_ACCESS_KEY_ID (or R2_ACCESS_KEY_ID), AWS_SECRET_ACCESS_KEY (or R2_SECRET_ACCESS_KEY) to enable this workflow.'",
   );
 }
 

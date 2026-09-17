@@ -14,10 +14,10 @@ export function resolveR2UploadEnv(env = process.env) {
   const missing = [];
 
   if (!accessKeyId) {
-    missing.push('R2_ACCESS_KEY_ID');
+    missing.push('AWS_ACCESS_KEY_ID (or R2_ACCESS_KEY_ID)');
   }
   if (!secretAccessKey) {
-    missing.push('R2_SECRET_ACCESS_KEY');
+    missing.push('AWS_SECRET_ACCESS_KEY (or R2_SECRET_ACCESS_KEY)');
   }
   if (!accountId) {
     missing.push('CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)');
