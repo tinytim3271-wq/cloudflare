@@ -60,17 +60,19 @@ jobs:
           echo "Resolved R2 upload target configuration."
           aws --version
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
+          OBJECT_KEY_PATH="$BUCKET/$KEY"
           OBJECT_PATH="s3://$BUCKET/$KEY"
           UPLOAD_STDERR="$RUNNER_TEMP/r2-upload.stderr"
           if ! aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip "$OBJECT_PATH" >/dev/null 2>"$UPLOAD_STDERR"; then
-            python - "$UPLOAD_STDERR" "$ACCOUNT_ID" "$BUCKET" "$OBJECT_PATH" <<'PY'
+            python - "$UPLOAD_STDERR" "$ACCOUNT_ID" "$BUCKET" "$OBJECT_PATH" "$OBJECT_KEY_PATH" <<'PY'
             import pathlib
             import sys
 
-            log_path, account_id, bucket, object_path = sys.argv[1:]
+            log_path, account_id, bucket, object_path, object_key_path = sys.argv[1:]
             log_text = pathlib.Path(log_path).read_text(encoding='utf-8', errors='replace')
             sensitive_values = [
                 object_path,
+                object_key_path,
                 f'https://{account_id}.r2.cloudflarestorage.com' if account_id else '',
                 f'{account_id}.r2.cloudflarestorage.com' if account_id else '',
                 f's3://{bucket}' if bucket else '',
