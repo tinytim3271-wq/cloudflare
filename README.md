@@ -19,7 +19,41 @@ HTTP-only cookie, with magic-link sign-in endpoints at
 The PWA remains usable offline with `localStorage` (`mechpro-dispatch-v1`) and
 queues non-sensitive entity mutations until connectivity returns.
 
-## Local frontend
+## Deployment Targets (Source of Truth)
+
+| Target | Purpose | Source of truth |
+| --- | --- | --- |
+| Cloudflare Pages | Hosts the production web/PWA shell | `.github/workflows/cloudflare-pages.yml` |
+| Cloudflare Worker | Hosts `/api/*` backend endpoints | `wrangler.jsonc`, `worker/` |
+| Cloudflare R2 | Stores files/download artifacts | `.github/workflows/deploy-r2.yml` |
+| Android APK | Builds Android package from Capacitor wrapper | `.github/workflows/android-apk.yml`, `android/` |
+| Windows Desktop | Builds desktop installer and release artifacts | `.github/workflows/windows-desktop.yml`, `desktop/` |
+
+`amplify.yml` was removed as a legacy configuration to prevent deployment-source drift; active deployment paths are Cloudflare workflows and `wrangler.jsonc`.
+
+## Local Development
+
+### Setup
+
+```bash
+nvm use
+npm ci
+cp .dev.vars.example .dev.vars   # only for local Worker development
+```
+
+### Run/build/test/lint
+
+```bash
+npm run dev --if-present
+npm run build --if-present
+npm run test --if-present
+npm run lint --if-present
+npm run dev:worker --if-present
+```
+
+`lint` runs ESLint across the modular `src/` entry/shared/runtime seams while intentionally excluding generated `app.js` and the current legacy runtime monolith file.
+
+### Serve the local frontend shell
 
 ```bash
 npm ci
@@ -31,6 +65,42 @@ Open <http://127.0.0.1:3000/>. Localhost and packaged Electron builds use the
 seeded admin profile for the offline UI. Cloud API requests remain protected.
 
 Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
+
+## Environment Variables
+
+| Variable | Purpose | Scope |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Auth for Pages/Worker deploy and R2 publish actions | GitHub Actions (`cloudflare-pages.yml`, `windows-desktop.yml`, optional `deploy-r2.yml`) |
+| `CLOUDFLARE_ACCOUNT_ID` | Selects target Cloudflare account in CI/deploy scripts | GitHub Actions + local deploy CLI |
+| `CLOUDFLARE_D1_DATABASE_ID` | Optional CI override for Worker D1 binding `database_id` | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_PAGES_PROJECT` | Optional Pages project name override | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_APP_ORIGIN` | Optional smoke-check origin used by deploy verification (`/` + `/api/healthz`) | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_ALLOWED_ORIGINS` | Optional Worker CORS origins override in CI deploy | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_DEPLOY_ENABLED` | Set to `false` to skip production Cloudflare publish | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | S3-compatible credentials for `deploy-r2.yml` uploads | GitHub Actions secrets (`deploy-r2.yml`) |
+| `CLOUDFLARE_R2_BUCKET` (or `R2_BUCKET`) | Target R2 bucket for download/object uploads | GitHub Actions variable/secret (`deploy-r2.yml`, `windows-desktop.yml`) |
+| `INTEGRATION_ENCRYPTION_KEY` | Encrypts integration secrets at rest in D1 | Worker secret (`wrangler secret put`) |
+| `DIAGNOSTICS_CAPABILITY_SECRET` | Shared diagnostics capability secret for worker/desktop actions | Worker secret + optional desktop packaging secret |
+| `DIAGNOSTICS_SIGNING_PRIVATE_KEY` | Required ECDSA signing key for `/api/diagnostics/authorize` | Worker secret (`wrangler secret put`) |
+| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ACCESS_ADMIN_EMAILS` | Cloudflare Access/admin bootstrap for internal surfaces | Worker secrets / `.dev.vars` for local development |
+| `DEV_AUTH_BYPASS` | Local-only auth bypass for `wrangler dev`; never production | `.dev.vars` local only |
+
+## Release Process
+
+1. Merge reviewed PRs to `main`.
+2. Confirm baseline CI (`.github/workflows/ci.yml`) and target workflow(s) pass.
+3. Deploy by target workflow (Pages/Worker/R2/Android/Windows).
+4. Run smoke checks (see `docs/OPERATIONS.md`) and verify `/api/healthz`.
+5. Publish/verify target artifacts (APK, Windows installer) when applicable.
+
+## Verification Steps
+
+```bash
+npm ci
+npm run test --if-present
+npm run build --if-present
+npm run validate:worker --if-present
+```
 
 ## Cloudflare provisioning
 

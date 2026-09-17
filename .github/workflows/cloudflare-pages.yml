@@ -40,12 +40,17 @@ on:
       - 'src/**'
       - 'scripts/**'
 
+concurrency:
+  group: cloudflare-pages-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,12 +62,19 @@ jobs:
       - run: npm run test:config
       - run: npm run test:worker
       - run: npm run stage:pages
+      - name: Smoke check staged UI shell
+        run: |
+          set -euo pipefail
+          test -f .pages-dist/index.html
+          grep -q '<div id="root"></div>' .pages-dist/index.html
+          grep -q 'app.js' .pages-dist/index.html
       - run: npx wrangler deploy --dry-run
 
   publish:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CLOUDFLARE_DEPLOY_ENABLED != 'false'
     needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production
     steps:
       - uses: actions/checkout@v4
@@ -155,3 +167,11 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy .pages-dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT || 'mechpro-dispatch' }} --commit-dirty=true
+      - name: Post-deploy smoke checks
+        if: steps.creds.outputs.present == 'true'
+        env:
+          APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://www.yourcarguy806.com' }}
+        run: |
+          set -euo pipefail
+          curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
+          curl -fsS "$APP_ORIGIN/" | grep -Eiq 'MechPro|Dispatch'

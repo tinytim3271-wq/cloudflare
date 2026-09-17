@@ -26,12 +26,17 @@ on:
       - 'src/**'
       - 'scripts/**'
 
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   build-j2534:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -48,6 +53,7 @@ jobs:
   build-installer:
     needs: build-j2534
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -72,6 +78,14 @@ jobs:
           node scripts/bake-diagnostics-secret.mjs
       - name: Build NSIS installer and portable zip
         run: npx electron-builder --win nsis zip --publish never
+      - name: Smoke test Windows artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="$(ls dist/windows/*.exe | head -n1)"
+          ZIP="$(ls dist/windows/*.zip | head -n1)"
+          test -s "$EXE"
+          test -s "$ZIP"
       - uses: actions/upload-artifact@v4
         with:
           name: mechpro-windows-installer
@@ -83,6 +97,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-installer
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -114,6 +129,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-installer
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production
     permissions:
       contents: read
