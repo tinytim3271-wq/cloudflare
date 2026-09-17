@@ -15,6 +15,7 @@ diagnostics/keys/local-capability-*.pem
 worker-configuration.d.ts
 .playwright-mcp/
 www/
+android/.settings/
 *.log
 .env
 .env.*

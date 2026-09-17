@@ -13,7 +13,6 @@
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",
     "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev",
-    "AUTH_EXPOSE_LOGIN_LINK": "1"
   },
   "d1_databases": [
     {

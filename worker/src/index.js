@@ -106,6 +106,17 @@ function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
   return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
 }
 
+function safeReturnPath(value, fallback = '/app') {
+  const candidate = String(value || '').trim();
+  if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return fallback;
+  try {
+    const parsed = new URL(candidate, 'https://mechpro.invalid');
+    return parsed.origin === 'https://mechpro.invalid' ? `${parsed.pathname}${parsed.search}${parsed.hash}` : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 async function resolveAppSession(request, env) {
   const token = getCookieValue(request, APP_SESSION_COOKIE);
   if (!token) return null;
@@ -952,26 +963,22 @@ async function handleAdmin(request, env, context, segments) {
         department: 'Administration', active: true, createdAt: nowIso, updatedAt: nowIso,
       }), context.userId, nowIso, nowIso),
     ]);
-    try {
-      await env.DB.batch([
-        env.DB.prepare(`
-          INSERT OR IGNORE INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
-          VALUES (?, ?, ?, 'America/Chicago', ?, ?, ?)
-        `).bind(shopId, shopName, shopId, subscriptionStatus, nowIso, nowIso),
-        env.DB.prepare(`
-          INSERT OR IGNORE INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
-          VALUES (?, ?, 'owner', 'active', ?, ?)
-        `).bind(shopId, email, nowIso, nowIso),
-        env.DB.prepare(`
-          INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, updated_at)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
-            current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
-        `).bind(shopId, planId, subscriptionStatus, subscriptionExpiresAt, nowIso),
-      ]);
-    } catch (_) {
-      // SaaS tables from 0002 may be absent in older local DBs; accounts/users are enough for entitlement.
-    }
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
+        VALUES (?, ?, ?, 'America/Chicago', ?, ?, ?)
+      `).bind(shopId, shopName, shopId, subscriptionStatus, nowIso, nowIso),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
+        VALUES (?, ?, 'owner', 'active', ?, ?)
+      `).bind(shopId, email, nowIso, nowIso),
+      env.DB.prepare(`
+        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+          current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+      `).bind(shopId, planId, subscriptionStatus, subscriptionExpiresAt, nowIso),
+    ]);
     return json({
       id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0,
       subscriptionStatus, subscriptionExpiresAt, planId, accountMode, trialDays,
@@ -1058,15 +1065,13 @@ async function handleAdmin(request, env, context, segments) {
     await env.DB.prepare(
       'UPDATE accounts SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE shop_id = ?',
     ).bind(subscriptionStatus, subscriptionExpiresAt, nowIso, target).run();
-    try {
-      await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind(subscriptionStatus, nowIso, target).run();
-      await env.DB.prepare(`
-        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
-          current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
-      `).bind(target, planId, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso).run();
-    } catch (_) {}
+    await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind(subscriptionStatus, nowIso, target).run();
+    await env.DB.prepare(`
+      INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+        current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+    `).bind(target, planId, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso).run();
     return json({
       shopId: target,
       subscriptionStatus,
@@ -1096,7 +1101,7 @@ async function ensureSaasUser(env, email, name) {
   }
   const userId = crypto.randomUUID();
   const now = new Date().toISOString();
-  const shopId = `shop-${Date.now().toString(36)}`;
+  const shopId = `shop-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
   const ownerName = String(name || normalized.split('@')[0] || 'Owner').trim();
   await env.DB.batch([
     env.DB.prepare(`
@@ -1127,8 +1132,14 @@ async function handleMagicLink(request, env) {
     }
   }
   const email = String(body.email || '').trim().toLowerCase();
-  const returnTo = String(body.returnTo || body.return_to || body.redirectTo || '/').trim() || '/';
+  const returnTo = safeReturnPath(body.returnTo || body.return_to || body.redirectTo);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
+  const recent = await env.DB.prepare(
+    "SELECT created_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1",
+  ).bind(email).first();
+  if (recent?.created_at && Date.now() - new Date(recent.created_at).getTime() < 15 * 60 * 1000) {
+    throw new HttpError(429, 'Too many sign-in requests. Try again later.');
+  }
   const token = crypto.randomUUID().replaceAll('-', '');
   const tokenHash = await hashValue(token);
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
@@ -1145,7 +1156,20 @@ async function handleMagicLink(request, env) {
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
   const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
   loginUrl.searchParams.set('token', token);
-  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1' || !env.AUTH_EMAIL_WEBHOOK;
+  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
+  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
+    throw new HttpError(503, 'Email delivery is not configured');
+  }
+  if (env.AUTH_EMAIL_WEBHOOK) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
+    const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
+    });
+    if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+  }
   const payload = {
     ok: true,
     sent: true,
@@ -1184,8 +1208,7 @@ async function handleAuthCallback(request, env) {
     `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()),
     env.DB.prepare('UPDATE login_tokens SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), loginToken.id),
   ]);
-  const nextUrl = String(loginToken.return_to || '/app').trim() || '/app';
-  const redirect = new URL(nextUrl, url.origin);
+  const redirect = new URL(safeReturnPath(loginToken.return_to), url.origin);
   return new Response(null, {
     status: 302,
     headers: {
@@ -1254,33 +1277,29 @@ async function handleBilling(request, env, context, segments) {
       if (!response.ok || !session.url) throw new HttpError(502, session.error?.message || 'Stripe checkout could not be created');
       return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
     }
-    // Manual conversion path when SaaS Stripe prices are not configured yet.
-    const nowIso = new Date().toISOString();
-    await env.DB.prepare(
-      'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
-    ).bind('active', nowIso, context.shopId).run();
-    try {
-      await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, context.shopId).run();
-      await env.DB.prepare(`
-        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
-        VALUES (?, ?, 'active', NULL, ?, ?)
-        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
-          current_period_end = NULL, updated_at = excluded.updated_at
-      `).bind(context.shopId, plan.id, nowIso, nowIso).run();
-    } catch (_) {}
-    return json({
-      ok: true,
-      planId: plan.id,
-      shopId: context.shopId,
-      url: String(body.successUrl || '/?billing=activated'),
-      provider: 'manual',
-      mode: 'activated',
-      message: 'Account converted to paid. Connect live Stripe SaaS prices to collect card payments automatically.',
-    });
+    throw new HttpError(503, 'Billing is not configured for this plan');
   }
   if (action === 'portal' && request.method === 'POST') {
     if (!context?.shopId) throw new HttpError(401, 'Sign in to manage billing');
-    return json({ ok: true, shopId: context.shopId, url: '/downloads', provider: 'manual' });
+    const customer = await env.DB.prepare(
+      'SELECT stripe_customer_id FROM billing_customers WHERE shop_id = ?',
+    ).bind(context.shopId).first();
+    if (!customer?.stripe_customer_id || !env.STRIPE_SECRET_KEY) {
+      throw new HttpError(503, 'Stripe billing is not configured for this shop');
+    }
+    const origin = new URL(request.url).origin;
+    const params = new URLSearchParams({
+      customer: customer.stripe_customer_id,
+      return_url: `${origin}/app`,
+    });
+    const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.url) throw new HttpError(502, 'Stripe billing portal could not be created');
+    return json({ ok: true, shopId: context.shopId, url: result.url, provider: 'stripe' });
   }
   if (action === 'status' && request.method === 'GET') {
     if (!context?.shopId) throw new HttpError(401, 'Sign in to view billing');
@@ -1309,7 +1328,16 @@ async function handleBilling(request, env, context, segments) {
   if (action === 'webhook' && request.method === 'POST') {
     const payload = await request.text();
     const signature = request.headers.get('Stripe-Signature') || '';
-    if (!signature) return json({ received: true, mode: 'stub' }, 202);
+    const secret = env.STRIPE_BILLING_WEBHOOK_SECRET || '';
+    if (!secret || !signature) throw new HttpError(400, 'Invalid Stripe signature');
+    const fields = signature.split(',').map(item => item.trim().split('=', 2));
+    const timestamp = fields.find(([key]) => key === 't')?.[1];
+    const signatures = fields.filter(([key]) => key === 'v1').map(([, value]) => value);
+    if (!timestamp || !/^\d+$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
+      throw new HttpError(400, 'Invalid Stripe signature');
+    }
+    const expected = await hmacHex(secret, `${timestamp}.${payload}`);
+    if (!signatures.some(value => constantTimeEqual(value, expected))) throw new HttpError(400, 'Invalid Stripe signature');
     const event = parseJson(payload);
     if (event?.type === 'checkout.session.completed') {
       const shopId = event.data?.object?.client_reference_id || event.data?.object?.metadata?.shopId;
@@ -1319,15 +1347,13 @@ async function handleBilling(request, env, context, segments) {
         await env.DB.prepare(
           'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
         ).bind('active', nowIso, shopId).run();
-        try {
-          await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, shopId).run();
-          await env.DB.prepare(`
-            INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
-            VALUES (?, ?, 'active', NULL, ?, ?)
-            ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
-              current_period_end = NULL, updated_at = excluded.updated_at
-          `).bind(shopId, planId, nowIso, nowIso).run();
-        } catch (_) {}
+        await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, shopId).run();
+        await env.DB.prepare(`
+          INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+          VALUES (?, ?, 'active', NULL, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
+            current_period_end = NULL, updated_at = excluded.updated_at
+        `).bind(shopId, planId, nowIso, nowIso).run();
       }
     }
     return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);

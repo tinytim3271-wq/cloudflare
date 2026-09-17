@@ -118,11 +118,12 @@ Set Worker secrets interactively:
 
 ```bash
 npx wrangler secret put INTEGRATION_ENCRYPTION_KEY
-npx wrangler secret put DIAGNOSTICS_CAPABILITY_SECRET
 npx wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
 npx wrangler secret put ACCESS_TEAM_DOMAIN
 npx wrangler secret put ACCESS_AUD
 npx wrangler secret put ACCESS_ADMIN_EMAILS
+npx wrangler secret put AUTH_EMAIL_WEBHOOK_SECRET
+npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
 ```
 
 `INTEGRATION_ENCRYPTION_KEY` should be a generated high-entropy value.
@@ -131,7 +132,12 @@ key used by `/api/diagnostics/authorize`; without it, authorize returns HTTP 503
 `ACCESS_TEAM_DOMAIN` is the full team domain, such as
 `https://example.cloudflareaccess.com`; `ACCESS_AUD` is the Access application
 audience. `ACCESS_ADMIN_EMAILS` is a comma-separated bootstrap list of platform
-administrators.
+administrators. `AUTH_EMAIL_WEBHOOK` must be configured as a Worker variable
+pointing to a trusted transactional-email service that accepts `{ email,
+loginUrl, returnTo }`; its optional bearer secret is stored as
+`AUTH_EMAIL_WEBHOOK_SECRET`. Login links are never returned by the production
+API. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
+subscription webhook endpoint.
 
 Apply schema and deploy:
 
