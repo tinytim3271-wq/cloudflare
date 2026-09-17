@@ -19,8 +19,11 @@ const bootstrapHooks = {
 window.__MECHPRO_BOOTSTRAP__ = Object.freeze({ ...bootstrapHooks });
 window.__MECHPRO_BOOTSTRAP_READY__ = (async () => {
   window.__MECHPRO_BOOTSTRAP__.beforeLegacyAppMount();
-  await import('./runtime/legacy.js');
-  window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
+  try {
+    await import('./runtime/legacy.js');
+  } finally {
+    window.__MECHPRO_BOOTSTRAP__.afterLegacyAppMount();
+  }
 })().catch((error) => {
   console.error('Legacy app bootstrap failed', error);
   throw error;
