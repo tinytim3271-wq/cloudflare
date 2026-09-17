@@ -91,6 +91,7 @@ jobs:
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Cloudflare publish skipped::Add repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, or set CLOUDFLARE_DEPLOY_ENABLED=false to silence this notice."
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -102,11 +103,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if ! ./node_modules/.bin/wrangler whoami; then
-            echo "::error title=Invalid Cloudflare credentials::Rotate the GitHub Actions secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. The token must grant Workers Scripts, D1, R2, and Pages edit access to the configured account."
-            exit 1
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Cloudflare publish skipped::The configured CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is invalid. Rotate the repository secrets to re-enable automatic deployment."
+          else
+            echo "valid=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Configure D1 binding and CORS origins
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         env:
           CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_ALLOWED_ORIGINS: ${{ vars.CLOUDFLARE_ALLOWED_ORIGINS }}
@@ -144,31 +147,31 @@ jobs:
           console.log(`ALLOWED_ORIGINS=${config.vars?.ALLOWED_ORIGINS || '(unchanged)'}`);
           NODE
       - name: Apply D1 migrations
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 migrations apply DB --remote
       - name: Deploy API Worker
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
       - name: Build and stage Pages
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         run: npm run build:web && npm run stage:pages
       - name: Deploy Pages
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy .pages-dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT || 'mechpro-dispatch' }} --commit-dirty=true
       - name: Post-deploy smoke checks
-        if: steps.creds.outputs.present == 'true'
+        if: steps.creds.outputs.valid == 'true'
         env:
           APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://www.yourcarguy806.com' }}
         run: |
