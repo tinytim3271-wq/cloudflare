@@ -52,7 +52,9 @@ jobs:
           set -eux
           R2_ENV_FILE="$RUNNER_TEMP/r2-upload-env"
           node scripts/resolve-r2-upload-env.mjs "$R2_ENV_FILE"
+          set +x
           . "$R2_ENV_FILE"
+          set -x
           if [ "${SKIP_UPLOAD}" = "1" ]; then
             echo "::notice title=R2 upload skipped::${SKIP_REASON}"
             exit 0

@@ -76,15 +76,22 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
 {
   const resolved = resolveR2UploadEnv({
-    AWS_ACCESS_KEY_ID: 'key',
-    AWS_SECRET_ACCESS_KEY: 'secret',
+    AWS_ACCESS_KEY_ID: ' key$(printf hacked) ',
+    AWS_SECRET_ACCESS_KEY: " secret`printf hacked` ${USER}'s ",
     CLOUDFLARE_ACCOUNT_ID: 'account-id',
     CLOUDFLARE_R2_BUCKET: 'bucket-name',
   });
 
+  assert.equal(resolved.accessKeyId, 'key$(printf hacked)');
+  assert.equal(resolved.secretAccessKey, "secret`printf hacked` ${USER}'s");
+
   assert.equal(
     formatResolvedR2UploadEnv(resolved),
-    "SKIP_UPLOAD=0\nAWS_ACCESS_KEY_ID='key'\nAWS_SECRET_ACCESS_KEY='secret'\nACCOUNT_ID='account-id'\nBUCKET='bucket-name'",
+    "SKIP_UPLOAD=0\n"
+      + "AWS_ACCESS_KEY_ID='key$(printf hacked)'\n"
+      + "AWS_SECRET_ACCESS_KEY='secret`printf hacked` ${USER}'\"'\"'s'\n"
+      + "ACCOUNT_ID='account-id'\n"
+      + "BUCKET='bucket-name'",
   );
 }
 
