@@ -68,7 +68,14 @@ jobs:
 
             log_path, account_id, bucket = sys.argv[1:]
             log_text = pathlib.Path(log_path).read_text(encoding='utf-8', errors='replace')
-            for value in (account_id, bucket):
+            sensitive_values = [
+                f'https://{account_id}.r2.cloudflarestorage.com' if account_id else '',
+                f'{account_id}.r2.cloudflarestorage.com' if account_id else '',
+                f's3://{bucket}' if bucket else '',
+                account_id,
+                bucket,
+            ]
+            for value in sensitive_values:
                 if value:
                     log_text = log_text.replace(value, '[REDACTED]')
             if log_text.strip():
