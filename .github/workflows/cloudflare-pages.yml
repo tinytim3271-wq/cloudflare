@@ -175,7 +175,7 @@ jobs:
       - name: Post-deploy smoke checks
         if: steps.verify-creds.outputs.valid == 'true'
         env:
-          APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://www.yourcarguy806.com' }}
+          APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://main.mechpro-dispatch.pages.dev' }}
         run: |
           set -euo pipefail
           curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
