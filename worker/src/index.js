@@ -1,3 +1,4 @@
+import { PostHog } from 'posthog-node/edge';
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
 import {
   ENTITY_TYPES,
@@ -27,6 +28,37 @@ const MUTATING_DIAGNOSTIC_PROCEDURES = new Set([
   'clear_dtcs', 'clearDtcs', 'program_key', 'add_key', 'all_keys_lost',
   'program_remote', 'erase_keys', 'flash', 'uds_write',
 ]);
+
+function createPostHog(env) {
+  const apiKey = String(env.POSTHOG_API_KEY || '').trim();
+  const host = String(env.POSTHOG_HOST || '').trim();
+  const missingVariable = !apiKey ? 'POSTHOG_API_KEY' : !host ? 'POSTHOG_HOST' : null;
+  if (missingVariable) {
+    if (env.ENVIRONMENT === 'development' || env.NODE_ENV === 'development') {
+      throw new Error(`${missingVariable} variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once ${missingVariable} is configured`);
+    }
+    return null;
+  }
+  return new PostHog(apiKey, {
+    host,
+    flushAt: 1,
+    flushInterval: 0,
+    enableExceptionAutocapture: true,
+  });
+}
+
+function captureForContext(analytics, context, event, properties = {}) {
+  analytics.client?.capture({
+    distinctId: context.userId,
+    event,
+    properties: {
+      shop_id: context.shopId,
+      role: context.role,
+      ...properties,
+    },
+    groups: { shop: context.shopId },
+  });
+}
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -195,7 +227,7 @@ function members(record) {
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
 }
 
-async function handleEntities(request, env, context, segments) {
+async function handleEntities(request, env, context, segments, analytics) {
   const sourceType = String(segments[1] || '').toLowerCase();
   const type = normalizeEntityType(sourceType);
   const id = segments[2] ? decodeURIComponent(segments.slice(2).join('/')) : null;
@@ -246,6 +278,7 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, newId, body);
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    captureForContext(analytics, context, 'entity_created', { entity_type: type });
     return json(saved, 201);
   }
   if (request.method === 'PUT' && id) {
@@ -261,6 +294,7 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    captureForContext(analytics, context, 'entity_updated', { entity_type: type });
     return json(saved);
   }
   if (request.method === 'DELETE' && id) {
@@ -294,13 +328,24 @@ async function handleEntities(request, env, context, segments) {
       ).bind(existing.email, context.shopId));
     }
     await env.DB.batch(statements);
+    captureForContext(analytics, context, 'entity_deleted', { entity_type: type });
     return new Response(null, { status: 204 });
   }
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleAuthSession(context) {
+async function handleAuthSession(context, analytics) {
   const expires = Math.floor(Date.now() / 1000) + 3600;
+  analytics.client?.identify({
+    distinctId: context.userId,
+    properties: {
+      email: context.email,
+      name: context.name,
+      role: context.role,
+      shop_id: context.shopId,
+    },
+  });
+  captureForContext(analytics, context, 'auth_session_started');
   return json({
     claims: {
       sub: context.userId,
@@ -354,7 +399,7 @@ async function handleCoverage(request, segments) {
   return json(match);
 }
 
-async function handleDiagnostics(request, env, context, segments) {
+async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   if (action === 'coverage') return handleCoverage(request, segments);
   requireRole(context, ['admin', 'technician', 'service_writer']);
@@ -385,12 +430,13 @@ async function handleDiagnostics(request, env, context, segments) {
     };
     const payloadJson = JSON.stringify(payload);
     const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
+    captureForContext(analytics, context, 'diagnostics_authorized', { procedure: 'clear_dtcs' });
     return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
   }
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleOnboarding(request, env, context) {
+async function handleOnboarding(request, env, context, analytics) {
   requireRole(context, ['admin']);
   const records = await env.DB.prepare(
     "SELECT entity_type, entity_id, data_json FROM entities WHERE shop_id = ? AND entity_type != 'employees'",
@@ -416,10 +462,14 @@ async function handleOnboarding(request, env, context) {
   await putEntity(env, context, 'shopsettings', 'onboarding', {
     startedAt, sampleRecordsRemoved: resetAll ? 0 : targets.length, allShopDataRemoved: resetAll,
   });
+  captureForContext(analytics, context, 'onboarding_started', {
+    mode: resetAll ? 'all' : 'samples',
+    removed_count: targets.length,
+  });
   return json({ startedAt, removed: targets.length, mode: resetAll ? 'all' : 'samples' });
 }
 
-async function handlePayroll(request, env, context) {
+async function handlePayroll(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office']);
   const [orders, employees] = await Promise.all([
@@ -444,6 +494,10 @@ async function handlePayroll(request, env, context) {
     }];
   });
   for (const entry of entries) await putEntity(env, context, 'payrollentries', entry.id, entry);
+  captureForContext(analytics, context, 'payroll_synced', {
+    period,
+    posted_entries: entries.length,
+  });
   return json({ period, postedEntries: entries.length });
 }
 
@@ -507,7 +561,7 @@ async function aiAnswer(env, shopId, message, history = []) {
   return { text: result.response || 'I could not produce an answer right now.', model };
 }
 
-async function handleAssistant(request, env, context) {
+async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
   await enforceAiRateLimit(env, context);
@@ -515,6 +569,7 @@ async function handleAssistant(request, env, context) {
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
   const result = await aiAnswer(env, context.shopId, message, Array.isArray(body.history) ? body.history : []);
+  captureForContext(analytics, context, 'ai_assistant_queried', { model: result.model });
   return json({ message: result.text, model: result.model });
 }
 
@@ -533,7 +588,7 @@ async function getIntegrationSecret(env, shopId, name) {
   return row ? decryptSecret(row.ciphertext, row.iv, env.INTEGRATION_ENCRYPTION_KEY) : '';
 }
 
-async function handleAgentPhoneConfigure(request, env, context) {
+async function handleAgentPhoneConfigure(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin']);
   const body = await requestJson(request);
@@ -559,6 +614,11 @@ async function handleAgentPhoneConfigure(request, env, context) {
       status: result.status || 'active', configuredAt: new Date().toISOString(),
     }),
   ]);
+  captureForContext(analytics, context, 'agentphone_configured', {
+    status: result.status || 'active',
+    context_limit: contextLimit,
+    timeout_seconds: timeout,
+  });
   return json({ configured: true, status: result.status || 'active', agentId, webhookUrl, contextLimit, timeout });
 }
 
@@ -582,7 +642,7 @@ async function handleAgentPhoneWebhook(request, env, shopId) {
   return json(await aiAnswer(env, shopId, transcript, body.recentHistory || []));
 }
 
-async function handleFiles(request, env, context, segments) {
+async function handleFiles(request, env, context, segments, analytics) {
   const action = segments[1];
   if (action === 'presign-upload' && request.method === 'POST') {
     const body = await requestJson(request);
@@ -622,6 +682,11 @@ async function handleFiles(request, env, context, segments) {
     } catch {
       throw new HttpError(413, 'File exceeds 15 MB');
     }
+    captureForContext(analytics, context, 'file_uploaded', {
+      file_kind: key.split('/')[2],
+      content_type: request.headers.get('Content-Type') || 'application/octet-stream',
+      size_bytes: received,
+    });
     return new Response(null, { status: 204 });
   }
   if (action === 'presign-download' && request.method === 'GET') {
@@ -641,7 +706,7 @@ async function handleFiles(request, env, context, segments) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleCheckout(request, env, context) {
+async function handleCheckout(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer']);
   const body = await requestJson(request);
@@ -684,10 +749,16 @@ async function handleCheckout(request, env, context) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new HttpError(502, 'Stripe rejected the checkout session request');
+  captureForContext(analytics, context, 'checkout_session_created', {
+    amount: balance,
+    currency: 'usd',
+    processor: 'stripe',
+  });
   return json({ url: result.url, sessionId: result.id });
 }
 
-async function handleStripeWebhook(request, env, shopId) {
+async function handleStripeWebhook(request, env, shopId, analytics) {
+  analytics.distinctId = `stripe-webhook:${shopId}`;
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   const payload = await request.text();
   const signature = request.headers.get('Stripe-Signature') || '';
@@ -717,6 +788,12 @@ async function handleStripeWebhook(request, env, shopId) {
         invoiceNumber, amount, method: 'processor', processor: 'stripe',
         processorTransactionId: id, status: 'completed', receivedAt: new Date().toISOString(),
       });
+      analytics.client?.capture({
+        distinctId: analytics.distinctId,
+        event: 'payment_completed',
+        properties: { shop_id: shopId, amount, currency: 'usd', processor: 'stripe' },
+        groups: { shop: shopId },
+      });
     }
   }
   return json({ received: true });
@@ -736,7 +813,7 @@ async function handleEntitlement(request, env, context) {
   return json({ active, status, expiresAt }, active ? 200 : 403);
 }
 
-async function handleAdmin(request, env, context, segments) {
+async function handleAdmin(request, env, context, segments, analytics) {
   requireRole(context, ['super_admin']);
   if (segments.length === 2 && request.method === 'GET') {
     const accounts = await env.DB.prepare('SELECT * FROM accounts ORDER BY created_at DESC').all();
@@ -781,6 +858,7 @@ async function handleAdmin(request, env, context, segments) {
         department: 'Administration', active: true, createdAt: now, updatedAt: now,
       }), context.userId, now, now),
     ]);
+    captureForContext(analytics, context, 'account_created', { target_shop_id: shopId });
     return json({ id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0, subscriptionStatus: 'active', createdAt: now, updatedAt: now }, 201);
   }
   const target = decodeURIComponent(segments[2] || '');
@@ -822,12 +900,16 @@ async function handleAdmin(request, env, context, segments) {
     ).bind(body.suspended ? 1 : 0, now, target).run();
     if (!result.meta.changes) throw new HttpError(404, 'Customer account not found');
     await env.DB.prepare('UPDATE users SET enabled = ?, updated_at = ? WHERE shop_id = ?').bind(body.suspended ? 0 : 1, now, target).run();
+    captureForContext(analytics, context, 'account_status_changed', {
+      target_shop_id: target,
+      suspended: body.suspended,
+    });
     return json({ shopId: target, suspended: body.suspended });
   }
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function route(request, env) {
+async function route(request, env, analytics) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
   const segments = path.split('/').filter(Boolean);
@@ -846,23 +928,24 @@ async function route(request, env) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
-  if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''));
+  if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
   if (segments[0] === 'agentphone' && segments[1] === 'webhook') return handleAgentPhoneWebhook(request, env, decodeURIComponent(segments[2] || ''));
   const context = await resolveContext(request, env);
+  analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
-  if (path === '/auth/session') return handleAuthSession(context);
-  if (segments[0] === 'entities') return handleEntities(request, env, context, segments);
+  if (path === '/auth/session') return handleAuthSession(context, analytics);
+  if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
-  if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments);
-  if (path === '/onboarding/start') return handleOnboarding(request, env, context);
-  if (path === '/payroll/sync') return handlePayroll(request, env, context);
+  if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
+  if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
+  if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
-  if (path === '/ai/assistant') return handleAssistant(request, env, context);
-  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context);
-  if (segments[0] === 'files') return handleFiles(request, env, context, segments);
-  if (path === '/payments/checkout-session') return handleCheckout(request, env, context);
+  if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
+  if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
+  if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
-  if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments);
+  if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
   throw new HttpError(404, 'Not found');
 }
 
@@ -894,11 +977,23 @@ async function proxyPagesRequest(request, env) {
 
 export default {
   async fetch(request, env) {
+    const analytics = {
+      client: null,
+      distinctId: request.headers.get('X-PostHog-Distinct-ID')
+        || request.headers.get('X-PostHog-Session-ID')
+        || crypto.randomUUID(),
+    };
     try {
+      analytics.client = createPostHog(env);
       if (!isApiRequest(request)) return proxyPagesRequest(request, env);
-      return withCors(await route(request, env), request, env);
+      return withCors(await route(request, env, analytics), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+      analytics.client?.captureException(error, analytics.distinctId, {
+        request_method: request.method,
+        request_path: new URL(request.url).pathname,
+        status_code: status,
+      });
       console.error(JSON.stringify({
         message: 'request failed',
         method: request.method,
@@ -907,6 +1002,12 @@ export default {
         error: error instanceof Error ? error.message : String(error),
       }));
       return withCors(json({ message: status === 500 ? 'Internal error' : error.message }, status), request, env);
+    } finally {
+      try {
+        await analytics.client?.shutdown();
+      } catch (error) {
+        console.error('PostHog shutdown failed', error);
+      }
     }
   },
 };

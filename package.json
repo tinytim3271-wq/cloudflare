@@ -97,7 +97,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "posthog-node": "^5.52.4"
   },
   "allowScripts": {
     "electron@41.10.7": true,
