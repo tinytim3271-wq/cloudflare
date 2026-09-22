@@ -1,0 +1,4 @@
+    "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev"
+// remove AUTH_EXPOSE_LOG
+// 
+IN_LINK from production vars; configure AUTH_EMAIL_WEBHOOK instead
