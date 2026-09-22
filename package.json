@@ -115,7 +115,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "posthog-node": "^5.52.4"
   },
   "overrides": {
     "rimraf": "^4.0.1",

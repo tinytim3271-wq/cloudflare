@@ -3201,7 +3201,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         shiftEntries: [],
         jobClockEntries: [],
         estimates: [],
-        messagingSettings: { enabled: false, endpoint: "", senderEmail: "", senderPhone: "", shopName: "Your Car Guy" },
+        // Default messaging settings – replace with your real service endpoint to enable email/SMS delivery.
+        messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
         billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
         payments: [],
         taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" },

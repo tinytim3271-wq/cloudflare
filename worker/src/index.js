@@ -1,3 +1,4 @@
+import { PostHog } from 'posthog-node';
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
 import { isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from './routing.mjs';
 import {
@@ -27,6 +28,45 @@ import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnos
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
+
+let posthogClient = null;
+
+function getPostHog(env) {
+  const apiKey = String(env.POSTHOG_API_KEY || '').trim();
+  const host = String(env.POSTHOG_HOST || '').trim();
+  if (!apiKey) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_API_KEY variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_API_KEY is configured');
+    }
+    return null;
+  }
+  if (!host) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_HOST variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_HOST is configured');
+    }
+    return null;
+  }
+  if (!posthogClient) {
+    posthogClient = new PostHog(apiKey, {
+      host,
+      flushAt: 1,
+      flushInterval: 0,
+      enableExceptionAutocapture: true,
+    });
+  }
+  return posthogClient;
+}
+
+function capturePostHogEvent(env, context, event, properties = {}) {
+  const posthog = getPostHog(env);
+  if (!posthog) return;
+  posthog.capture({
+    distinctId: context.userId,
+    event,
+    properties,
+    groups: context.shopId ? { shop: context.shopId } : undefined,
+  });
+}
 
 // Recursively redact sensitive fields before persisting diagnostic audit events.
 const SENSITIVE_AUDIT_KEYS = new Set([
@@ -346,6 +386,10 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, newId, body);
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    capturePostHogEvent(env, context, 'entity_created', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved, 201);
   }
   if (request.method === 'PUT' && id) {
@@ -361,6 +405,10 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    capturePostHogEvent(env, context, 'entity_updated', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved);
   }
   if (request.method === 'DELETE' && id) {
@@ -394,6 +442,10 @@ async function handleEntities(request, env, context, segments) {
       ).bind(existing.email, context.shopId));
     }
     await env.DB.batch(statements);
+    capturePostHogEvent(env, context, 'entity_deleted', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return new Response(null, { status: 204 });
   }
   throw new HttpError(405, 'Method not allowed');
@@ -499,6 +551,12 @@ async function handleDiagnostics(request, env, context, segments) {
     await recordDiagnosticAudit(env, context, {
       kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
     });
+    capturePostHogEvent(env, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
+      actor_role: context.role,
+    });
     return json({
       authorized: true, procedure, scope: spec.klass, mode, vin, token,
       expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId,
@@ -533,6 +591,10 @@ async function handleOnboarding(request, env, context) {
   await putEntity(env, context, 'shopsettings', 'onboarding', {
     startedAt, sampleRecordsRemoved: resetAll ? 0 : targets.length, allShopDataRemoved: resetAll,
   });
+  capturePostHogEvent(env, context, 'onboarding_started', {
+    reset_mode: resetAll ? 'all' : 'samples',
+    removed_record_count: targets.length,
+  });
   return json({ startedAt, removed: targets.length, mode: resetAll ? 'all' : 'samples' });
 }
 
@@ -561,6 +623,10 @@ async function handlePayroll(request, env, context) {
     }];
   });
   for (const entry of entries) await putEntity(env, context, 'payrollentries', entry.id, entry);
+  capturePostHogEvent(env, context, 'payroll_synced', {
+    posted_entry_count: entries.length,
+    actor_role: context.role,
+  });
   return json({ period, postedEntries: entries.length });
 }
 
@@ -850,6 +916,11 @@ async function handleCheckout(request, env, context) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new HttpError(502, 'Stripe rejected the checkout session request');
+  capturePostHogEvent(env, context, 'payment_checkout_started', {
+    amount: balance,
+    currency: 'usd',
+    actor_role: context.role,
+  });
   return json({ url: result.url, sessionId: result.id });
 }
 
@@ -882,6 +953,12 @@ async function handleStripeWebhook(request, env, shopId) {
       await putEntity(env, context, 'payments', id, {
         invoiceNumber, amount, method: 'processor', processor: 'stripe',
         processorTransactionId: id, status: 'completed', receivedAt: new Date().toISOString(),
+      });
+      capturePostHogEvent(env, { shopId, userId: `stripe-webhook:${shopId}` }, 'payment_completed', {
+        amount,
+        currency: 'usd',
+        processor: 'stripe',
+        $process_person_profile: false,
       });
     }
   }
@@ -1208,6 +1285,20 @@ async function handleAuthCallback(request, env) {
     `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()),
     env.DB.prepare('UPDATE login_tokens SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), loginToken.id),
   ]);
+  const posthog = getPostHog(env);
+  posthog?.identify({
+    distinctId: String(user.id),
+    properties: {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      shop_id: user.shop_id,
+    },
+  });
+  capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
+    auth_method: 'magic_link',
+    actor_role: user.role,
+  });
   const redirect = new URL(safeReturnPath(loginToken.return_to), url.origin);
   return new Response(null, {
     status: 302,
@@ -1225,6 +1316,9 @@ async function handleLogout(request, env) {
   if (sessionId) {
     await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
   }
+  capturePostHogEvent(env, context, 'user_logged_out', {
+    actor_role: context.role,
+  });
   return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
@@ -1275,6 +1369,11 @@ async function handleBilling(request, env, context, segments) {
       });
       const session = await response.json().catch(() => ({}));
       if (!response.ok || !session.url) throw new HttpError(502, session.error?.message || 'Stripe checkout could not be created');
+      capturePostHogEvent(env, context, 'billing_checkout_started', {
+        plan_id: plan.id,
+        provider: 'stripe',
+        actor_role: context.role,
+      });
       return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
     }
     throw new HttpError(503, 'Billing is not configured for this plan');
@@ -1354,6 +1453,11 @@ async function handleBilling(request, env, context, segments) {
           ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
             current_period_end = NULL, updated_at = excluded.updated_at
         `).bind(shopId, planId, nowIso, nowIso).run();
+        capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_activated', {
+          plan_id: planId,
+          provider: 'stripe',
+          $process_person_profile: false,
+        });
       }
     }
     return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);
@@ -1451,6 +1555,7 @@ async function proxyPagesRequest(request, env) {
 
 export default {
   async fetch(request, env) {
+    const posthog = getPostHog(env);
     try {
       if (!isApiRequest(request)) {
         const download = await servePublicDownload(request, env);
@@ -1460,6 +1565,11 @@ export default {
       return withCors(await route(request, env), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+      posthog?.captureException(error, undefined, {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        status,
+      });
       console.error(JSON.stringify({
         message: 'request failed',
         method: request.method,
@@ -1472,6 +1582,14 @@ export default {
           ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
           : error.message,
       }, status), request, env);
+    } finally {
+      if (posthog) {
+        try {
+          await posthog.flush();
+        } catch (error) {
+          console.error('PostHog flush failed', error);
+        }
+      }
     }
   },
 };
