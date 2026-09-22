@@ -121,6 +121,7 @@ npx wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
 npx wrangler secret put ACCESS_TEAM_DOMAIN
 npx wrangler secret put ACCESS_AUD
 npx wrangler secret put ACCESS_ADMIN_EMAILS
+npx wrangler secret put AUTH_EMAIL_WEBHOOK
 npx wrangler secret put AUTH_EMAIL_WEBHOOK_SECRET
 npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
 ```
@@ -131,12 +132,35 @@ key used by `/api/diagnostics/authorize`; without it, authorize returns HTTP 503
 `ACCESS_TEAM_DOMAIN` is the full team domain, such as
 `https://example.cloudflareaccess.com`; `ACCESS_AUD` is the Access application
 audience. `ACCESS_ADMIN_EMAILS` is a comma-separated bootstrap list of platform
-administrators. `AUTH_EMAIL_WEBHOOK` must be configured as a Worker variable
+administrators. `AUTH_EMAIL_WEBHOOK` must be configured as a Worker secret
 pointing to a trusted transactional-email service that accepts `{ email,
 loginUrl, returnTo }`; its optional bearer secret is stored as
 `AUTH_EMAIL_WEBHOOK_SECRET`. Login links are never returned by the production
 API. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
 subscription webhook endpoint.
+
+### Troubleshooting email sign-in
+
+An "Email delivery is not configured" or "Email sign-in is unavailable" error
+means the `mechpro-api` Worker has no `AUTH_EMAIL_WEBHOOK` setting. The application
+does not send mail by itself. Configure an HTTPS endpoint you control that accepts
+the JSON payload above, sends the sign-in email, and returns a successful HTTP
+status only after the email provider accepts the message. A provider API URL
+alone will not work unless it supports this exact payload.
+
+Run `npx wrangler secret put AUTH_EMAIL_WEBHOOK` and enter that endpoint URL.
+If the endpoint requires bearer authentication, also set
+`AUTH_EMAIL_WEBHOOK_SECRET`. These commands update the deployed Worker; local
+`.dev.vars` settings and GitHub secrets alone do not. Using Worker secrets keeps
+the endpoint credentials out of source control and preserves the settings across
+normal deployments. Do not set `AUTH_EXPOSE_LOGIN_LINK=1` in production: it returns
+the sign-in token directly without proving ownership of the email address.
+
+After configuration, request a link using an inbox you control, verify the email
+arrives, and follow it to confirm sign-in. New requests made without email
+configuration do not store tokens or start the 15-minute retry cooldown. A
+cooldown left by the older code may still need to expire before retrying.
+`/api/healthz` checks API availability, not email delivery.
 
 Apply schema and deploy:
 

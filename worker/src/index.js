@@ -1211,6 +1211,10 @@ async function handleMagicLink(request, env) {
   const email = String(body.email || '').trim().toLowerCase();
   const returnTo = safeReturnPath(body.returnTo || body.return_to || body.redirectTo);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
+  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
+  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
+    throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
+  }
   const recent = await env.DB.prepare(
     "SELECT created_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1",
   ).bind(email).first();
@@ -1233,10 +1237,6 @@ async function handleMagicLink(request, env) {
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
   const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
   loginUrl.searchParams.set('token', token);
-  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
-  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
-    throw new HttpError(503, 'Email delivery is not configured');
-  }
   if (env.AUTH_EMAIL_WEBHOOK) {
     const headers = { 'Content-Type': 'application/json' };
     if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
