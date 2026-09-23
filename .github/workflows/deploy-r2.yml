@@ -1,0 +1,80 @@
+name: Build and deploy to Cloudflare R2
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: deploy-r2-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore & build
+        run: |
+          dotnet restore diagnostics/j2534-service/J2534Service.sln
+          dotnet build diagnostics/j2534-service/J2534Service.sln -c Release --no-restore
+
+      - name: Publish
+        run: dotnet publish diagnostics/j2534-service/src/J2534.Host/J2534.Host.csproj -c Release --no-build -o ./artifacts/publish
+
+      - name: Create zip
+        run: |
+          cd artifacts
+          if ! command -v zip >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zip
+          fi
+          zip -r publish.zip publish
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Install AWS CLI via pip
+        run: |
+          python -m pip install --upgrade pip awscli
+
+      - name: Upload zip to Cloudflare R2 (verbose)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -eux
+          R2_ENV_FILE="$RUNNER_TEMP/r2-upload-env"
+          node scripts/resolve-r2-upload-env.mjs "$R2_ENV_FILE"
+          set +x
+          . "$R2_ENV_FILE"
+          set -x
+          if [ "${SKIP_UPLOAD}" = "1" ]; then
+            echo "::notice title=R2 upload skipped::${SKIP_REASON}"
+            exit 0
+          fi
+          echo "Resolved R2 upload target configuration."
+          aws --version
+          # Try listing the bucket (may fail if permissions are restricted)
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
+          KEY="j2534-service/publish-${{ github.run_id }}.zip"
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY --debug
+          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null
+          echo "Uploaded s3://$BUCKET/$KEY"

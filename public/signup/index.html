@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MechPro Signup</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: linear-gradient(135deg, #0b1120, #111827); color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; }
+      .card { width: min(92vw, 520px); background: rgba(15, 23, 42, 0.94); border: 1px solid rgba(148,163,184,.25); border-radius: 18px; padding: 30px; }
+      input, button { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(148,163,184,.35); margin-top: 10px; }
+      button { background: #34d399; border: none; color: #052e16; font-weight: 700; cursor: pointer; }
+      a { color: #7dd3fc; }
+      label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
+      label + input { margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Start your free trial</h1>
+      <p>Create your shop, start a 14-day trial, and add employees as you grow.</p>
+      <form method="post" action="/api/auth/magic-link">
+        <label for="shopName">Shop name</label>
+        <input id="shopName" type="text" name="shopName" placeholder="Shop name" required />
+        <label for="ownerName">Owner name</label>
+        <input id="ownerName" type="text" name="ownerName" placeholder="Owner name" required />
+        <label for="email">Owner email</label>
+        <input id="email" type="email" name="email" placeholder="Owner email" required />
+        <input type="hidden" name="returnTo" value="/app" />
+        <button type="submit">Start trial</button>
+      </form>
+      <p>Already have an account? <a href="/login">Sign in</a></p>
+    </div>
+  </body>
+</html>

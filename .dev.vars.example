@@ -1,0 +1,18 @@
+# Local Worker secrets for `wrangler dev` (copy to `.dev.vars` — gitignored).
+# Never enable DEV_AUTH_BYPASS in production.
+
+DEV_AUTH_BYPASS=1
+ACCESS_ADMIN_EMAILS=admin@example.com
+INTEGRATION_ENCRYPTION_KEY=replace-with-a-long-random-value
+DIAGNOSTICS_CAPABILITY_SECRET=replace-with-a-different-random-value
+# Base64 DER PKCS#8 ECDSA P-256 private key for /api/diagnostics/authorize
+DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
+
+# Optional Access simulation when not using DEV_AUTH_BYPASS:
+# ACCESS_TEAM_DOMAIN=https://example.cloudflareaccess.com
+# ACCESS_AUD=your-access-application-audience
+
+# Magic-link email delivery (endpoint must accept { email, loginUrl, returnTo }).
+# These local settings are not uploaded by a Worker deployment.
+# AUTH_EMAIL_WEBHOOK=https://your-email-service.example/send-login
+# AUTH_EMAIL_WEBHOOK_SECRET=replace-with-your-webhook-bearer-secret

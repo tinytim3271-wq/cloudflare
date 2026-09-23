@@ -4,8 +4,14 @@
  * Source: MECHPRO_API_URL (defaults to same-origin /api)
  */
 export const cloudflareConfig = Object.freeze({
-  auth: 'cloudflare-access',
-  apiUrl: '/api',
+  auth: 'mechpro-saas',
+  apiUrl: "/api",
+  authEndpoints: {
+    magicLink: "/api/auth/magic-link",
+    callback: "/api/auth/callback",
+    session: "/api/auth/session",
+    logout: "/api/auth/logout",
+  },
 });
 
 export const storageKeys = Object.freeze({
@@ -13,3 +19,7 @@ export const storageKeys = Object.freeze({
   session: 'mechpro-session',
   mutationQueue: 'mechpro-mutation-queue-v1',
 });
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
+}

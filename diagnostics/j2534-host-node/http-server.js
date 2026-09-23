@@ -26,9 +26,22 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ error: 'Not found' }));
     return;
   }
+  // Cap request bodies to guard the local bridge against unbounded memory use.
+  const MAX_BODY_BYTES = 256 * 1024;
   let body = '';
-  req.on('data', (chunk) => { body += chunk; });
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    body += chunk;
+    if (body.length > MAX_BODY_BYTES) {
+      aborted = true;
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request body too large' }));
+      req.destroy();
+    }
+  });
   req.on('end', () => {
+    if (aborted) return;
     try {
       const request = JSON.parse(body);
       const response = handleRequest(request);

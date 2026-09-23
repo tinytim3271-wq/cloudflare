@@ -15,9 +15,9 @@ by the app.
 | Public API | `/api/*` | Browser app, webhooks, desktop client | Route-specific |
 | Internal admin | `https://admin.yourcarguy806.com/` | Platform operators | Cloudflare Access |
 
-The current custom-domain Worker can continue to own
-`www.yourcarguy806.com`. It should route public pages and app shell requests to
-Pages assets, while handling `/api/*` directly in Workers.
+The current production routing keeps Pages on `www.yourcarguy806.com` and the
+Worker on `www.yourcarguy806.com/api/*`. Public pages and the app shell are Pages
+assets; `/api/*` is handled directly in Workers.
 
 ```mermaid
 flowchart LR

@@ -1,5 +1,7 @@
 import { PostHog } from 'posthog-node/edge';
+import { PostHog } from 'posthog-node';
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
+import { isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from './routing.mjs';
 import {
   ENTITY_TYPES,
   buildTaxReport,
@@ -21,13 +23,12 @@ import {
   hmacHex,
   verifyAccessJwt,
 } from './security.mjs';
+import { HttpError, json, parseJson, requestJson } from './http.mjs';
+import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+const APP_SESSION_COOKIE = 'mechpro_session';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
-const MUTATING_DIAGNOSTIC_PROCEDURES = new Set([
-  'clear_dtcs', 'clearDtcs', 'program_key', 'add_key', 'all_keys_lost',
-  'program_remote', 'erase_keys', 'flash', 'uds_write',
-]);
 
 function createPostHog(env) {
   const apiKey = String(env.POSTHOG_API_KEY || '').trim();
@@ -64,25 +65,76 @@ class HttpError extends Error {
   constructor(status, message) {
     super(message);
     this.status = status;
+let posthogClient = null;
+
+function getPostHog(env) {
+  const apiKey = String(env.POSTHOG_API_KEY || '').trim();
+  const host = String(env.POSTHOG_HOST || '').trim();
+  if (!apiKey) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_API_KEY variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_API_KEY is configured');
+    }
+    return null;
   }
-}
-
-function json(body, status = 200, headers = {}) {
-  return Response.json(body, { status, headers: { ...JSON_HEADERS, ...headers } });
-}
-
-function parseJson(value) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    throw new HttpError(400, 'Request body must be valid JSON');
+  if (!host) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_HOST variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_HOST is configured');
+    }
+    return null;
   }
+  if (!posthogClient) {
+    posthogClient = new PostHog(apiKey, {
+      host,
+      flushAt: 1,
+      flushInterval: 0,
+      enableExceptionAutocapture: true,
+    });
+  }
+  return posthogClient;
 }
 
-async function requestJson(request) {
-  const text = await request.text();
-  return text ? parseJson(text) : {};
+function capturePostHogEvent(env, context, event, properties = {}) {
+  const posthog = getPostHog(env);
+  if (!posthog) return;
+  posthog.capture({
+    distinctId: context.userId,
+    event,
+    properties,
+    groups: context.shopId ? { shop: context.shopId } : undefined,
+  });
 }
+
+// Recursively redact sensitive fields before persisting diagnostic audit events.
+const SENSITIVE_AUDIT_KEYS = new Set([
+  'pin', 'token', 'securitytoken', 'password', 'credential', 'secret',
+  'seed', 'authorizationtoken', 'capabilitytoken', 'privatekey',
+]);
+
+function redactSensitive(value) {
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      SENSITIVE_AUDIT_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : redactSensitive(item),
+    ]));
+  }
+  return value;
+}
+
+// Accept both snake_case and camelCase procedure names from clients.
+function normalizeProcedure(value) {
+  const raw = String(value || '').trim();
+  return ({
+    clearDtcs: 'clear_dtcs',
+    addKey: 'add_key',
+    allKeysLost: 'all_keys_lost',
+    programRemote: 'program_remote',
+    eraseKeys: 'erase_keys',
+    moduleFlash: 'module_flash',
+    flash: 'module_flash',
+  })[raw] || raw;
+}
+
 
 function allowedOrigin(request, env) {
   const origin = request.headers.get('Origin');
@@ -105,7 +157,100 @@ function withCors(response, request, env) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+async function hashValue(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function cookieEntries(request) {
+  const cookieHeader = request.headers.get('Cookie') || '';
+  return cookieHeader.split(';').map(entry => entry.trim()).filter(Boolean).reduce((map, entry) => {
+    const separator = entry.indexOf('=');
+    if (separator === -1) return map;
+    const key = entry.slice(0, separator).trim();
+    const value = decodeURIComponent(entry.slice(separator + 1).trim());
+    if (key) map[key] = value;
+    return map;
+  }, {});
+}
+
+function getCookieValue(request, name) {
+  return cookieEntries(request)[name] || '';
+}
+
+function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
+  return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function safeReturnPath(value, fallback = '/app') {
+  const candidate = String(value || '').trim();
+  if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return fallback;
+  try {
+    const parsed = new URL(candidate, 'https://mechpro.invalid');
+    return parsed.origin === 'https://mechpro.invalid' ? `${parsed.pathname}${parsed.search}${parsed.hash}` : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function resolveAppSession(request, env) {
+  const token = getCookieValue(request, APP_SESSION_COOKIE);
+  if (!token) return null;
+  const tokenHash = await hashValue(token);
+  const row = await env.DB.prepare(`
+    SELECT s.id AS session_id, s.user_id, s.expires_at, s.revoked_at, u.email, u.name, u.shop_id, u.role
+    FROM sessions s
+    INNER JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+  `).bind(tokenHash, new Date().toISOString()).first();
+  if (!row) return null;
+  await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date().toISOString(), row.session_id).run();
+  return {
+    shopId: String(row.shop_id),
+    role: String(row.role || 'admin'),
+    userId: String(row.user_id),
+    email: String(row.email || '').trim().toLowerCase(),
+    name: String(row.name || row.email || 'Customer'),
+    sessionId: String(row.session_id),
+  };
+}
+
+function platformAdminEmails(env) {
+  return String(env.ACCESS_ADMIN_EMAILS || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isPlatformAdminEmail(email, env) {
+  return platformAdminEmails(env).includes(String(email || '').trim().toLowerCase());
+}
+
 async function resolveContext(request, env) {
+  const appSession = await resolveAppSession(request, env);
+  if (appSession) {
+    // Magic-link / cookie sessions must honor ACCESS_ADMIN_EMAILS the same way Access JWT does.
+    if (isPlatformAdminEmail(appSession.email, env)) {
+      return {
+        shopId: 'platform',
+        role: 'super_admin',
+        userId: appSession.userId,
+        email: appSession.email,
+        name: appSession.name || 'Platform Administrator',
+        claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
+        sessionId: appSession.sessionId,
+      };
+    }
+    return {
+      shopId: appSession.shopId,
+      role: appSession.role,
+      userId: appSession.userId,
+      email: appSession.email,
+      name: appSession.name,
+      claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
+      sessionId: appSession.sessionId,
+    };
+  }
   let claims;
   if (env.DEV_AUTH_BYPASS === '1' && request.headers.get('X-MechPro-Dev-Email')) {
     claims = {
@@ -115,7 +260,7 @@ async function resolveContext(request, env) {
     };
   } else {
     const token = request.headers.get('Cf-Access-Jwt-Assertion');
-    if (!token) throw new HttpError(401, 'Cloudflare Access authentication is required');
+    if (!token) throw new HttpError(401, 'Authentication is required');
     try {
       claims = await verifyAccessJwt(token, env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
     } catch (error) {
@@ -124,8 +269,7 @@ async function resolveContext(request, env) {
   }
   const email = String(claims.email || '').trim().toLowerCase();
   if (!email) throw new HttpError(401, 'Cloudflare Access identity has no email claim');
-  const superAdmins = String(env.ACCESS_ADMIN_EMAILS || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean);
-  if (superAdmins.includes(email)) {
+  if (isPlatformAdminEmail(email, env)) {
     return { shopId: 'platform', role: 'super_admin', userId: String(claims.sub || email), email, name: claims.name || 'Platform Administrator', claims };
   }
   const mapping = await env.DB.prepare(
@@ -279,6 +423,10 @@ async function handleEntities(request, env, context, segments, analytics) {
     const saved = await putEntity(env, context, type, newId, body);
     if (type === 'employees') await syncAccessUser(env, context, saved);
     captureForContext(analytics, context, 'entity_created', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_created', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved, 201);
   }
   if (request.method === 'PUT' && id) {
@@ -295,6 +443,10 @@ async function handleEntities(request, env, context, segments, analytics) {
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
     if (type === 'employees') await syncAccessUser(env, context, saved);
     captureForContext(analytics, context, 'entity_updated', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_updated', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved);
   }
   if (request.method === 'DELETE' && id) {
@@ -329,6 +481,10 @@ async function handleEntities(request, env, context, segments, analytics) {
     }
     await env.DB.batch(statements);
     captureForContext(analytics, context, 'entity_deleted', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_deleted', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return new Response(null, { status: 204 });
   }
   throw new HttpError(405, 'Method not allowed');
@@ -400,27 +556,44 @@ async function handleCoverage(request, segments) {
 }
 
 async function handleDiagnostics(request, env, context, segments, analytics) {
+async function recordDiagnosticAudit(env, context, event) {
+  const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
+  await env.DB.prepare(
+    'INSERT INTO audit_log (id, shop_id, actor_id, actor_email, event_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(id, context.shopId, context.userId, context.email, JSON.stringify(redactSensitive(event)), new Date().toISOString()).run();
+  return id;
+}
+
+async function handleDiagnostics(request, env, context, segments) {
   const action = segments[1];
-  if (action === 'coverage') return handleCoverage(request, segments);
+  // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
+  if (action === 'coverage') return handleCoverage(request, segments);
+  if (action === 'autoauth') return handleAutoAuth(request, env, context);
   if (action === 'audit' && request.method === 'POST') {
-    const event = await requestJson(request);
-    ['pin', 'token', 'securityToken', 'password', 'credential'].forEach(key => {
-      if (key in event) event[key] = '[REDACTED]';
-    });
-    const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
-    await env.DB.prepare(
-      'INSERT INTO audit_log (id, shop_id, actor_id, actor_email, event_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(id, context.shopId, context.userId, context.email, JSON.stringify(event), new Date().toISOString()).run();
+    const id = await recordDiagnosticAudit(env, context, await requestJson(request));
     return json({ id, recorded: true }, 201);
   }
   if (action === 'authorize' && request.method === 'POST') {
     const body = await requestJson(request);
     const vin = String(body.vin || '').trim().toUpperCase();
-    const procedure = String(body.procedure || '').trim();
-    if (!vin || !procedure || !/^[A-HJ-NPR-Z0-9]{11,17}$/.test(vin)) throw new HttpError(400, 'vin and procedure are required and must be valid');
-    if (MUTATING_DIAGNOSTIC_PROCEDURES.has(procedure) && !['clear_dtcs', 'clearDtcs'].includes(procedure)) {
-      return json({ message: 'OEM AutoAuth integration is not configured.', authorized: false }, 501);
+    const procedure = normalizeProcedure(body.procedure);
+    const mode = PROGRAMMING_MODES.has(body.mode) ? body.mode : 'simulate';
+    if (!validVin(vin)) throw new HttpError(400, 'A valid 17-character VIN is required');
+    const spec = procedureSpec(procedure);
+    if (!spec) throw new HttpError(400, `Unsupported diagnostic procedure: ${body.procedure}`);
+    if (!env.DIAGNOSTICS_SIGNING_PRIVATE_KEY) throw new HttpError(503, 'Diagnostics capability signing is not configured');
+    // LIVE programming against real modules requires licensed OEM AutoAuth
+    // credentials provisioned for the shop. SIMULATE always drives the bench
+    // simulator only, so it is safe to authorize without OEM credentials.
+    if (mode === 'live' && spec.autoAuth) {
+      const login = await readAutoAuthLogin(env, context.shopId);
+      if (!login) {
+        return json({
+          authorized: false,
+          message: 'Live programming requires your shop to sign in to a vehicle security (AutoAuth) account. Connect it in OEM Diagnostics, or use Simulate mode.',
+        }, 501);
+      }
     }
     if (!['clear_dtcs', 'clearDtcs'].includes(procedure)) throw new HttpError(400, 'Unsupported procedure for local authorization');
     if (!env.DIAGNOSTICS_CAPABILITY_SECRET) throw new HttpError(503, 'Diagnostics capability signing is not configured');
@@ -432,6 +605,22 @@ async function handleDiagnostics(request, env, context, segments, analytics) {
     const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
     captureForContext(analytics, context, 'diagnostics_authorized', { procedure: 'clear_dtcs' });
     return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
+    const { token, payload } = await mintCapabilityToken(env, {
+      procedure, vin, shopId: context.shopId, mode, actor: context.userId,
+    });
+    await recordDiagnosticAudit(env, context, {
+      kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
+    });
+    capturePostHogEvent(env, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
+      actor_role: context.role,
+    });
+    return json({
+      authorized: true, procedure, scope: spec.klass, mode, vin, token,
+      expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId,
+    });
   }
   throw new HttpError(405, 'Method not allowed');
 }
@@ -465,6 +654,9 @@ async function handleOnboarding(request, env, context, analytics) {
   captureForContext(analytics, context, 'onboarding_started', {
     mode: resetAll ? 'all' : 'samples',
     removed_count: targets.length,
+  capturePostHogEvent(env, context, 'onboarding_started', {
+    reset_mode: resetAll ? 'all' : 'samples',
+    removed_record_count: targets.length,
   });
   return json({ startedAt, removed: targets.length, mode: resetAll ? 'all' : 'samples' });
 }
@@ -497,6 +689,9 @@ async function handlePayroll(request, env, context, analytics) {
   captureForContext(analytics, context, 'payroll_synced', {
     period,
     posted_entries: entries.length,
+  capturePostHogEvent(env, context, 'payroll_synced', {
+    posted_entry_count: entries.length,
+    actor_role: context.role,
   });
   return json({ period, postedEntries: entries.length });
 }
@@ -589,6 +784,56 @@ async function getIntegrationSecret(env, shopId, name) {
 }
 
 async function handleAgentPhoneConfigure(request, env, context, analytics) {
+async function deleteIntegrationSecret(env, shopId, name) {
+  await env.DB.prepare(
+    'DELETE FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
+  ).bind(shopId, name).run();
+}
+
+// Per-shop "vehicle security access" login (AutoAuth). Each shop connects its
+// own OEM/AutoAuth account; that login is what unlocks LIVE immobilizer/
+// programming/flash for the shop. Credentials are encrypted at rest in D1.
+const AUTOAUTH_SECRET_NAME = 'autoauth-login';
+
+async function readAutoAuthLogin(env, shopId) {
+  const raw = await getIntegrationSecret(env, shopId, AUTOAUTH_SECRET_NAME);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function handleAutoAuth(request, env, context) {
+  // Any shop-floor role can see connection status; only shop admins (or the
+  // platform) can connect/disconnect the shop's own security-access login.
+  if (request.method === 'GET') {
+    const login = await readAutoAuthLogin(env, context.shopId);
+    return json({
+      connected: Boolean(login),
+      provider: login?.provider || null,
+      accountId: login?.accountId || null,
+      connectedAt: login?.connectedAt || null,
+    });
+  }
+  requireRole(context, ['admin', 'super_admin']);
+  if (request.method === 'POST') {
+    const body = await requestJson(request);
+    const provider = String(body.provider || 'autoauth_stellantis').trim();
+    const accountId = String(body.accountId || '').trim();
+    const apiKey = String(body.apiKey || body.password || '').trim();
+    if (!accountId || !apiKey) throw new HttpError(400, 'accountId and apiKey are required to connect a vehicle security login');
+    const record = { provider, accountId, apiKey, connectedAt: new Date().toISOString(), connectedBy: context.userId };
+    await saveIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME, JSON.stringify(record));
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.connect', provider, accountId });
+    return json({ connected: true, provider, accountId, connectedAt: record.connectedAt }, 201);
+  }
+  if (request.method === 'DELETE') {
+    await deleteIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME);
+    await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.disconnect' });
+    return json({ connected: false });
+  }
+  throw new HttpError(405, 'Method not allowed');
+}
+
+async function handleAgentPhoneConfigure(request, env, context) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin']);
   const body = await requestJson(request);
@@ -753,6 +998,10 @@ async function handleCheckout(request, env, context, analytics) {
     amount: balance,
     currency: 'usd',
     processor: 'stripe',
+  capturePostHogEvent(env, context, 'payment_checkout_started', {
+    amount: balance,
+    currency: 'usd',
+    actor_role: context.role,
   });
   return json({ url: result.url, sessionId: result.id });
 }
@@ -788,11 +1037,11 @@ async function handleStripeWebhook(request, env, shopId, analytics) {
         invoiceNumber, amount, method: 'processor', processor: 'stripe',
         processorTransactionId: id, status: 'completed', receivedAt: new Date().toISOString(),
       });
-      analytics.client?.capture({
-        distinctId: analytics.distinctId,
-        event: 'payment_completed',
-        properties: { shop_id: shopId, amount, currency: 'usd', processor: 'stripe' },
-        groups: { shop: shopId },
+      capturePostHogEvent(env, { shopId, userId: `stripe-webhook:${shopId}` }, 'payment_completed', {
+        amount,
+        currency: 'usd',
+        processor: 'stripe',
+        $process_person_profile: false,
       });
     }
   }
@@ -821,7 +1070,7 @@ async function handleAdmin(request, env, context, segments, analytics) {
     return json(accounts.results.map(account => ({
       id: account.shop_id, shopId: account.shop_id, shopName: account.shop_name,
       ownerEmail: account.owner_email, ownerName: account.owner_name,
-      creditBalance: account.credit_balance, subscriptionStatus: account.subscription_status,
+      creditBalance: Number(account.credit_balance ?? 0), subscriptionStatus: account.subscription_status,
       subscriptionExpiresAt: account.subscription_expires_at, suspended: Boolean(account.suspended),
       createdAt: account.created_at, updatedAt: account.updated_at,
       users: users.results.filter(user => user.shop_id === account.shop_id).map(user => ({
@@ -836,30 +1085,65 @@ async function handleAdmin(request, env, context, segments, analytics) {
     const ownerName = String(body.ownerName || '').trim();
     const shopName = String(body.shopName || '').trim();
     const shopId = String(body.shopId || '').trim().toLowerCase();
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const accountMode = String(body.accountMode || body.subscriptionStatus || 'trialing').trim().toLowerCase();
+    const trialDaysRaw = body.trialDays;
+    const trialDays = trialDaysRaw === '' || trialDaysRaw === null || trialDaysRaw === undefined
+      ? null
+      : Math.max(0, Math.min(3650, Math.round(Number(trialDaysRaw))));
     if (!email || !ownerName || !shopName || !validShopId(shopId)) throw new HttpError(400, 'Owner name, email, shop name, and a valid shop ID are required');
+    if (!['trialing', 'active', 'comped'].includes(accountMode)) throw new HttpError(400, 'accountMode must be trialing, active, or comped');
+    if (trialDaysRaw !== null && trialDaysRaw !== undefined && trialDaysRaw !== '' && !Number.isFinite(trialDays)) {
+      throw new HttpError(400, 'trialDays must be a number of days (0 = no expiry)');
+    }
     const existing = await env.DB.prepare(
       'SELECT shop_id FROM accounts WHERE shop_id = ? UNION ALL SELECT shop_id FROM users WHERE email = ? COLLATE NOCASE LIMIT 1',
     ).bind(shopId, email).first();
     if (existing) throw new HttpError(409, 'An account already uses this shop ID or owner email');
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const subscriptionStatus = accountMode === 'active' ? 'active' : 'trialing';
+    let subscriptionExpiresAt = null;
+    if (accountMode !== 'active' && trialDays && trialDays > 0) {
+      subscriptionExpiresAt = new Date(now.getTime() + trialDays * 86400000).toISOString();
+    }
     await env.DB.batch([
       env.DB.prepare(`
-        INSERT INTO accounts (shop_id, shop_name, owner_email, owner_name, created_at, updated_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).bind(shopId, shopName, email, ownerName, now, now, context.userId),
+        INSERT INTO accounts (shop_id, shop_name, owner_email, owner_name, subscription_status, subscription_expires_at, created_at, updated_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(shopId, shopName, email, ownerName, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso, context.userId),
       env.DB.prepare(`
         INSERT INTO users (email, shop_id, role, name, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?, ?)
-      `).bind(email, shopId, ownerName, now, now),
+      `).bind(email, shopId, ownerName, nowIso, nowIso),
       env.DB.prepare(`
         INSERT INTO entities (shop_id, entity_type, entity_id, data_json, created_by, created_at, updated_at)
         VALUES (?, 'employees', ?, ?, ?, ?, ?)
       `).bind(shopId, `owner-${shopId}`, JSON.stringify({
         id: `owner-${shopId}`, shopId, name: ownerName, email, role: 'admin', title: 'Owner',
-        department: 'Administration', active: true, createdAt: now, updatedAt: now,
-      }), context.userId, now, now),
+        department: 'Administration', active: true, createdAt: nowIso, updatedAt: nowIso,
+      }), context.userId, nowIso, nowIso),
     ]);
-    captureForContext(analytics, context, 'account_created', { target_shop_id: shopId });
-    return json({ id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0, subscriptionStatus: 'active', createdAt: now, updatedAt: now }, 201);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
+        VALUES (?, ?, ?, 'America/Chicago', ?, ?, ?)
+      `).bind(shopId, shopName, shopId, subscriptionStatus, nowIso, nowIso),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
+        VALUES (?, ?, 'owner', 'active', ?, ?)
+      `).bind(shopId, email, nowIso, nowIso),
+      env.DB.prepare(`
+        INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+          current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+      `).bind(shopId, planId, subscriptionStatus, subscriptionExpiresAt, nowIso),
+    ]);
+    return json({
+      id: shopId, shopId, shopName, ownerEmail: email, ownerName, creditBalance: 0,
+      subscriptionStatus, subscriptionExpiresAt, planId, accountMode, trialDays,
+      createdAt: nowIso, updatedAt: nowIso,
+    }, 201);
   }
   const target = decodeURIComponent(segments[2] || '');
   const action = segments[3];
@@ -906,10 +1190,369 @@ async function handleAdmin(request, env, context, segments, analytics) {
     });
     return json({ shopId: target, suspended: body.suspended });
   }
+  if (request.method === 'POST' && action === 'subscription') {
+    if (!validShopId(target)) throw new HttpError(400, 'A valid shop ID is required');
+    const body = await requestJson(request);
+    const mode = String(body.mode || body.subscriptionStatus || '').trim().toLowerCase();
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const trialDays = body.trialDays === '' || body.trialDays === null || body.trialDays === undefined
+      ? null
+      : Math.max(0, Math.min(3650, Math.round(Number(body.trialDays))));
+    if (!['trialing', 'active', 'comped', 'extend'].includes(mode)) {
+      throw new HttpError(400, 'mode must be trialing, active, comped, or extend');
+    }
+    if (body.trialDays !== undefined && body.trialDays !== null && body.trialDays !== '' && !Number.isFinite(trialDays)) {
+      throw new HttpError(400, 'trialDays must be a number of days');
+    }
+    const account = await env.DB.prepare('SELECT * FROM accounts WHERE shop_id = ?').bind(target).first();
+    if (!account) throw new HttpError(404, 'Customer account not found');
+    const now = new Date();
+    const nowIso = now.toISOString();
+    let subscriptionStatus = String(account.subscription_status || 'trialing');
+    let subscriptionExpiresAt = account.subscription_expires_at || null;
+    if (mode === 'active') {
+      subscriptionStatus = 'active';
+      subscriptionExpiresAt = null;
+    } else if (mode === 'comped' || mode === 'trialing') {
+      subscriptionStatus = 'trialing';
+      subscriptionExpiresAt = trialDays && trialDays > 0
+        ? new Date(now.getTime() + trialDays * 86400000).toISOString()
+        : null;
+    } else if (mode === 'extend') {
+      subscriptionStatus = 'trialing';
+      const days = trialDays && trialDays > 0 ? trialDays : 30;
+      const base = subscriptionExpiresAt && new Date(subscriptionExpiresAt).getTime() > now.getTime()
+        ? new Date(subscriptionExpiresAt)
+        : now;
+      subscriptionExpiresAt = new Date(base.getTime() + days * 86400000).toISOString();
+    }
+    await env.DB.prepare(
+      'UPDATE accounts SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE shop_id = ?',
+    ).bind(subscriptionStatus, subscriptionExpiresAt, nowIso, target).run();
+    await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind(subscriptionStatus, nowIso, target).run();
+    await env.DB.prepare(`
+      INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = excluded.status,
+        current_period_end = excluded.current_period_end, updated_at = excluded.updated_at
+    `).bind(target, planId, subscriptionStatus, subscriptionExpiresAt, nowIso, nowIso).run();
+    return json({
+      shopId: target,
+      subscriptionStatus,
+      subscriptionExpiresAt,
+      planId,
+      mode,
+    });
+  }
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function route(request, env, analytics) {
+async function ensureSaasUser(env, email, name) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized) throw new HttpError(400, 'A valid email is required');
+  const existing = await env.DB.prepare(
+    'SELECT id, email, shop_id, role, name, enabled FROM users WHERE email = ? COLLATE NOCASE',
+  ).bind(normalized).first();
+  if (existing) {
+    if (!existing.id) {
+      const userId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      await env.DB.prepare('UPDATE users SET id = ?, updated_at = ? WHERE email = ? COLLATE NOCASE')
+        .bind(userId, now, normalized).run();
+      existing.id = userId;
+    }
+    return existing;
+  }
+  const userId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const shopId = `shop-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  const ownerName = String(name || normalized.split('@')[0] || 'Owner').trim();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO shops (id, name, slug, timezone, billing_status, created_at, updated_at)
+      VALUES (?, ?, ?, 'America/Chicago', 'trialing', ?, ?)
+    `).bind(shopId, `${ownerName}'s shop`, shopId.toLowerCase(), now, now),
+    env.DB.prepare(`
+      INSERT INTO shop_memberships (shop_id, user_id, role, status, created_at, updated_at)
+      VALUES (?, ?, 'owner', 'active', ?, ?)
+    `).bind(shopId, userId, now, now),
+    env.DB.prepare(`
+      INSERT INTO users (id, email, shop_id, role, name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, 'admin', ?, 1, ?, ?)
+    `).bind(userId, normalized, shopId, ownerName, now, now),
+  ]);
+  return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
+}
+
+async function handleMagicLink(request, env) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  const contentType = request.headers.get('Content-Type') || '';
+  const raw = await request.text();
+  let body = {};
+  if (raw) {
+    if (contentType.includes('application/json')) body = parseJson(raw);
+    else if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+      body = Object.fromEntries(new URLSearchParams(raw).entries());
+    }
+  }
+  const email = String(body.email || '').trim().toLowerCase();
+  const returnTo = safeReturnPath(body.returnTo || body.return_to || body.redirectTo);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
+  const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
+  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
+    throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
+  }
+  const recent = await env.DB.prepare(
+    "SELECT created_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1",
+  ).bind(email).first();
+  if (recent?.created_at && Date.now() - new Date(recent.created_at).getTime() < 15 * 60 * 1000) {
+    throw new HttpError(429, 'Too many sign-in requests. Try again later.');
+  }
+  const token = crypto.randomUUID().replaceAll('-', '');
+  const tokenHash = await hashValue(token);
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO login_tokens (id, email, token_hash, return_to, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET
+      token_hash = excluded.token_hash,
+      return_to = excluded.return_to,
+      expires_at = excluded.expires_at,
+      used_at = NULL,
+      created_at = excluded.created_at
+  `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
+  const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
+  loginUrl.searchParams.set('token', token);
+  if (env.AUTH_EMAIL_WEBHOOK) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
+    const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
+    });
+    if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+  }
+  const payload = {
+    ok: true,
+    sent: true,
+    email,
+    returnTo,
+    message: exposeLoginLink
+      ? 'Open the sign-in link to continue. Email delivery is not configured yet.'
+      : 'If the email matches an account, a sign-in link was sent.',
+  };
+  if (exposeLoginLink) payload.loginUrl = loginUrl.toString();
+  return json(payload);
+}
+
+async function handleAuthCallback(request, env) {
+  const url = new URL(request.url);
+  const token = String(url.searchParams.get('token') || '').trim();
+  if (!token) throw new HttpError(400, 'Missing login token');
+  const tokenHash = await hashValue(token);
+  const loginToken = await env.DB.prepare(
+    'SELECT id, email, return_to, expires_at, used_at FROM login_tokens WHERE token_hash = ? LIMIT 1',
+  ).bind(tokenHash).first();
+  if (!loginToken) throw new HttpError(401, 'The sign-in link is invalid or expired');
+  if (loginToken.used_at || new Date(loginToken.expires_at).getTime() <= Date.now()) {
+    throw new HttpError(401, 'The sign-in link has expired');
+  }
+  const email = String(loginToken.email || '').trim().toLowerCase();
+  const user = await ensureSaasUser(env, email, email.split('@')[0]);
+  const sessionToken = crypto.randomUUID().replaceAll('-', '');
+  const sessionId = crypto.randomUUID();
+  const sessionHash = await hashValue(sessionToken);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()),
+    env.DB.prepare('UPDATE login_tokens SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), loginToken.id),
+  ]);
+  const posthog = getPostHog(env);
+  posthog?.identify({
+    distinctId: String(user.id),
+    properties: {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      shop_id: user.shop_id,
+    },
+  });
+  capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
+    auth_method: 'magic_link',
+    actor_role: user.role,
+  });
+  const redirect = new URL(safeReturnPath(loginToken.return_to), url.origin);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: redirect.toString(),
+      'Set-Cookie': sessionCookieHeader(sessionToken),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function handleLogout(request, env) {
+  const context = await resolveContext(request, env);
+  const sessionId = context.sessionId || '';
+  if (sessionId) {
+    await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
+  }
+  capturePostHogEvent(env, context, 'user_logged_out', {
+    actor_role: context.role,
+  });
+  return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
+  });
+}
+
+async function handleAuth(request, env, segments) {
+  const action = segments[1] || '';
+  if (action === 'magic-link') return handleMagicLink(request, env);
+  if (action === 'callback') return handleAuthCallback(request, env);
+  if (action === 'logout') return handleLogout(request, env);
+  if (action === 'session') {
+    const context = await resolveContext(request, env);
+    return handleAuthSession(context);
+  }
+  throw new HttpError(404, 'Not found');
+}
+
+async function handleBilling(request, env, context, segments) {
+  const action = segments[1] || '';
+  if (action === 'checkout' && request.method === 'POST') {
+    const body = await requestJson(request);
+    const planId = String(body.planId || 'starter').trim() || 'starter';
+    if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
+    if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
+    const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
+    if (!plan) throw new HttpError(404, 'Billing plan not found');
+    const stripeKey = env.STRIPE_SECRET_KEY || '';
+    const priceId = String(plan.stripe_price_id || '').trim();
+    if (stripeKey && priceId && !priceId.startsWith('price_placeholder') && !priceId.startsWith('price_starter') && !priceId.startsWith('price_growth')) {
+      const origin = new URL(request.url).origin;
+      const successUrl = String(body.successUrl || `${origin}/?billing=success`);
+      const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
+      const params = new URLSearchParams({
+        mode: 'subscription',
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: context.shopId,
+        'line_items[0][price]': priceId,
+        'line_items[0][quantity]': '1',
+        'metadata[shopId]': context.shopId,
+        'metadata[planId]': plan.id,
+      });
+      const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: { Authorization: `Basic ${btoa(`${stripeKey}:`)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params,
+      });
+      const session = await response.json().catch(() => ({}));
+      if (!response.ok || !session.url) throw new HttpError(502, session.error?.message || 'Stripe checkout could not be created');
+      capturePostHogEvent(env, context, 'billing_checkout_started', {
+        plan_id: plan.id,
+        provider: 'stripe',
+        actor_role: context.role,
+      });
+      return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
+    }
+    throw new HttpError(503, 'Billing is not configured for this plan');
+  }
+  if (action === 'portal' && request.method === 'POST') {
+    if (!context?.shopId) throw new HttpError(401, 'Sign in to manage billing');
+    const customer = await env.DB.prepare(
+      'SELECT stripe_customer_id FROM billing_customers WHERE shop_id = ?',
+    ).bind(context.shopId).first();
+    if (!customer?.stripe_customer_id || !env.STRIPE_SECRET_KEY) {
+      throw new HttpError(503, 'Stripe billing is not configured for this shop');
+    }
+    const origin = new URL(request.url).origin;
+    const params = new URLSearchParams({
+      customer: customer.stripe_customer_id,
+      return_url: `${origin}/app`,
+    });
+    const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.url) throw new HttpError(502, 'Stripe billing portal could not be created');
+    return json({ ok: true, shopId: context.shopId, url: result.url, provider: 'stripe' });
+  }
+  if (action === 'status' && request.method === 'GET') {
+    if (!context?.shopId) throw new HttpError(401, 'Sign in to view billing');
+    const account = await env.DB.prepare(
+      'SELECT subscription_status, subscription_expires_at, suspended FROM accounts WHERE shop_id = ?',
+    ).bind(context.shopId).first();
+    const subscription = await env.DB.prepare(
+      'SELECT * FROM subscriptions WHERE shop_id = ? LIMIT 1',
+    ).bind(context.shopId).first().catch(() => null);
+    const expiresAt = account?.subscription_expires_at || subscription?.current_period_end || null;
+    const expired = Boolean(expiresAt && new Date(expiresAt).getTime() <= Date.now());
+    const status = Number(account?.suspended) === 1
+      ? 'suspended'
+      : expired
+        ? 'expired'
+        : String(account?.subscription_status || subscription?.status || 'trialing');
+    return json({
+      ok: true,
+      shopId: context.shopId,
+      active: Number(account?.suspended) !== 1 && ['trialing', 'active'].includes(status) && !expired,
+      status,
+      planId: subscription ? String(subscription.plan_id || '') : null,
+      currentPeriodEnd: expiresAt,
+    });
+  }
+  if (action === 'webhook' && request.method === 'POST') {
+    const payload = await request.text();
+    const signature = request.headers.get('Stripe-Signature') || '';
+    const secret = env.STRIPE_BILLING_WEBHOOK_SECRET || '';
+    if (!secret || !signature) throw new HttpError(400, 'Invalid Stripe signature');
+    const fields = signature.split(',').map(item => item.trim().split('=', 2));
+    const timestamp = fields.find(([key]) => key === 't')?.[1];
+    const signatures = fields.filter(([key]) => key === 'v1').map(([, value]) => value);
+    if (!timestamp || !/^\d+$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
+      throw new HttpError(400, 'Invalid Stripe signature');
+    }
+    const expected = await hmacHex(secret, `${timestamp}.${payload}`);
+    if (!signatures.some(value => constantTimeEqual(value, expected))) throw new HttpError(400, 'Invalid Stripe signature');
+    const event = parseJson(payload);
+    if (event?.type === 'checkout.session.completed') {
+      const shopId = event.data?.object?.client_reference_id || event.data?.object?.metadata?.shopId;
+      const planId = event.data?.object?.metadata?.planId || 'starter';
+      if (shopId) {
+        const nowIso = new Date().toISOString();
+        await env.DB.prepare(
+          'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
+        ).bind('active', nowIso, shopId).run();
+        await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, shopId).run();
+        await env.DB.prepare(`
+          INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
+          VALUES (?, ?, 'active', NULL, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
+            current_period_end = NULL, updated_at = excluded.updated_at
+        `).bind(shopId, planId, nowIso, nowIso).run();
+        capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_activated', {
+          plan_id: planId,
+          provider: 'stripe',
+          $process_person_profile: false,
+        });
+      }
+    }
+    return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);
+  }
+  throw new HttpError(404, 'Not found');
+}
+
+async function route(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
   const segments = path.split('/').filter(Boolean);
@@ -928,8 +1571,14 @@ async function route(request, env, analytics) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
-  if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
+  if (segments[0] === 'auth') return handleAuth(request, env, segments);
+  if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''));
   if (segments[0] === 'agentphone' && segments[1] === 'webhook') return handleAgentPhoneWebhook(request, env, decodeURIComponent(segments[2] || ''));
+  if (segments[0] === 'billing') {
+    const action = segments[1] || '';
+    const context = action === 'webhook' ? null : await resolveContext(request, env);
+    return handleBilling(request, env, context, segments);
+  }
   const context = await resolveContext(request, env);
   analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
@@ -949,18 +1598,35 @@ async function route(request, env, analytics) {
   throw new HttpError(404, 'Not found');
 }
 
-function isApiRequest(request) {
-  const path = new URL(request.url).pathname;
-  return path === '/api' || path.startsWith('/api/');
+async function servePublicDownload(request, env) {
+  if (!['GET', 'HEAD'].includes(request.method)) return null;
+  const key = publicDownloadObjectKey(new URL(request.url).pathname);
+  if (!key || !env.FILES) return null;
+  const object = request.method === 'HEAD'
+    ? await env.FILES.head(key)
+    : await env.FILES.get(key);
+  if (!object) return null;
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('ETag', object.httpEtag);
+  headers.set('Cache-Control', 'public, max-age=300');
+  headers.set('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
+  if (!headers.has('Content-Type')) {
+    if (key.endsWith('.apk')) headers.set('Content-Type', 'application/vnd.android.package-archive');
+    else if (key.endsWith('.zip')) headers.set('Content-Type', 'application/zip');
+    else headers.set('Content-Type', 'application/octet-stream');
+  }
+  if (request.method === 'HEAD') {
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(object.body, { status: 200, headers });
 }
 
 async function proxyPagesRequest(request, env) {
   if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'Method not allowed');
-  const incoming = new URL(request.url);
-  const pagesOrigin = String(env.PAGES_ORIGIN || 'https://mechpro-dispatch.pages.dev').replace(/\/$/, '');
-  const target = new URL(`${incoming.pathname}${incoming.search}`, pagesOrigin);
+  const target = pagesProxyUrl(request.url, env.PAGES_ORIGIN);
   const headers = new Headers(request.headers);
-  headers.set('Host', target.host);
+  headers.set('Host', new URL(target).host);
   const response = await fetch(new Request(target, {
     method: request.method,
     headers,
@@ -976,23 +1642,21 @@ async function proxyPagesRequest(request, env) {
 }
 
 export default {
-  async fetch(request, env, ctx) {
-    const analytics = {
-      client: null,
-      distinctId: request.headers.get('X-PostHog-Distinct-ID') || crypto.randomUUID(),
-      sessionId: request.headers.get('X-PostHog-Session-ID'),
-    };
+  async fetch(request, env) {
+    const posthog = getPostHog(env);
     try {
-      analytics.client = createPostHog(env);
-      if (!isApiRequest(request)) return proxyPagesRequest(request, env);
-      return withCors(await route(request, env, analytics), request, env);
+      if (!isApiRequest(request)) {
+        const download = await servePublicDownload(request, env);
+        if (download) return download;
+        return proxyPagesRequest(request, env);
+      }
+      return withCors(await route(request, env), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      analytics.client?.captureException(error, analytics.distinctId, {
-        request_method: request.method,
-        request_path: new URL(request.url).pathname,
-        status_code: status,
-        ...(analytics.sessionId ? { session_id: analytics.sessionId } : {}),
+      posthog?.captureException(error, undefined, {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        status,
       });
       console.error(JSON.stringify({
         message: 'request failed',
@@ -1001,10 +1665,19 @@ export default {
         status,
         error: error instanceof Error ? error.message : String(error),
       }));
-      return withCors(json({ message: status === 500 ? 'Internal error' : error.message }, status), request, env);
+      return withCors(json({
+        message: status === 500
+          ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
+          : error.message,
+      }, status), request, env);
     } finally {
-      ctx.waitUntil(Promise.resolve(analytics.client?.shutdown()).catch(
-        (e) => console.error('PostHog shutdown failed', e)));
+      if (posthog) {
+        try {
+          await posthog.flush();
+        } catch (error) {
+          console.error('PostHog flush failed', error);
+        }
+      }
     }
   },
 };

@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Runtime.Versioning;
 
 namespace MechPro.J2534.Core;
 
@@ -38,9 +39,14 @@ public static class AdapterRegistry
 
     static List<AdapterInfo> EnumerateHardwareAdapters()
     {
-        var adapters = new List<AdapterInfo>();
-        if (!OperatingSystem.IsWindows()) return adapters;
+        if (!OperatingSystem.IsWindows()) return [];
+        return EnumerateHardwareAdaptersWindows();
+    }
 
+    [SupportedOSPlatform("windows")]
+    static List<AdapterInfo> EnumerateHardwareAdaptersWindows()
+    {
+        var adapters = new List<AdapterInfo>();
         var seenDlls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (root, key) in OpenRegistryRoots())
         {
@@ -65,6 +71,7 @@ public static class AdapterRegistry
         return adapters;
     }
 
+    [SupportedOSPlatform("windows")]
     static IEnumerable<(string Root, RegistryKey Key)> OpenRegistryRoots()
     {
         var roots = new List<(string Root, RegistryKey Key)>();
@@ -110,6 +117,7 @@ public static class AdapterRegistry
         return roots;
     }
 
+    [SupportedOSPlatform("windows")]
     static IEnumerable<AdapterInfo> ReadAdaptersFromKey(RegistryKey key, string root)
     {
         foreach (var subKeyName in key.GetSubKeyNames())
@@ -138,6 +146,7 @@ public static class AdapterRegistry
         }
     }
 
+    [SupportedOSPlatform("windows")]
     static string? ReadRegistryString(RegistryKey? key, string name)
     {
         if (key is null) return null;
@@ -150,6 +159,7 @@ public static class AdapterRegistry
         };
     }
 
+    [SupportedOSPlatform("windows")]
     static string[] ReadProtocols(RegistryKey? sub)
     {
         if (sub is null) return ["CAN", "ISO15765"];
@@ -162,6 +172,7 @@ public static class AdapterRegistry
         return protocols.Count > 0 ? protocols.ToArray() : ["CAN", "ISO15765"];
     }
 
+    [SupportedOSPlatform("windows")]
     static bool ReadFlag(RegistryKey sub, string name)
     {
         var value = sub.GetValue(name);

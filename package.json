@@ -6,36 +6,47 @@
   "author": "MechPro",
   "license": "UNLICENSED",
   "scripts": {
+    "dev": "npm run dev:web",
+    "build": "npm run build:web",
+    "lint": "eslint \"src/main.js\" \"src/shared/**/*.js\" \"src/modules/**/*.js\" \"src/runtime/home.js\" \"src/**/*.test.mjs\"",
+    "test": "npm run test:modules",
     "sync:config": "node scripts/sync-frontend-config.mjs",
-    "test:config": "node scripts/sync-frontend-config.test.mjs",
+    "test:config": "node scripts/sync-frontend-config.test.mjs && node scripts/resolve-r2-upload-env.test.mjs",
     "build:web": "node scripts/sync-frontend-config.mjs && node scripts/build-web.mjs",
     "dev:web": "node scripts/build-web.mjs --watch",
     "copy:web": "node scripts/copy-web.mjs",
     "dev:worker": "wrangler dev",
     "test:worker": "node --test worker/test/*.test.mjs",
+    "test:home": "node --test src/runtime/home.test.mjs",
     "typegen:worker": "wrangler types worker-configuration.d.ts",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy:worker": "wrangler deploy",
     "stage:pages": "node scripts/stage-pages.mjs",
-    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch",
+    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=production",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
-    "validate": "npm run build:web && npm run test:config && npm run validate:worker && npm run test:j2534",
+    "validate": "npm run build:web && npm run test:config && npm run test:modules && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",
     "open:android": "npx cap open android",
     "build:android": "npm run sync",
     "desktop": "electron .",
-    "build:j2534": "bash diagnostics/j2534-service/scripts/publish-win-x64.sh",
-    "build:windows": "npm run build:web && npm run build:j2534 && electron-builder --win nsis --publish never",
-    "build:windows:zip": "npm run build:web && npm run build:j2534 && electron-builder --win zip --publish never",
+    "build:j2534": "node scripts/build-j2534.mjs",
+    "build:windows": "npm run build:web && npm run build:j2534 && node scripts/bake-diagnostics-secret.mjs && electron-builder --win nsis --publish never",
+    "build:windows:zip": "npm run build:web && npm run build:j2534 && node scripts/bake-diagnostics-secret.mjs && electron-builder --win zip --publish never",
     "test:j2534": "node diagnostics/j2534-host-node/test/host.test.js",
-    "merge:open-prs": "bash scripts/merge-open-prs.sh"
+    "merge:open-prs": "bash scripts/merge-open-prs.sh",
+    "test:html": "node --test src/shared/html.test.mjs",
+    "test:chat": "node --test src/modules/chat/utils.test.mjs",
+    "test:storage": "node --test src/modules/storage.test.mjs",
+    "test:desktop": "node --test desktop/start-url.test.js desktop/diagnostics-secrets.test.js",
+    "test:modules": "npm run test:home && npm run test:html && npm run test:chat && npm run test:storage && npm run test:desktop"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
     "electron": "^41.10.3",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.2",
+    "eslint": "^10.10.0",
     "wrangler": "^4.130.0"
   },
   "build": {
@@ -75,6 +86,13 @@
         "filter": [
           "J2534.Host.exe"
         ]
+      },
+      {
+        "from": "desktop/packaged-secrets",
+        "to": "diagnostics-secrets",
+        "filter": [
+          "capability-secret.txt"
+        ]
       }
     ],
     "win": {
@@ -100,8 +118,16 @@
     "@capacitor/core": "^7.0.0",
     "posthog-node": "^5.52.4"
   },
+  "overrides": {
+    "rimraf": "^4.0.1",
+    "glob": "^7.2.3"
+  },
   "allowScripts": {
     "electron@41.10.7": true,
-    "electron-winstaller@5.4.0": true
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.28.2": true
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MechPro Login</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: linear-gradient(135deg, #0f172a, #111827); color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; }
+      .card { width: min(92vw, 440px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); padding: 32px; border-radius: 18px; }
+      input, button { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(148,163,184,.35); margin-top: 10px; }
+      button { background: #67e8f9; border: none; color: #082f49; font-weight: 700; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: wait; }
+      a { color: #7dd3fc; }
+      .error { color: #fecaca; margin-top: 12px; }
+      .hint { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
+      label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
+      label + input { margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Sign in to MechPro</h1>
+      <p class="hint">Enter your work email. We will open a one-time sign-in link for this browser.</p>
+      <form id="login-form">
+        <label for="email">Work email</label>
+        <input id="email" type="email" name="email" placeholder="name@shop.com" autocomplete="username" required />
+        <button type="submit">Continue securely</button>
+      </form>
+      <p id="error" class="error" hidden></p>
+      <p>Need a shop? <a href="/signup">Create your account</a></p>
+    </div>
+    <script>
+      const form = document.querySelector('#login-form');
+      const errorEl = document.querySelector('#error');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        errorEl.hidden = true;
+        const button = form.querySelector('button');
+        const email = String(new FormData(form).get('email') || '').trim().toLowerCase();
+        button.disabled = true;
+        try {
+          const response = await fetch('/api/auth/magic-link', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, returnTo: '/' }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.message || 'Could not start sign-in');
+          const loginUrl = payload.loginUrl || payload.login_url || payload.url;
+          if (loginUrl) {
+            location.assign(loginUrl);
+            return;
+          }
+          throw new Error(payload.message || 'Check your email for a sign-in link.');
+        } catch (error) {
+          const raw = String(error?.message || '');
+          errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)
+            ? 'Could not reach MechPro sign-in. Use the latest Windows installer from /downloads, or open https://www.yourcarguy806.com/login in a browser.'
+            : (raw || 'Sign-in failed.');
+          errorEl.hidden = false;
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

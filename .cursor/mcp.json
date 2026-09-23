@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "dev-stack": {
+      "url": "https://stack.mcp.cloudflare.com/mcp"
+    }
+  }
+}

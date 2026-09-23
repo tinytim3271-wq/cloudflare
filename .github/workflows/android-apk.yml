@@ -16,6 +16,7 @@ on:
       - 'theme.css'
       - 'service-worker.js'
       - 'manifest.webmanifest'
+      - 'diagnostics-ui.js'
       - 'assets/**'
   push:
     branches: [main]
@@ -33,7 +34,12 @@ on:
       - 'theme.css'
       - 'service-worker.js'
       - 'manifest.webmanifest'
+      - 'diagnostics-ui.js'
       - 'assets/**'
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -41,6 +47,7 @@ permissions:
 jobs:
   assemble-debug:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +64,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - run: npm ci
 
@@ -71,6 +80,13 @@ jobs:
 
       - name: Verify APK artifact
         run: test -f android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Smoke test APK package
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -39,6 +39,7 @@ function procedureLabel(key) {
     all_keys_lost: 'All keys lost',
     program_remote: 'Program remote',
     erase_keys: 'Erase / relearn keys',
+    module_flash: 'Flash / reprogram module',
   })[key] || key;
 }
 
@@ -121,9 +122,83 @@ function normalizeOemAdapter(adapter) {
   };
 }
 
+function formatCommEntry(entry) {
   const time = new Date(entry.timestamp).toLocaleTimeString();
   const dir = entry.direction === 'tx' ? 'TX' : 'RX';
   return `[${time}] ${dir} ${entry.address} ${entry.data} — ${entry.description}`;
+}
+
+function friendlyOemError(error) {
+  const message = String(error?.message || error || 'Diagnostic operation failed');
+  if (/MECHPRO_DIAG_CAPABILITY_SECRET|DIAGNOSTICS_CAPABILITY_SECRET|capability secret/i.test(message)) {
+    return `${message} Reinstall MechPro Desktop from Downloads after CI rebuilds the Windows installer with the shop API secret.`;
+  }
+  if (/did not become ready|host script not found|J2534 RPC timeout/i.test(message)) {
+    return `${message} Confirm J2534.Host.exe is present, vendor drivers are installed, and antivirus is not blocking the diagnostic host.`;
+  }
+  return message;
+}
+
+const KEY_PROCEDURES = ['add_key', 'all_keys_lost', 'program_remote', 'erase_keys'];
+
+function oemSecurityLoginCard(diag) {
+  const auth = diag.autoAuth || {};
+  if (auth.connected) {
+    const since = auth.connectedAt ? ` · since ${new Date(auth.connectedAt).toLocaleDateString()}` : '';
+    return `<section class="oem-panel oem-panel-wide oem-security-login">
+        <h3>${icon('shield-check', 16)} Vehicle security access (this shop's login)</h3>
+        <div class="messaging-status ready">${icon('circle-check', 17)}<div><strong>Connected</strong><span>${escapeHtml(auth.provider || 'AutoAuth')} · ${escapeHtml(auth.accountId || '')}${escapeHtml(since)}</span></div></div>
+        <div class="ledger-note">${icon('info', 15)} Live immobilizer, key programming, and module flashing are unlocked for this shop using your account.</div>
+        <div class="ops-actions"><button class="secondary danger" id="oem-autoauth-disconnect">${icon('log-out', 14)} Disconnect account</button></div>
+      </section>`;
+  }
+  return `<section class="oem-panel oem-panel-wide oem-security-login">
+      <h3>${icon('shield-check', 16)} Vehicle security access (this shop's login)</h3>
+      <div class="messaging-status idle">${icon('lock', 17)}<div><strong>Not connected</strong><span>Sign in with your shop's vehicle security (AutoAuth) account to enable live programming.</span></div></div>
+      <form id="oem-autoauth-form" class="form-grid">
+        <label>Provider<select name="provider"><option value="autoauth_stellantis">Stellantis AutoAuth</option><option value="autoauth_generic">Other AutoAuth</option></select></label>
+        <label>Account ID / username<input name="accountId" autocomplete="off" required /></label>
+        <label>API key / password<input name="apiKey" type="password" autocomplete="off" required /></label>
+        <button class="primary" type="submit">${icon('log-in', 14)} Connect account</button>
+      </form>`;
+}
+
+function oemProgrammingPanel(diag, coverage, vehicle, status) {
+  const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
+  const security = diag.security || {};
+  const keyProcs = (coverage?.procedures || []).filter((p) => KEY_PROCEDURES.includes(p.key) && p.supported);
+  const ecus = vehicle?.ecus || [];
+  const targetOptions = (ecus.length ? ecus : [{ logicalAddress: '0x7E1', name: 'ECM' }])
+    .map((e) => `<option value="${escapeHtml(e.logicalAddress || '0x7E1')}">${escapeHtml(e.name || e.logicalAddress)}</option>`).join('');
+  const progress = Number(diag.flashProgress || 0);
+  const result = diag.programmingResult;
+  return `<section class="oem-panel oem-panel-wide oem-programming">
+      <h3>${icon('key-round', 16)} Programming &amp; flashing</h3>
+      <div class="oem-mode-toggle accounting-tabs">
+        <button class="tab ${mode === 'simulate' ? 'active' : ''}" data-prog-mode="simulate">Simulate (bench)</button>
+        <button class="tab ${mode === 'live' ? 'active' : ''}" data-prog-mode="live">Live (AutoAuth)</button>
+      </div>
+      <div class="ledger-note">${icon('shield-alert', 15)} ${mode === 'live'
+        ? 'LIVE mode drives real vehicle modules and requires shop AutoAuth credentials. Confirm VIN, a regulated 12V+ supply, and correct ignition state before proceeding.'
+        : 'SIMULATE mode exercises the bench simulator only — safe for training and verification.'}</div>
+      <div class="ops-actions">
+        <button class="secondary" id="oem-sec-immo" ${status.connected ? '' : 'disabled'}>${icon('lock-open', 14)} Unlock immobilizer</button>
+        <button class="secondary" id="oem-sec-flash" ${status.connected ? '' : 'disabled'}>${icon('lock-open', 14)} Unlock programming</button>
+        <span class="muted">${security.scope ? `Security unlocked: ${escapeHtml(security.scope)}` : 'Locked'}</span>
+      </div>
+      <div class="oem-prog-actions ops-actions">
+        ${keyProcs.length
+          ? keyProcs.map((p) => `<button class="secondary" data-prog-key="${escapeHtml(p.key)}" ${status.connected ? '' : 'disabled'}>${icon('key', 14)} ${escapeHtml(p.label)}</button>`).join('')
+          : '<p class="muted">No key procedures published for this platform.</p>'}
+      </div>
+      <div class="oem-flash">
+        <label>Module<select id="oem-flash-target">${targetOptions}</select></label>
+        <label>Firmware<input type="file" id="oem-flash-file" accept=".bin,.cal,.flash,.s19,.hex,.frf" /></label>
+        <button class="primary danger" id="oem-flash-run" ${status.connected ? '' : 'disabled'}>${icon('cpu', 14)} Flash module</button>
+        ${progress > 0 ? `<div class="oem-progress"><div class="oem-progress-bar" style="width:${progress}%"></div><span>${progress}%</span></div>` : ''}
+      </div>
+      ${result ? `<div class="messaging-status ready">${icon('circle-check', 15)}<div><strong>${escapeHtml(result.title)}</strong><span>${escapeHtml(result.detail)}</span></div></div>` : ''}
+    </section>`;
 }
 
 function oemDiagnosticsView() {
@@ -195,6 +270,8 @@ function oemDiagnosticsView() {
             <button class="secondary danger" id="oem-clear-dtcs" ${status.connected ? '' : 'disabled'}>${icon('eraser', 14)} Clear DTCs</button>
           </div>
         </section>
+        ${oemSecurityLoginCard(diag)}
+        ${oemProgrammingPanel(diag, coverage, vehicle, status)}
         <section class="oem-panel oem-panel-wide">
           <h3>${icon('radio', 16)} Communication log</h3>
           <div class="ops-actions">
@@ -297,25 +374,142 @@ async function oemPollLog() {
   });
 }
 
+async function oemLoadAutoAuth() {
+  try {
+    const auth = await apiFetch('/diagnostics/autoauth');
+    saveOemDiagState({ autoAuth: auth });
+    return auth;
+  } catch {
+    return null; // offline / unauthenticated — treat as not connected
+  }
+}
+
+async function oemConnectAutoAuth(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const auth = await apiFetch('/diagnostics/autoauth', {
+    method: 'POST',
+    body: JSON.stringify({ provider: data.provider, accountId: data.accountId, apiKey: data.apiKey }),
+  });
+  saveOemDiagState({
+    autoAuth: { connected: true, provider: auth.provider, accountId: auth.accountId, connectedAt: auth.connectedAt },
+    lastError: null,
+  });
+  toast('Vehicle security account connected');
+}
+
+async function oemDisconnectAutoAuth() {
+  await apiFetch('/diagnostics/autoauth', { method: 'DELETE' });
+  saveOemDiagState({ autoAuth: { connected: false }, programmingMode: 'simulate' });
+  toast('Vehicle security account disconnected');
+}
+
+async function oemAuthorize(procedure) {
+  const diag = loadOemDiagState();
+  const vin = diag.vehicleIdentification?.vin;
+  if (!vin) throw new Error('Identify the vehicle before authorizing a procedure');
+  const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
+  const auth = await apiFetch('/diagnostics/authorize', {
+    method: 'POST',
+    body: JSON.stringify({ vin, procedure, mode }),
+  });
+  if (!auth?.authorized || !auth.token) throw new Error(auth?.message || 'Authorization denied');
+  return { token: auth.token, mode, vin };
+}
+
+async function oemAudit(event) {
+  try { await apiFetch('/diagnostics/audit', { method: 'POST', body: JSON.stringify(event) }); } catch { /* audit is best-effort */ }
+}
+
+async function oemUnlockSecurity(scope) {
+  const result = await oemDiagApi().securityAccess({ scope });
+  saveOemDiagState({ security: { scope: result.scope, at: Date.now() }, lastError: null });
+  toast(`SecurityAccess granted: ${result.scope}`);
+}
+
+async function oemProgram(procedure) {
+  const diag = loadOemDiagState();
+  const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
+  if (!confirm(`${procedureLabel(procedure)} (${mode} mode)? Confirm the VIN and vehicle state before continuing.`)) return;
+  const { token, vin } = await oemAuthorize(procedure);
+  const result = await oemDiagApi().programKey({ procedure, authorizationToken: token });
+  await oemAudit({ kind: 'diagnostics.program', procedure, vin, mode, keys: result.keys, remotes: result.remotes });
+  saveOemDiagState({
+    programmingResult: { title: `${procedureLabel(procedure)} complete`, detail: `${result.keys ?? 0} key(s), ${result.remotes ?? 0} remote(s) programmed` },
+    lastError: null,
+  });
+  toast('Programming procedure complete');
+}
+
+async function oemFlashModule() {
+  const diag = loadOemDiagState();
+  const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
+  const target = document.querySelector('#oem-flash-target')?.value || '0x7E1';
+  const file = document.querySelector('#oem-flash-file')?.files?.[0];
+  if (!file) throw new Error('Select a firmware file to flash');
+  if (!confirm(`Flash ${target} with ${file.name} (${mode} mode)? Do not disconnect the adapter or interrupt power.`)) return;
+  const size = file.size;
+  const { token, vin } = await oemAuthorize('module_flash');
+  saveOemDiagState({ flashProgress: 5 });
+  render();
+  const result = await oemDiagApi().flashModule({
+    target,
+    authorizationToken: token,
+    firmware: { size, version: file.name },
+  });
+  await oemAudit({ kind: 'diagnostics.flash', target, vin, mode, bytes: size, blocks: result.blocks });
+  saveOemDiagState({
+    flashProgress: 100,
+    programmingResult: { title: 'Module flash complete', detail: `${target} · ${size} bytes · ${result.blocks} blocks · ${result.softwareVersion}` },
+    lastError: null,
+  });
+  toast('Module flash complete');
+}
+
 function bindOemDiagnostics() {
   if (!isOemDiagnosticsAvailable()) return;
+  document.querySelector('#oem-autoauth-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try { await oemConnectAutoAuth(event.target); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  document.querySelector('#oem-autoauth-disconnect')?.addEventListener('click', async () => {
+    try { await oemDisconnectAutoAuth(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  if (loadOemDiagState().autoAuth === undefined) {
+    oemLoadAutoAuth().then((auth) => { if (auth && state.route === 'oem-diagnostics') render(); });
+  }
+  document.querySelectorAll('[data-prog-mode]').forEach((button) => button.addEventListener('click', () => {
+    saveOemDiagState({ programmingMode: button.dataset.progMode, programmingResult: null, flashProgress: 0 });
+    render();
+  }));
+  document.querySelector('#oem-sec-immo')?.addEventListener('click', async () => {
+    try { await oemUnlockSecurity('immobilizer'); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  document.querySelector('#oem-sec-flash')?.addEventListener('click', async () => {
+    try { await oemUnlockSecurity('flash'); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  document.querySelectorAll('[data-prog-key]').forEach((button) => button.addEventListener('click', async () => {
+    try { await oemProgram(button.dataset.progKey); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  }));
+  document.querySelector('#oem-flash-run')?.addEventListener('click', async () => {
+    try { await oemFlashModule(); render(); } catch (e) { saveOemDiagState({ flashProgress: 0, lastError: friendlyOemError(e) }); render(); }
+  });
   document.querySelector('#oem-refresh-adapters')?.addEventListener('click', async () => {
-    try { await refreshOemAdapters(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await refreshOemAdapters(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-connect')?.addEventListener('click', async () => {
-    try { await oemConnect(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemConnect(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-disconnect')?.addEventListener('click', async () => {
-    try { await oemDisconnect(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemDisconnect(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-identify')?.addEventListener('click', async () => {
-    try { await oemIdentifyVehicle(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemIdentifyVehicle(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-read-dtcs')?.addEventListener('click', async () => {
-    try { await oemReadDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemReadDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-clear-dtcs')?.addEventListener('click', async () => {
-    try { await oemClearDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    try { await oemClearDtcs(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-start-log')?.addEventListener('click', async () => {
     try {
@@ -326,14 +520,14 @@ function bindOemDiagnostics() {
         try { await oemPollLog(); const el = document.querySelector('#oem-comm-log'); if (el) el.textContent = (loadOemDiagState().commLog || []).slice(-100).map(formatCommEntry).join('\n'); } catch { /* ignore poll errors */ }
       }, 1500);
       toast('Live communication log started');
-    } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-stop-log')?.addEventListener('click', async () => {
     try {
       await oemDiagApi().stopLiveLog();
       if (window._oemLogTimer) clearInterval(window._oemLogTimer);
       toast('Live log stopped');
-    } catch (e) { saveOemDiagState({ lastError: e.message }); render(); }
+    } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
   document.querySelector('#oem-export-log')?.addEventListener('click', () => {
     const log = (loadOemDiagState().commLog || []).map(formatCommEntry).join('\n');
@@ -351,3 +545,5 @@ function bindOemDiagnostics() {
     refreshOemAdapters().then(() => { if (state.route === 'oem-diagnostics') render(); }).catch(() => {});
   }
 }
+
+/* rebuild 20260911175056 */

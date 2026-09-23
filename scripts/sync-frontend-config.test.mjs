@@ -17,9 +17,11 @@ try {
   });
   assert.equal(sync.status, 0, sync.stderr || sync.stdout);
   const generated = readFileSync(configPath, 'utf8');
-  assert.match(generated, /cloudflare-access/);
+  assert.match(generated, /mechpro-saas/);
   assert.match(generated, /https:\/\/api\.example\.com/);
-  assert.doesNotMatch(generated, /amazonaws|cognito/i);
+  assert.match(generated, /https:\/\/api\.example\.com\/auth\/magic-link/);
+  assert.match(generated, /__MECHPRO_CONFIG__/);
+  assert.doesNotMatch(generated, /amazonaws|cognito|cloudflare-access/i);
   console.log('sync-frontend-config tests passed');
 } finally {
   writeFileSync(configPath, backup);

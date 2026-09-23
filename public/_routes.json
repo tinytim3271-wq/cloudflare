@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "include": ["/api/*"],
+  "exclude": [
+    "/",
+    "/index.html",
+    "/app.js",
+    "/styles.css",
+    "/theme.css",
+    "/service-worker.js",
+    "/diagnostics-ui.js",
+    "/manifest.webmanifest",
+    "/mechpro-icon.svg",
+    "/assets/*",
+    "/downloads/*",
+    "/pricing",
+    "/pricing/*",
+    "/features",
+    "/features/*",
+    "/login",
+    "/login/*",
+    "/signup",
+    "/signup/*",
+    "/terms",
+    "/terms/*",
+    "/privacy",
+    "/privacy/*"
+  ]
+}

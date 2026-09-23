@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('node:path');
 const diagnostics = require('./diagnostics-bridge');
+const { resolveDesktopStart } = require('./start-url');
 
 const trustedOrigins = new Set([
   'https://www.yourcarguy806.com',
@@ -26,6 +27,9 @@ function registerDiagnosticsIpc() {
     'diagnostics:identifyEcus': () => diagnostics.identifyEcus(),
     'diagnostics:readDtcs': () => diagnostics.readDtcs(),
     'diagnostics:clearDtcs': (_e, params) => diagnostics.clearDtcs(params || {}),
+    'diagnostics:securityAccess': (_e, params) => diagnostics.securityAccess(params || {}),
+    'diagnostics:programKey': (_e, params) => diagnostics.programKey(params || {}),
+    'diagnostics:flashModule': (_e, params) => diagnostics.flashModule(params || {}),
     'diagnostics:startLiveLog': () => diagnostics.startLiveLog(),
     'diagnostics:stopLiveLog': () => diagnostics.stopLiveLog(),
     'diagnostics:pollLiveLog': (_e, since) => diagnostics.pollLiveLog(since),
@@ -79,7 +83,8 @@ function createWindow() {
         const passed = result.desktop
           && result.diagnostics
           && result.title.includes('MechPro')
-          && (result.authenticated || result.loginText.includes('Cloudflare Access'));
+          && (result.authenticated
+            || /work email|continue securely|sign in/i.test(result.loginText));
         console.log(JSON.stringify({ smokeTest: passed ? 'passed' : 'failed', ...result }));
         app.exit(passed ? 0 : 1);
       } catch (error) {
@@ -89,7 +94,16 @@ function createWindow() {
     });
   }
   window.once('ready-to-show', () => window.show());
-  void window.loadFile(path.join(__dirname, '..', 'index.html'));
+
+  // Packaged desktop must use the hosted HTTPS origin so magic-link auth and /api
+  // calls are same-origin. Loading index.html via file:// made fetch('/api/...') fail
+  // with TypeError: Failed to fetch. Use --smoke-test / --local-assets for file://.
+  const start = resolveDesktopStart();
+  if (start.useLocalAssets) {
+    void window.loadFile(path.join(__dirname, '..', 'index.html'));
+  } else {
+    void window.loadURL(start.remoteUrl);
+  }
 }
 
 app.whenReady().then(() => {

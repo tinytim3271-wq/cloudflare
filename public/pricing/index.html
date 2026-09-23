@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MechPro Pricing</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #0d1d24; color: #edf6f9; }
+      a { color: #7ad9ff; }
+      .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+      header { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; }
+      nav { display: flex; gap: 18px; flex-wrap: wrap; }
+      .btn { display: inline-block; padding: 12px 18px; border-radius: 999px; text-decoration: none; font-weight: 600; }
+      .btn.primary { background: #4cc9f0; color: #061d2b; }
+      .btn.secondary { border: 1px solid rgba(255,255,255,.2); color: #edf6f9; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-top: 32px; }
+      .card { border: 1px solid rgba(255,255,255,.15); border-radius: 18px; padding: 22px; background: rgba(255,255,255,.02); }
+      .price { font-size: 2.2rem; font-weight: 700; }
+      ul { padding-left: 18px; }
+      footer { margin-top: 40px; color: #a6b7be; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <strong>MechPro</strong>
+        <nav>
+          <a href="/">Home</a>
+          <a href="/features">Features</a>
+          <a href="/pricing">Pricing</a>
+          <a href="/downloads">Downloads</a>
+          <a href="/login">Login</a>
+          <a href="/signup" class="btn primary">Start free trial</a>
+        </nav>
+      </header>
+      <h1>Simple pricing for growing repair shops.</h1>
+      <p>Launch a trial, create your shop, and upgrade when you need more team members, multi-location coverage, or AI assistant volume.</p>
+      <div class="grid">
+        <article class="card">
+          <h2>Starter</h2>
+          <div class="price">$49<span style="font-size:1rem;">/mo</span></div>
+          <p>For one-location service teams.</p>
+          <ul>
+            <li>3 users</li>
+            <li>1 location</li>
+            <li>Dispatch + work orders</li>
+            <li>Basic AI assistant</li>
+          </ul>
+          <a href="/signup" class="btn primary">Choose Starter</a>
+        </article>
+        <article class="card">
+          <h2>Growth</h2>
+          <div class="price">$99<span style="font-size:1rem;">/mo</span></div>
+          <p>For established shops and growing teams.</p>
+          <ul>
+            <li>10 users</li>
+            <li>3 locations</li>
+            <li>Diagnostics + payroll</li>
+            <li>Advanced AI usage</li>
+          </ul>
+          <a href="/signup" class="btn primary">Choose Growth</a>
+        </article>
+      </div>
+      <footer>
+        <p>Need a custom plan? <a href="/signup">Talk to sales</a>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

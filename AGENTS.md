@@ -10,10 +10,11 @@ This repository has three independent parts:
 
 ### Toolchain / non-obvious gotchas
 
-- Use Node 24, matching `.github/workflows/cloudflare-pages.yml`.
-- Replace the placeholder D1 ID in `wrangler.jsonc` before remote migration or deployment.
+- Use Node 24, matching `.github/workflows/cloudflare-pages.yml` and `package.json` `engines`.
+- `wrangler.jsonc` already contains the production D1 `database_id`. CI may override it with GitHub variable `CLOUDFLARE_D1_DATABASE_ID` when set; leave the committed ID as the source of truth for local/remote CLI deploys.
+- Copy `.dev.vars.example` to `.dev.vars` for local Worker secrets (`wrangler dev`). Never commit `.dev.vars`.
 
-### Running the frontend
+### Running the frontend (browser)
 
 Serve the repo root over HTTP (service worker registration is gated on a secure context, and `localhost`/`127.0.0.1` counts as secure), e.g.:
 
@@ -29,3 +30,5 @@ Serving the root still only requires a browser refresh. When editing source unde
 - **Windows installer** bundles that exe via `npm run build:windows` (runs J2534 publish then `electron-builder`). Requires Windows for the final NSIS installer; CI workflow `.github/workflows/windows-desktop.yml` builds on `windows-latest`.
 - On Windows with a registered J2534 adapter, Electron prefers `J2534.Host.exe` over the Node simulator (`desktop/diagnostics-bridge.js`).
 - **Cloudflare diagnostics API** (`/api/diagnostics/coverage`, `/api/diagnostics/audit`, `/api/diagnostics/authorize`) deploys with the Worker.
+- **Programming/flashing** (key programming, module reflash) is gated by ECDSA P-256 capability tokens: the Worker signs with `DIAGNOSTICS_SIGNING_PRIVATE_KEY`; hosts verify with the public key only and fail closed without it. See `diagnostics/keys/README.md` for key provisioning (`.cursor/install.sh` generates local dev keys). `simulate` mode drives the Node bench simulator; `live` mode requires shop AutoAuth credentials + a licensed `ISecurityAccessProvider` (OEM seed/key is never bundled or bypassed).
+- The Node simulator is fully testable on Linux: `npm run test:worker` (capability tokens + authorize) and `npm run test:j2534` (SecurityAccess, key programming, and flash sequences). The `.NET` host is Windows-only and not built in CI Linux.

@@ -12,8 +12,14 @@ const next = `/**
  * Source: MECHPRO_API_URL (defaults to same-origin /api)
  */
 export const cloudflareConfig = Object.freeze({
-  auth: 'cloudflare-access',
-  apiUrl: '${apiUrl.replaceAll("'", "\\'")}',
+  auth: 'mechpro-saas',
+  apiUrl: ${JSON.stringify(apiUrl)},
+  authEndpoints: {
+    magicLink: ${JSON.stringify(apiUrl + '/auth/magic-link')},
+    callback: ${JSON.stringify(apiUrl + '/auth/callback')},
+    session: ${JSON.stringify(apiUrl + '/auth/session')},
+    logout: ${JSON.stringify(apiUrl + '/auth/logout')},
+  },
 });
 
 export const storageKeys = Object.freeze({
@@ -21,6 +27,10 @@ export const storageKeys = Object.freeze({
   session: 'mechpro-session',
   mutationQueue: 'mechpro-mutation-queue-v1',
 });
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__MECHPRO_CONFIG__ = { cloudflare: cloudflareConfig, storage: storageKeys };
+}
 `;
 
 if (existsSync(configFile) && readFileSync(configFile, 'utf8') === next) {

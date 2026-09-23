@@ -4,21 +4,15 @@
   "main": "worker/src/index.js",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
+  // www.yourcarguy806.com is attached via Workers custom domain (mechpro-api).
+  // The Worker serves /api/* and proxies other paths to PAGES_ORIGIN.
+  // Avoid wrangler "routes" here — they require Zone Workers Routes token
+  // permission and fight the existing custom-domain attachment.
   "workers_dev": false,
-  "routes": [
-    {
-      "pattern": "www.yourcarguy806.com",
-      "custom_domain": true
-    },
-    {
-      "pattern": "www.yourcarguy806.com/api/*",
-      "zone_name": "yourcarguy806.com"
-    }
-  ],
   "vars": {
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",
-    "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev"
+    "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev",
   },
   "d1_databases": [
     {
