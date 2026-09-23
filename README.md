@@ -123,6 +123,9 @@ npx wrangler secret put ACCESS_AUD
 npx wrangler secret put ACCESS_ADMIN_EMAILS
 npx wrangler secret put AUTH_EMAIL_WEBHOOK
 npx wrangler secret put AUTH_EMAIL_WEBHOOK_SECRET
+npx wrangler secret put AUTH_GOOGLE_CLIENT_ID
+npx wrangler secret put AUTH_GOOGLE_CLIENT_SECRET
+npx wrangler secret put AUTH_GOOGLE_REDIRECT_URI
 npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
 ```
 
@@ -136,7 +139,11 @@ administrators. `AUTH_EMAIL_WEBHOOK` must be configured as a Worker secret
 pointing to a trusted transactional-email service that accepts `{ email,
 loginUrl, returnTo }`; its optional bearer secret is stored as
 `AUTH_EMAIL_WEBHOOK_SECRET`. Login links are never returned by the production
-API. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
+API. `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, and
+`AUTH_GOOGLE_REDIRECT_URI` enable Google (Gmail/Workspace) sign-in at
+`/api/auth/google/start` and `/api/auth/google/callback`; optionally set
+`AUTH_GOOGLE_HOSTED_DOMAIN` to restrict sign-in to a single Google Workspace
+domain. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
 subscription webhook endpoint.
 
 ### Troubleshooting email sign-in
@@ -161,6 +168,19 @@ arrives, and follow it to confirm sign-in. New requests made without email
 configuration do not store tokens or start the 15-minute retry cooldown. A
 cooldown left by the older code may still need to expire before retrying.
 `/api/healthz` checks API availability, not email delivery.
+
+### Troubleshooting Google sign-in
+
+If the Google button fails, verify:
+
+- Worker secrets `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, and
+  `AUTH_GOOGLE_REDIRECT_URI` are set on the deployed Worker.
+- Google Cloud OAuth consent and credentials include the same
+  `AUTH_GOOGLE_REDIRECT_URI` in Authorized redirect URIs.
+- The production hostname uses HTTPS and routes `/api/auth/google/callback` to
+  the Worker.
+- If `AUTH_GOOGLE_HOSTED_DOMAIN` is set, the signing-in account belongs to that
+  Workspace domain.
 
 Apply schema and deploy:
 

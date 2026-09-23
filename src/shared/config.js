@@ -8,6 +8,8 @@ export const cloudflareConfig = Object.freeze({
   apiUrl: "/api",
   authEndpoints: {
     magicLink: "/api/auth/magic-link",
+    googleStart: "/api/auth/google/start",
+    googleCallback: "/api/auth/google/callback",
     callback: "/api/auth/callback",
     session: "/api/auth/session",
     logout: "/api/auth/logout",

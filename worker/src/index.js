@@ -14,12 +14,14 @@ import {
   validVin,
 } from './domain.mjs';
 import {
+  base64UrlDecode,
   base64UrlEncode,
   constantTimeEqual,
   decryptSecret,
   encryptSecret,
   hmacBase64Url,
   hmacHex,
+  parseJwt,
   verifyAccessJwt,
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
@@ -27,6 +29,8 @@ import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnos
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
+const GOOGLE_OAUTH_STATE_COOKIE = 'mechpro_google_oauth_state';
+const GOOGLE_OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
 
 let posthogClient = null;
@@ -146,6 +150,14 @@ function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
   return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
 }
 
+function transientCookieHeader(name, value, maxAgeSeconds = GOOGLE_OAUTH_STATE_TTL_SECONDS) {
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearCookieHeader(name) {
+  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+}
+
 function safeReturnPath(value, fallback = '/app') {
   const candidate = String(value || '').trim();
   if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return fallback;
@@ -154,6 +166,78 @@ function safeReturnPath(value, fallback = '/app') {
     return parsed.origin === 'https://mechpro.invalid' ? `${parsed.pathname}${parsed.search}${parsed.hash}` : fallback;
   } catch {
     return fallback;
+  }
+
+  function requiredGoogleOAuthConfig(env) {
+    const clientId = String(env.AUTH_GOOGLE_CLIENT_ID || '').trim();
+    const clientSecret = String(env.AUTH_GOOGLE_CLIENT_SECRET || '').trim();
+    const redirectUri = String(env.AUTH_GOOGLE_REDIRECT_URI || '').trim();
+    if (!clientId || !clientSecret || !redirectUri) {
+      throw new HttpError(503, 'Google sign-in is unavailable. Ask an administrator to configure AUTH_GOOGLE_CLIENT_ID, AUTH_GOOGLE_CLIENT_SECRET, and AUTH_GOOGLE_REDIRECT_URI.');
+    }
+    return { clientId, clientSecret, redirectUri };
+  }
+
+  function parseGoogleOauthState(raw) {
+    if (!raw) return null;
+    try {
+      const decoded = new TextDecoder().decode(base64UrlDecode(raw));
+      const value = JSON.parse(decoded);
+      if (!value || typeof value !== 'object') return null;
+      const state = String(value.state || '').trim();
+      const returnTo = safeReturnPath(value.returnTo || '/', '/');
+      const expiresAt = Number(value.expiresAt || 0);
+      if (!state || !Number.isFinite(expiresAt)) return null;
+      return { state, returnTo, expiresAt };
+    } catch {
+      return null;
+    }
+  }
+
+  async function verifyGoogleIdToken(env, idToken) {
+    const { clientId } = requiredGoogleOAuthConfig(env);
+    const parsed = parseJwt(idToken);
+    if (parsed.header.alg !== 'RS256' || !parsed.header.kid) throw new HttpError(401, 'Google identity token is invalid');
+    const response = await fetch('https://www.googleapis.com/oauth2/v3/certs', {
+      cf: { cacheEverything: true, cacheTtl: 3600 },
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new HttpError(502, 'Unable to verify Google sign-in');
+    const { keys = [] } = await response.json();
+    const jwk = keys.find((key) => key.kid === parsed.header.kid);
+    if (!jwk) throw new HttpError(401, 'Google identity token key was not recognized');
+    const key = await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['verify'],
+    );
+    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
+    if (!valid) throw new HttpError(401, 'Google identity token signature is invalid');
+    const issuer = String(parsed.payload.iss || '');
+    if (!['https://accounts.google.com', 'accounts.google.com'].includes(issuer)) {
+      throw new HttpError(401, 'Google identity token issuer is invalid');
+    }
+    const audience = parsed.payload.aud;
+    const matchesAudience = (Array.isArray(audience) ? audience : [audience]).map(String).includes(clientId);
+    if (!matchesAudience) throw new HttpError(401, 'Google identity token audience is invalid');
+    const nowSeconds = Date.now() / 1000;
+    if (Number(parsed.payload.exp || 0) <= nowSeconds) throw new HttpError(401, 'Google identity token has expired');
+    const email = String(parsed.payload.email || '').trim().toLowerCase();
+    if (!email) throw new HttpError(401, 'Google account email is missing');
+    if (!(parsed.payload.email_verified === true || parsed.payload.email_verified === 'true')) {
+      throw new HttpError(401, 'Google account email is not verified');
+    }
+    const requiredHostedDomain = String(env.AUTH_GOOGLE_HOSTED_DOMAIN || '').trim().toLowerCase();
+    if (requiredHostedDomain) {
+      const hostedDomain = String(parsed.payload.hd || '').trim().toLowerCase();
+      if (hostedDomain !== requiredHostedDomain) throw new HttpError(403, 'Google account is not in the allowed hosted domain');
+    }
+    return {
+      email,
+      name: String(parsed.payload.name || parsed.payload.given_name || email.split('@')[0] || 'Owner').trim(),
+    };
   }
 }
 
@@ -1260,6 +1344,96 @@ async function handleMagicLink(request, env) {
   return json(payload);
 }
 
+async function handleGoogleAuthStart(request, env) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  const { clientId, redirectUri } = requiredGoogleOAuthConfig(env);
+  const url = new URL(request.url);
+  const returnTo = safeReturnPath(url.searchParams.get('returnTo') || '/', '/');
+  const state = crypto.randomUUID().replaceAll('-', '');
+  const oauthState = base64UrlEncode(new TextEncoder().encode(JSON.stringify({
+    state,
+    returnTo,
+    expiresAt: Date.now() + GOOGLE_OAUTH_STATE_TTL_SECONDS * 1000,
+  })));
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'openid email profile');
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('prompt', 'select_account');
+  const hostedDomain = String(env.AUTH_GOOGLE_HOSTED_DOMAIN || '').trim();
+  if (hostedDomain) authUrl.searchParams.set('hd', hostedDomain);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: authUrl.toString(),
+      'Set-Cookie': transientCookieHeader(GOOGLE_OAUTH_STATE_COOKIE, oauthState),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function handleGoogleAuthCallback(request, env) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  const { clientId, clientSecret, redirectUri } = requiredGoogleOAuthConfig(env);
+  const url = new URL(request.url);
+  const oauthError = String(url.searchParams.get('error') || '').trim();
+  if (oauthError) throw new HttpError(401, 'Google sign-in was cancelled or denied');
+  const state = String(url.searchParams.get('state') || '').trim();
+  const code = String(url.searchParams.get('code') || '').trim();
+  if (!state || !code) throw new HttpError(400, 'Google sign-in response is missing required parameters');
+  const oauthState = parseGoogleOauthState(getCookieValue(request, GOOGLE_OAUTH_STATE_COOKIE));
+  if (!oauthState || oauthState.expiresAt <= Date.now() || !constantTimeEqual(oauthState.state, state)) {
+    throw new HttpError(401, 'Google sign-in session is invalid or expired');
+  }
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    }),
+  });
+  const tokenPayload = await tokenResponse.json().catch(() => ({}));
+  if (!tokenResponse.ok || !tokenPayload.id_token) throw new HttpError(502, 'Google sign-in token exchange failed');
+  const identity = await verifyGoogleIdToken(env, String(tokenPayload.id_token || ''));
+  const user = await ensureSaasUser(env, identity.email, identity.name);
+  const sessionToken = crypto.randomUUID().replaceAll('-', '');
+  const sessionId = crypto.randomUUID();
+  const sessionHash = await hashValue(sessionToken);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare(`
+    INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()).run();
+  const posthog = getPostHog(env);
+  posthog?.identify({
+    distinctId: String(user.id),
+    properties: {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      shop_id: user.shop_id,
+    },
+  });
+  capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
+    auth_method: 'google',
+    actor_role: user.role,
+  });
+  const redirect = new URL(oauthState.returnTo, url.origin);
+  const headers = new Headers({
+    Location: redirect.toString(),
+    'Set-Cookie': sessionCookieHeader(sessionToken),
+    'Cache-Control': 'no-store',
+  });
+  headers.append('Set-Cookie', clearCookieHeader(GOOGLE_OAUTH_STATE_COOKIE));
+  return new Response(null, { status: 302, headers });
+}
+
 async function handleAuthCallback(request, env) {
   const url = new URL(request.url);
   const token = String(url.searchParams.get('token') || '').trim();
@@ -1328,6 +1502,12 @@ async function handleLogout(request, env) {
 async function handleAuth(request, env, segments) {
   const action = segments[1] || '';
   if (action === 'magic-link') return handleMagicLink(request, env);
+  if (action === 'google') {
+    const googleAction = segments[2] || 'start';
+    if (googleAction === 'start') return handleGoogleAuthStart(request, env);
+    if (googleAction === 'callback') return handleGoogleAuthCallback(request, env);
+    throw new HttpError(404, 'Not found');
+  }
   if (action === 'callback') return handleAuthCallback(request, env);
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
