@@ -58,7 +58,7 @@ function mockUserDb() {
 
 test('google auth start requires production oauth configuration', async (t) => {
   t.mock.method(console, 'error', () => {});
-  const response = await worker.fetch(new Request('https://app.example.test/api/auth/google/start'));
+  const response = await worker.fetch(new Request('https://app.example.test/api/auth/google/start'), {});
   assert.equal(response.status, 503);
   assert.match((await response.json()).message, /AUTH_GOOGLE_CLIENT_ID/);
 });

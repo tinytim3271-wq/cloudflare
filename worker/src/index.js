@@ -167,78 +167,78 @@ function safeReturnPath(value, fallback = '/app') {
   } catch {
     return fallback;
   }
+}
 
-  function requiredGoogleOAuthConfig(env) {
-    const clientId = String(env.AUTH_GOOGLE_CLIENT_ID || '').trim();
-    const clientSecret = String(env.AUTH_GOOGLE_CLIENT_SECRET || '').trim();
-    const redirectUri = String(env.AUTH_GOOGLE_REDIRECT_URI || '').trim();
-    if (!clientId || !clientSecret || !redirectUri) {
-      throw new HttpError(503, 'Google sign-in is unavailable. Ask an administrator to configure AUTH_GOOGLE_CLIENT_ID, AUTH_GOOGLE_CLIENT_SECRET, and AUTH_GOOGLE_REDIRECT_URI.');
-    }
-    return { clientId, clientSecret, redirectUri };
+function requiredGoogleOAuthConfig(env) {
+  const clientId = String(env.AUTH_GOOGLE_CLIENT_ID || '').trim();
+  const clientSecret = String(env.AUTH_GOOGLE_CLIENT_SECRET || '').trim();
+  const redirectUri = String(env.AUTH_GOOGLE_REDIRECT_URI || '').trim();
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new HttpError(503, 'Google sign-in is unavailable. Ask an administrator to configure AUTH_GOOGLE_CLIENT_ID, AUTH_GOOGLE_CLIENT_SECRET, and AUTH_GOOGLE_REDIRECT_URI.');
   }
+  return { clientId, clientSecret, redirectUri };
+}
 
-  function parseGoogleOauthState(raw) {
-    if (!raw) return null;
-    try {
-      const decoded = new TextDecoder().decode(base64UrlDecode(raw));
-      const value = JSON.parse(decoded);
-      if (!value || typeof value !== 'object') return null;
-      const state = String(value.state || '').trim();
-      const returnTo = safeReturnPath(value.returnTo || '/', '/');
-      const expiresAt = Number(value.expiresAt || 0);
-      if (!state || !Number.isFinite(expiresAt)) return null;
-      return { state, returnTo, expiresAt };
-    } catch {
-      return null;
-    }
+function parseGoogleOauthState(raw) {
+  if (!raw) return null;
+  try {
+    const decoded = new TextDecoder().decode(base64UrlDecode(raw));
+    const value = JSON.parse(decoded);
+    if (!value || typeof value !== 'object') return null;
+    const state = String(value.state || '').trim();
+    const returnTo = safeReturnPath(value.returnTo || '/', '/');
+    const expiresAt = Number(value.expiresAt || 0);
+    if (!state || !Number.isFinite(expiresAt)) return null;
+    return { state, returnTo, expiresAt };
+  } catch {
+    return null;
   }
+}
 
-  async function verifyGoogleIdToken(env, idToken) {
-    const { clientId } = requiredGoogleOAuthConfig(env);
-    const parsed = parseJwt(idToken);
-    if (parsed.header.alg !== 'RS256' || !parsed.header.kid) throw new HttpError(401, 'Google identity token is invalid');
-    const response = await fetch('https://www.googleapis.com/oauth2/v3/certs', {
-      cf: { cacheEverything: true, cacheTtl: 3600 },
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) throw new HttpError(502, 'Unable to verify Google sign-in');
-    const { keys = [] } = await response.json();
-    const jwk = keys.find((key) => key.kid === parsed.header.kid);
-    if (!jwk) throw new HttpError(401, 'Google identity token key was not recognized');
-    const key = await crypto.subtle.importKey(
-      'jwk',
-      jwk,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['verify'],
-    );
-    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
-    if (!valid) throw new HttpError(401, 'Google identity token signature is invalid');
-    const issuer = String(parsed.payload.iss || '');
-    if (!['https://accounts.google.com', 'accounts.google.com'].includes(issuer)) {
-      throw new HttpError(401, 'Google identity token issuer is invalid');
-    }
-    const audience = parsed.payload.aud;
-    const matchesAudience = (Array.isArray(audience) ? audience : [audience]).map(String).includes(clientId);
-    if (!matchesAudience) throw new HttpError(401, 'Google identity token audience is invalid');
-    const nowSeconds = Date.now() / 1000;
-    if (Number(parsed.payload.exp || 0) <= nowSeconds) throw new HttpError(401, 'Google identity token has expired');
-    const email = String(parsed.payload.email || '').trim().toLowerCase();
-    if (!email) throw new HttpError(401, 'Google account email is missing');
-    if (!(parsed.payload.email_verified === true || parsed.payload.email_verified === 'true')) {
-      throw new HttpError(401, 'Google account email is not verified');
-    }
-    const requiredHostedDomain = String(env.AUTH_GOOGLE_HOSTED_DOMAIN || '').trim().toLowerCase();
-    if (requiredHostedDomain) {
-      const hostedDomain = String(parsed.payload.hd || '').trim().toLowerCase();
-      if (hostedDomain !== requiredHostedDomain) throw new HttpError(403, 'Google account is not in the allowed hosted domain');
-    }
-    return {
-      email,
-      name: String(parsed.payload.name || parsed.payload.given_name || email.split('@')[0] || 'Owner').trim(),
-    };
+async function verifyGoogleIdToken(env, idToken) {
+  const { clientId } = requiredGoogleOAuthConfig(env);
+  const parsed = parseJwt(idToken);
+  if (parsed.header.alg !== 'RS256' || !parsed.header.kid) throw new HttpError(401, 'Google identity token is invalid');
+  const response = await fetch('https://www.googleapis.com/oauth2/v3/certs', {
+    cf: { cacheEverything: true, cacheTtl: 3600 },
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new HttpError(502, 'Unable to verify Google sign-in');
+  const { keys = [] } = await response.json();
+  const jwk = keys.find((key) => key.kid === parsed.header.kid);
+  if (!jwk) throw new HttpError(401, 'Google identity token key was not recognized');
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
+  if (!valid) throw new HttpError(401, 'Google identity token signature is invalid');
+  const issuer = String(parsed.payload.iss || '');
+  if (!['https://accounts.google.com', 'accounts.google.com'].includes(issuer)) {
+    throw new HttpError(401, 'Google identity token issuer is invalid');
   }
+  const audience = parsed.payload.aud;
+  const matchesAudience = (Array.isArray(audience) ? audience : [audience]).map(String).includes(clientId);
+  if (!matchesAudience) throw new HttpError(401, 'Google identity token audience is invalid');
+  const nowSeconds = Date.now() / 1000;
+  if (Number(parsed.payload.exp || 0) <= nowSeconds) throw new HttpError(401, 'Google identity token has expired');
+  const email = String(parsed.payload.email || '').trim().toLowerCase();
+  if (!email) throw new HttpError(401, 'Google account email is missing');
+  if (!(parsed.payload.email_verified === true || parsed.payload.email_verified === 'true')) {
+    throw new HttpError(401, 'Google account email is not verified');
+  }
+  const requiredHostedDomain = String(env.AUTH_GOOGLE_HOSTED_DOMAIN || '').trim().toLowerCase();
+  if (requiredHostedDomain) {
+    const hostedDomain = String(parsed.payload.hd || '').trim().toLowerCase();
+    if (hostedDomain !== requiredHostedDomain) throw new HttpError(403, 'Google account is not in the allowed hosted domain');
+  }
+  return {
+    email,
+    name: String(parsed.payload.name || parsed.payload.given_name || email.split('@')[0] || 'Owner').trim(),
+  };
 }
 
 async function resolveAppSession(request, env) {
