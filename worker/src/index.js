@@ -976,7 +976,7 @@ async function proxyPagesRequest(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const analytics = {
       client: null,
       distinctId: request.headers.get('X-PostHog-Distinct-ID')
@@ -1003,11 +1003,8 @@ export default {
       }));
       return withCors(json({ message: status === 500 ? 'Internal error' : error.message }, status), request, env);
     } finally {
-      try {
-        await analytics.client?.shutdown();
-      } catch (error) {
-        console.error('PostHog shutdown failed', error);
-      }
+      ctx.waitUntil(Promise.resolve(analytics.client?.shutdown()).catch(
+        (e) => console.error('PostHog shutdown failed', e)));
     }
   },
 };
