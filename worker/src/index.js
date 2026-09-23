@@ -979,9 +979,8 @@ export default {
   async fetch(request, env, ctx) {
     const analytics = {
       client: null,
-      distinctId: request.headers.get('X-PostHog-Distinct-ID')
-        || request.headers.get('X-PostHog-Session-ID')
-        || crypto.randomUUID(),
+      distinctId: request.headers.get('X-PostHog-Distinct-ID') || crypto.randomUUID(),
+      sessionId: request.headers.get('X-PostHog-Session-ID'),
     };
     try {
       analytics.client = createPostHog(env);
@@ -993,6 +992,7 @@ export default {
         request_method: request.method,
         request_path: new URL(request.url).pathname,
         status_code: status,
+        ...(analytics.sessionId ? { session_id: analytics.sessionId } : {}),
       });
       console.error(JSON.stringify({
         message: 'request failed',
