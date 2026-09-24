@@ -108,9 +108,9 @@ function printIntro({ dryRun, local }) {
   console.log('MechPro email sign-in setup');
   console.log('');
   console.log('This guided setup stores Worker secrets for the email sign-in webhook.');
-  console.log('You will need a webhook endpoint that accepts MechPro JSON:');
-  console.log('  { email, loginUrl, returnTo }');
-  console.log('and sends the sign-in email for your shop.');
+  console.log('The built-in sender is https://www.yourcarguy806.com/api/auth/send-login');
+  console.log('It accepts MechPro JSON { email, loginUrl, returnTo } and returns 202');
+  console.log('only after Cloudflare Email accepts the message.');
   console.log('');
   console.log('Important:');
   console.log('- The normal setup uses an HTTPS webhook URL.');
@@ -206,7 +206,7 @@ async function runWranglerSecretPut(name, value) {
   await new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
     const command = isWin ? 'npx.cmd' : 'npx';
-    const child = spawn(command, ['wrangler', 'secret', 'put', name], {
+    const child = spawn(command, ['wrangler', 'secret', 'put', name, '--name', 'mechpro-api'], {
       stdio: ['pipe', 'inherit', 'inherit'],
       shell: isWin,
     });

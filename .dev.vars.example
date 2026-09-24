@@ -12,7 +12,9 @@ DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
 # ACCESS_TEAM_DOMAIN=https://example.cloudflareaccess.com
 # ACCESS_AUD=your-access-application-audience
 
-# Magic-link email delivery (endpoint must accept { email, loginUrl, returnTo }).
+# Magic-link email delivery. Production sender:
+# https://www.yourcarguy806.com/api/auth/send-login
 # These local settings are not uploaded by a Worker deployment.
-# AUTH_EMAIL_WEBHOOK=https://your-email-service.example/send-login
+# AUTH_EMAIL_FROM=noreply@yourcarguy806.com
+# AUTH_EMAIL_WEBHOOK=https://www.yourcarguy806.com/api/auth/send-login
 # AUTH_EMAIL_WEBHOOK_SECRET=replace-with-your-webhook-bearer-secret

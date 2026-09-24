@@ -13,7 +13,14 @@
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",
     "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev",
+    "AUTH_EMAIL_FROM": "noreply@yourcarguy806.com"
   },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["noreply@yourcarguy806.com"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -95,6 +95,66 @@ test('configuring email after a failed request allows delivery without a cooldow
   assert.equal(delivery.mock.callCount(), 1);
 });
 
+test('worker email binding sends the login link and ignores a broken webhook', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const fetched = t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('webhook must not be called');
+  });
+  const sent = [];
+  const response = await worker.fetch(signInRequest(), {
+    DB: mockLoginDb(),
+    AUTH_EMAIL_WEBHOOK: 'https://your-email-endpoint.example/send-login',
+    EMAIL: {
+      createMessage(from, to, raw) { return { from, to, raw }; },
+      async send(message) { sent.push(message); },
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].from, 'noreply@yourcarguy806.com');
+  assert.equal(sent[0].to, 'owner@example.test');
+  assert.match(sent[0].raw, /https:\/\/app\.example\.test\/api\/auth\/callback\?token=[a-f0-9]{32}/);
+  assert.equal(fetched.mock.callCount(), 0);
+});
+
+test('failed direct delivery does not start the retry cooldown', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  let token = null;
+  const DB = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async first() { return token; },
+            async run() {
+              if (/DELETE FROM login_tokens/.test(sql)) {
+                token = null;
+                return;
+              }
+              assert.match(sql, /INSERT INTO login_tokens/);
+              token = { created_at: args[5] };
+            },
+          };
+        },
+      };
+    },
+  };
+  const env = {
+    DB,
+    EMAIL: {
+      createMessage(from, to, raw) { return { from, to, raw }; },
+      async send() { throw new Error('email routing disabled'); },
+    },
+  };
+  const failed = await worker.fetch(signInRequest(), env);
+  assert.equal(failed.status, 502);
+  assert.match((await failed.json()).message, /Unable to deliver the sign-in email/);
+  assert.equal(token, null);
+
+  env.EMAIL.send = async () => {};
+  assert.equal((await worker.fetch(signInRequest(), env)).status, 200);
+});
+
 test('explicit development link exposure continues to work without an email webhook', async () => {
   const response = await worker.fetch(signInRequest(), {
     DB: mockLoginDb(),
