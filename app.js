@@ -592,12 +592,13 @@
     ;
     return mutationQueueCache;
   }
-  function writeMutationQueue(queue) {
+  async function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
+    const encrypted = await encryptMutationQueueRaw(raw);
+    localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -611,17 +612,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  function queueEntityMutation(mutation, conflict = false) {
-    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  async function queueEntityMutation(mutation, conflict = false) {
+    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      writeMutationQueue(queue);
+      await writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    writeMutationQueue(queue);
+    await writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
