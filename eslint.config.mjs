@@ -20,6 +20,7 @@ export default [
         Blob: 'readonly',
         FileReader: 'readonly',
         FormData: 'readonly',
+        queueMicrotask: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',
@@ -38,6 +39,7 @@ export default [
       sourceType: 'module',
       globals: {
         console: 'readonly',
+        setTimeout: 'readonly',
       },
     },
     rules: {
