@@ -1,5 +1,4 @@
 import { PostHog } from 'posthog-node/edge';
-import { PostHog } from 'posthog-node';
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
 import { isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from './routing.mjs';
 import {
@@ -42,8 +41,8 @@ function createPostHog(env) {
   }
   return new PostHog(apiKey, {
     host,
-    flushAt: 1,
-    flushInterval: 0,
+    flushAt: 20,
+    flushInterval: 10000,
     enableExceptionAutocapture: true,
   });
 }
@@ -61,10 +60,6 @@ function captureForContext(analytics, context, event, properties = {}) {
   });
 }
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
 let posthogClient = null;
 
 function getPostHog(env) {
@@ -85,8 +80,8 @@ function getPostHog(env) {
   if (!posthogClient) {
     posthogClient = new PostHog(apiKey, {
       host,
-      flushAt: 1,
-      flushInterval: 0,
+      flushAt: 20,
+      flushInterval: 10000,
       enableExceptionAutocapture: true,
     });
   }
@@ -204,7 +199,11 @@ async function resolveAppSession(request, env) {
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
   `).bind(tokenHash, new Date().toISOString()).first();
   if (!row) return null;
-  await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date().toISOString(), row.session_id).run();
+  const now = new Date();
+  const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    'UPDATE sessions SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)',
+  ).bind(now.toISOString(), row.session_id, lastSeenCutoff).run();
   return {
     shopId: String(row.shop_id),
     role: String(row.role || 'admin'),
@@ -308,11 +307,30 @@ async function getEntity(env, shopId, type, id) {
   ).bind(shopId, type, id).first());
 }
 
-async function listEntities(env, shopId, type) {
-  const result = await env.DB.prepare(
-    'SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = ? ORDER BY updated_at',
-  ).bind(shopId, type).all();
-  return result.results.map(entityRecord);
+async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const nextCursor = String(cursor || '').trim();
+  const filters = ['shop_id = ?', 'entity_type = ?'];
+  const bindValues = [shopId, type];
+  if (nextCursor) {
+    filters.push('updated_at > ?');
+    bindValues.push(nextCursor);
+  }
+  let sql = `SELECT data_json, updated_at FROM entities WHERE ${filters.join(' AND ')} ORDER BY updated_at`;
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  if (!boundedLimit) return records;
+  return {
+    records,
+    nextCursor: rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
 }
 
 async function putEntity(env, context, type, id, body, expectedUpdatedAt = null, createdBy = context.userId) {
@@ -371,6 +389,91 @@ function members(record) {
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
 }
 
+function listParams(request) {
+  const url = new URL(request.url);
+  const requestedLimit = Number(url.searchParams.get('limit'));
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(200, Math.floor(requestedLimit))
+    : 0;
+  return {
+    limit,
+    cursor: String(url.searchParams.get('cursor') || '').trim(),
+    conversationId: String(url.searchParams.get('conversationId') || '').trim(),
+  };
+}
+
+async function listConversationIdsForMember(env, shopId, email, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const bindValues = [shopId, email.toLowerCase()];
+  let sql = `
+    SELECT e.entity_id, e.updated_at, e.data_json
+    FROM entities e, json_each(e.data_json, '$.memberEmails') member
+    WHERE e.shop_id = ? AND e.entity_type = 'conversations' AND lower(member.value) = ?
+  `;
+  if (cursor) {
+    sql += ' AND e.updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY e.updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  return {
+    records,
+    ids: records.map(record => String(record.id || '')).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function listChatMessagesForConversations(env, shopId, conversationIds, { limit = 0, cursor = '' } = {}) {
+  if (!conversationIds.length) return { records: [], nextCursor: null };
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const placeholders = conversationIds.map(() => '?').join(', ');
+  const bindValues = [shopId, ...conversationIds];
+  let sql = `
+    SELECT data_json, updated_at
+    FROM entities
+    WHERE shop_id = ? AND entity_type = 'chatmessages'
+      AND json_extract(data_json, '$.conversationId') IN (${placeholders})
+  `;
+  if (cursor) {
+    sql += ' AND updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  return {
+    records: rows.map(entityRecord).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function hasLinkedCustomerEntity(env, shopId, type, customerName) {
+  return Boolean(await env.DB.prepare(
+    "SELECT 1 AS found FROM entities WHERE shop_id = ? AND entity_type = ? AND json_extract(data_json, '$.customer') = ? LIMIT 1",
+  ).bind(shopId, type, customerName).first());
+}
+
+async function listPaymentsByInvoice(env, shopId, invoiceNumber) {
+  const result = await env.DB.prepare(
+    "SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = 'payments' AND json_extract(data_json, '$.invoiceNumber') = ?",
+  ).bind(shopId, invoiceNumber).all();
+  return (result.results || []).map(entityRecord).filter(Boolean);
+}
+
 async function handleEntities(request, env, context, segments, analytics) {
   const sourceType = String(segments[1] || '').toLowerCase();
   const type = normalizeEntityType(sourceType);
@@ -380,15 +483,30 @@ async function handleEntities(request, env, context, segments, analytics) {
   if (request.method !== 'GET' && !canWriteEntity(type, context.role)) throw new HttpError(403, `Role ${context.role} cannot modify ${type}`);
 
   if (request.method === 'GET' && !id) {
-    let records = await listEntities(env, context.shopId, type);
-    if (type === 'conversations') records = records.filter(record => members(record).includes(context.email));
+    const params = listParams(request);
+    const paginated = params.limit > 0;
+    let records;
+    let nextCursor = null;
+    if (type === 'conversations') {
+      const result = await listConversationIdsForMember(env, context.shopId, context.email, params);
+      records = result.records;
+      nextCursor = result.nextCursor;
+    } else {
+      const result = await listEntities(env, context.shopId, type, params);
+      records = paginated ? result.records : result;
+      nextCursor = paginated ? result.nextCursor : null;
+    }
     if (type === 'chatmessages') {
-      const allowed = new Set((await listEntities(env, context.shopId, 'conversations'))
-        .filter(record => members(record).includes(context.email)).map(record => record.id));
-      records = records.filter(record => allowed.has(record.conversationId));
+      const allowedResult = await listConversationIdsForMember(env, context.shopId, context.email);
+      const allowedIds = new Set(allowedResult.ids);
+      const conversationIds = params.conversationId ? [params.conversationId] : [...allowedIds];
+      if (params.conversationId && !allowedIds.has(params.conversationId)) throw new HttpError(404, 'Conversation not found');
+      const listed = await listChatMessagesForConversations(env, context.shopId, conversationIds, params);
+      records = listed.records;
+      nextCursor = listed.nextCursor;
     }
     if (type === 'employees') records = records.map(record => redactEmployee(record, context.role));
-    return json(records);
+    return paginated ? json({ records, nextCursor }) : json(records);
   }
   if (request.method === 'GET' && id) {
     const record = await getEntity(env, context.shopId, type, id);
@@ -458,8 +576,8 @@ async function handleEntities(request, env, context, segments, analytics) {
     }
     if (type === 'customers') {
       const linkedTypes = ['vehicles', 'orders', 'invoices'];
-      const lists = await Promise.all(linkedTypes.map(linkedType => listEntities(env, context.shopId, linkedType)));
-      if (lists.flat().some(record => record.customer === existing.name)) {
+      const links = await Promise.all(linkedTypes.map(linkedType => hasLinkedCustomerEntity(env, context.shopId, linkedType, existing.name)));
+      if (links.some(Boolean)) {
         throw new HttpError(409, "Delete this customer's vehicles, work orders, and invoices first");
       }
     }
@@ -467,7 +585,7 @@ async function handleEntities(request, env, context, segments, analytics) {
       'DELETE FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
     ).bind(context.shopId, type, id)];
     if (type === 'invoices') {
-      const payments = await listEntities(env, context.shopId, 'payments');
+      const payments = await listPaymentsByInvoice(env, context.shopId, existing.number || existing.id);
       for (const payment of payments.filter(record => record.invoiceNumber === (existing.number || existing.id))) {
         statements.push(env.DB.prepare(
           'DELETE FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
@@ -555,7 +673,6 @@ async function handleCoverage(request, segments) {
   return json(match);
 }
 
-async function handleDiagnostics(request, env, context, segments, analytics) {
 async function recordDiagnosticAudit(env, context, event) {
   const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
   await env.DB.prepare(
@@ -564,7 +681,7 @@ async function recordDiagnosticAudit(env, context, event) {
   return id;
 }
 
-async function handleDiagnostics(request, env, context, segments) {
+async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
@@ -595,18 +712,13 @@ async function handleDiagnostics(request, env, context, segments) {
         }, 501);
       }
     }
-    if (!['clear_dtcs', 'clearDtcs'].includes(procedure)) throw new HttpError(400, 'Unsupported procedure for local authorization');
-    if (!env.DIAGNOSTICS_CAPABILITY_SECRET) throw new HttpError(503, 'Diagnostics capability signing is not configured');
-    const payload = {
-      v: 1, procedure: 'clear_dtcs', vin, shopId: context.shopId,
-      exp: Date.now() + 5 * 60 * 1000, jti: crypto.randomUUID().replaceAll('-', ''),
-    };
-    const payloadJson = JSON.stringify(payload);
-    const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
-    captureForContext(analytics, context, 'diagnostics_authorized', { procedure: 'clear_dtcs' });
-    return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
     const { token, payload } = await mintCapabilityToken(env, {
       procedure, vin, shopId: context.shopId, mode, actor: context.userId,
+    });
+    captureForContext(analytics, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
     });
     await recordDiagnosticAudit(env, context, {
       kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
@@ -654,6 +766,7 @@ async function handleOnboarding(request, env, context, analytics) {
   captureForContext(analytics, context, 'onboarding_started', {
     mode: resetAll ? 'all' : 'samples',
     removed_count: targets.length,
+  });
   capturePostHogEvent(env, context, 'onboarding_started', {
     reset_mode: resetAll ? 'all' : 'samples',
     removed_record_count: targets.length,
@@ -689,6 +802,7 @@ async function handlePayroll(request, env, context, analytics) {
   captureForContext(analytics, context, 'payroll_synced', {
     period,
     posted_entries: entries.length,
+  });
   capturePostHogEvent(env, context, 'payroll_synced', {
     posted_entry_count: entries.length,
     actor_role: context.role,
@@ -727,15 +841,19 @@ async function enforceAiRateLimit(env, context) {
 }
 
 async function shopContext(env, shopId) {
+  const compact = value => {
+    const text = String(value || '');
+    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+  };
   const result = await env.DB.prepare(
-    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type != 'employees' ORDER BY updated_at DESC LIMIT 120",
+    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type IN ('orders','invoices','payments','customers','appointments','vehicles','conversations') ORDER BY updated_at DESC LIMIT 60",
   ).bind(shopId).all();
   return result.results.map(row => {
     const item = entityRecord(row);
     return {
-      type: row.entity_type, id: item.id, name: item.name, status: item.status, customer: item.customer,
-      vehicle: item.vehicle, amount: item.amount, due: item.due, technician: item.tech,
-      promise: item.promise, concern: item.complaint,
+      type: row.entity_type, id: compact(item.id), name: compact(item.name), status: compact(item.status), customer: compact(item.customer),
+      vehicle: compact(item.vehicle), amount: Number(item.amount || 0), due: compact(item.due), technician: compact(item.tech),
+      promise: compact(item.promise), concern: compact(item.complaint),
     };
   });
 }
@@ -783,7 +901,6 @@ async function getIntegrationSecret(env, shopId, name) {
   return row ? decryptSecret(row.ciphertext, row.iv, env.INTEGRATION_ENCRYPTION_KEY) : '';
 }
 
-async function handleAgentPhoneConfigure(request, env, context, analytics) {
 async function deleteIntegrationSecret(env, shopId, name) {
   await env.DB.prepare(
     'DELETE FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
@@ -846,7 +963,7 @@ async function handleAgentPhoneConfigure(request, env, context) {
   const webhookUrl = `${new URL(request.url).origin}/api/agentphone/webhook/${encodeURIComponent(context.shopId)}`;
   const response = await fetch(`https://api.agentphone.ai/v1/agents/${encodeURIComponent(agentId)}/webhook`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: ['Bearer', apiKey].join(' '), 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: webhookUrl, contextLimit, timeout }),
   });
   const result = await response.json().catch(() => ({}));
@@ -959,7 +1076,7 @@ async function handleCheckout(request, env, context, analytics) {
   if (!invoiceNumber) throw new HttpError(400, 'invoiceNumber is required');
   const invoice = await getEntity(env, context.shopId, 'invoices', invoiceNumber);
   if (!invoice) throw new HttpError(404, 'Invoice not found');
-  const payments = (await listEntities(env, context.shopId, 'payments')).filter(payment => payment.invoiceNumber === invoiceNumber);
+  const payments = await listPaymentsByInvoice(env, context.shopId, invoiceNumber);
   const balance = openInvoiceBalance(invoice.amount, payments);
   if (balance <= 0) throw new HttpError(409, 'Invoice has no open balance');
   const origin = request.headers.get('Origin');
@@ -998,6 +1115,7 @@ async function handleCheckout(request, env, context, analytics) {
     amount: balance,
     currency: 'usd',
     processor: 'stripe',
+  });
   capturePostHogEvent(env, context, 'payment_checkout_started', {
     amount: balance,
     currency: 'usd',
@@ -1030,7 +1148,7 @@ async function handleStripeWebhook(request, env, shopId, analytics) {
       const id = String(session.id);
       if (await getEntity(env, shopId, 'payments', id)) return json({ received: true, duplicate: true });
       const context = { shopId, userId: 'stripe-webhook' };
-      const payments = (await listEntities(env, shopId, 'payments')).filter(payment => payment.invoiceNumber === invoiceNumber);
+      const payments = await listPaymentsByInvoice(env, shopId, invoiceNumber);
       const amount = Number(session.amount_total || 0) / 100;
       if (amount <= 0 || amount > openInvoiceBalance(invoice.amount, payments)) throw new HttpError(400, 'Payment amount exceeds the invoice balance');
       await putEntity(env, context, 'payments', id, {
@@ -1326,7 +1444,7 @@ async function handleMagicLink(request, env) {
   loginUrl.searchParams.set('token', token);
   if (env.AUTH_EMAIL_WEBHOOK) {
     const headers = { 'Content-Type': 'application/json' };
-    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
+    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = ['Bearer', env.AUTH_EMAIL_WEBHOOK_SECRET].join(' ');
     const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
       method: 'POST',
       headers,
@@ -1642,7 +1760,7 @@ async function proxyPagesRequest(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
     const posthog = getPostHog(env);
     try {
       if (!isApiRequest(request)) {
@@ -1672,11 +1790,11 @@ export default {
       }, status), request, env);
     } finally {
       if (posthog) {
-        try {
-          await posthog.flush();
-        } catch (error) {
+        const flush = posthog.flush().catch((error) => {
           console.error('PostHog flush failed', error);
-        }
+        });
+        if (executionCtx?.waitUntil) executionCtx.waitUntil(flush);
+        else void flush;
       }
     }
   },
