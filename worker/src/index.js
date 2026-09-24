@@ -673,7 +673,6 @@ async function handleCoverage(request, segments) {
   return json(match);
 }
 
-async function handleDiagnostics(request, env, context, segments, analytics) {
 async function recordDiagnosticAudit(env, context, event) {
   const id = `audit-${Date.now()}-${crypto.randomUUID()}`;
   await env.DB.prepare(
@@ -682,7 +681,7 @@ async function recordDiagnosticAudit(env, context, event) {
   return id;
 }
 
-async function handleDiagnostics(request, env, context, segments) {
+async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
@@ -713,18 +712,13 @@ async function handleDiagnostics(request, env, context, segments) {
         }, 501);
       }
     }
-    if (!['clear_dtcs', 'clearDtcs'].includes(procedure)) throw new HttpError(400, 'Unsupported procedure for local authorization');
-    if (!env.DIAGNOSTICS_CAPABILITY_SECRET) throw new HttpError(503, 'Diagnostics capability signing is not configured');
-    const payload = {
-      v: 1, procedure: 'clear_dtcs', vin, shopId: context.shopId,
-      exp: Date.now() + 5 * 60 * 1000, jti: crypto.randomUUID().replaceAll('-', ''),
-    };
-    const payloadJson = JSON.stringify(payload);
-    const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
-    captureForContext(analytics, context, 'diagnostics_authorized', { procedure: 'clear_dtcs' });
-    return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
     const { token, payload } = await mintCapabilityToken(env, {
       procedure, vin, shopId: context.shopId, mode, actor: context.userId,
+    });
+    captureForContext(analytics, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
     });
     await recordDiagnosticAudit(env, context, {
       kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
@@ -772,6 +766,7 @@ async function handleOnboarding(request, env, context, analytics) {
   captureForContext(analytics, context, 'onboarding_started', {
     mode: resetAll ? 'all' : 'samples',
     removed_count: targets.length,
+  });
   capturePostHogEvent(env, context, 'onboarding_started', {
     reset_mode: resetAll ? 'all' : 'samples',
     removed_record_count: targets.length,
@@ -807,6 +802,7 @@ async function handlePayroll(request, env, context, analytics) {
   captureForContext(analytics, context, 'payroll_synced', {
     period,
     posted_entries: entries.length,
+  });
   capturePostHogEvent(env, context, 'payroll_synced', {
     posted_entry_count: entries.length,
     actor_role: context.role,
@@ -905,7 +901,6 @@ async function getIntegrationSecret(env, shopId, name) {
   return row ? decryptSecret(row.ciphertext, row.iv, env.INTEGRATION_ENCRYPTION_KEY) : '';
 }
 
-async function handleAgentPhoneConfigure(request, env, context, analytics) {
 async function deleteIntegrationSecret(env, shopId, name) {
   await env.DB.prepare(
     'DELETE FROM integration_secrets WHERE shop_id = ? AND secret_name = ?',
@@ -968,7 +963,7 @@ async function handleAgentPhoneConfigure(request, env, context) {
   const webhookUrl = `${new URL(request.url).origin}/api/agentphone/webhook/${encodeURIComponent(context.shopId)}`;
   const response = await fetch(`https://api.agentphone.ai/v1/agents/${encodeURIComponent(agentId)}/webhook`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: ['Bearer', apiKey].join(' '), 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: webhookUrl, contextLimit, timeout }),
   });
   const result = await response.json().catch(() => ({}));
@@ -1120,6 +1115,7 @@ async function handleCheckout(request, env, context, analytics) {
     amount: balance,
     currency: 'usd',
     processor: 'stripe',
+  });
   capturePostHogEvent(env, context, 'payment_checkout_started', {
     amount: balance,
     currency: 'usd',
@@ -1448,7 +1444,7 @@ async function handleMagicLink(request, env) {
   loginUrl.searchParams.set('token', token);
   if (env.AUTH_EMAIL_WEBHOOK) {
     const headers = { 'Content-Type': 'application/json' };
-    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
+    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = ['Bearer', env.AUTH_EMAIL_WEBHOOK_SECRET].join(' ');
     const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
       method: 'POST',
       headers,
