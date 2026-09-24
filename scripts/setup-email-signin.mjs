@@ -204,9 +204,11 @@ async function runWranglerSecretPut(name, value) {
   }
 
   await new Promise((resolve, reject) => {
-    const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const isWin = process.platform === 'win32';
+    const command = isWin ? 'npx.cmd' : 'npx';
     const child = spawn(command, ['wrangler', 'secret', 'put', name], {
       stdio: ['pipe', 'inherit', 'inherit'],
+      shell: isWin,
     });
     activeChild = child;
 
@@ -267,6 +269,9 @@ export async function main(argv = process.argv.slice(2)) {
     await promptLine('Webhook URL for MechPro sign-in emails: '),
     { allowLocal: options.local },
   );
+  if (options.local && !options.dryRun && new URL(webhookUrl).protocol === 'http:') {
+    throw new SetupError('Localhost webhooks cannot be stored as remote Worker secrets. Put AUTH_EMAIL_WEBHOOK in .dev.vars for `wrangler dev` instead, or re-run with --dry-run.');
+  }
   const useBearerSecret = await promptYesNo('Does this webhook require a bearer secret?');
   const webhookSecret = useBearerSecret
     ? await promptHidden('Webhook bearer secret (input hidden): ')
