@@ -25,11 +25,30 @@ export async function getEntity(env, shopId, type, id) {
   ).bind(shopId, type, id).first());
 }
 
-export async function listEntities(env, shopId, type) {
-  const result = await env.DB.prepare(
-    'SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = ? ORDER BY updated_at',
-  ).bind(shopId, type).all();
-  return (result.results || []).map(entityRecord);
+export async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const nextCursor = String(cursor || '').trim();
+  const filters = ['shop_id = ?', 'entity_type = ?'];
+  const bindValues = [shopId, type];
+  if (nextCursor) {
+    filters.push('updated_at > ?');
+    bindValues.push(nextCursor);
+  }
+  let sql = `SELECT data_json, updated_at FROM entities WHERE ${filters.join(' AND ')} ORDER BY updated_at`;
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  if (!boundedLimit) return records;
+  return {
+    records,
+    nextCursor: rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
 }
 
 export async function putEntity(env, context, type, id, body, expectedUpdatedAt = null, createdBy = context.userId) {
@@ -88,6 +107,91 @@ function members(record) {
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
 }
 
+function listParams(request) {
+  const url = new URL(request.url);
+  const requestedLimit = Number(url.searchParams.get('limit'));
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(200, Math.floor(requestedLimit))
+    : 0;
+  return {
+    limit,
+    cursor: String(url.searchParams.get('cursor') || '').trim(),
+    conversationId: String(url.searchParams.get('conversationId') || '').trim(),
+  };
+}
+
+async function listConversationIdsForMember(env, shopId, email, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const bindValues = [shopId, email.toLowerCase()];
+  let sql = `
+    SELECT e.entity_id, e.updated_at, e.data_json
+    FROM entities e, json_each(e.data_json, '$.memberEmails') member
+    WHERE e.shop_id = ? AND e.entity_type = 'conversations' AND lower(member.value) = ?
+  `;
+  if (cursor) {
+    sql += ' AND e.updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY e.updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  return {
+    records,
+    ids: records.map(record => String(record.id || '')).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function listChatMessagesForConversations(env, shopId, conversationIds, { limit = 0, cursor = '' } = {}) {
+  if (!conversationIds.length) return { records: [], nextCursor: null };
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const placeholders = conversationIds.map(() => '?').join(', ');
+  const bindValues = [shopId, ...conversationIds];
+  let sql = `
+    SELECT data_json, updated_at
+    FROM entities
+    WHERE shop_id = ? AND entity_type = 'chatmessages'
+      AND json_extract(data_json, '$.conversationId') IN (${placeholders})
+  `;
+  if (cursor) {
+    sql += ' AND updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  return {
+    records: rows.map(entityRecord).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function hasLinkedCustomerEntity(env, shopId, type, customerName) {
+  return Boolean(await env.DB.prepare(
+    "SELECT 1 AS found FROM entities WHERE shop_id = ? AND entity_type = ? AND json_extract(data_json, '$.customer') = ? LIMIT 1",
+  ).bind(shopId, type, customerName).first());
+}
+
+async function listPaymentsByInvoice(env, shopId, invoiceNumber) {
+  const result = await env.DB.prepare(
+    "SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = 'payments' AND json_extract(data_json, '$.invoiceNumber') = ?",
+  ).bind(shopId, invoiceNumber).all();
+  return (result.results || []).map(entityRecord).filter(Boolean);
+}
+
 /**
  * Build D1 statements for deleting an entity.
  * Employee deletes must revoke Access users even when the row is not an invoice.
@@ -123,15 +227,30 @@ export async function handleEntities(request, env, context, segments) {
   if (request.method !== 'GET' && !canWriteEntity(type, context.role)) throw new HttpError(403, `Role ${context.role} cannot modify ${type}`);
 
   if (request.method === 'GET' && !id) {
-    let records = await listEntities(env, context.shopId, type);
-    if (type === 'conversations') records = records.filter(record => members(record).includes(context.email));
+    const params = listParams(request);
+    const paginated = params.limit > 0;
+    let records;
+    let nextCursor = null;
+    if (type === 'conversations') {
+      const result = await listConversationIdsForMember(env, context.shopId, context.email, params);
+      records = result.records;
+      nextCursor = result.nextCursor;
+    } else {
+      const result = await listEntities(env, context.shopId, type, params);
+      records = paginated ? result.records : result;
+      nextCursor = paginated ? result.nextCursor : null;
+    }
     if (type === 'chatmessages') {
-      const allowed = new Set((await listEntities(env, context.shopId, 'conversations'))
-        .filter(record => members(record).includes(context.email)).map(record => record.id));
-      records = records.filter(record => allowed.has(record.conversationId));
+      const allowedResult = await listConversationIdsForMember(env, context.shopId, context.email);
+      const allowedIds = new Set(allowedResult.ids);
+      const conversationIds = params.conversationId ? [params.conversationId] : [...allowedIds];
+      if (params.conversationId && !allowedIds.has(params.conversationId)) throw new HttpError(404, 'Conversation not found');
+      const listed = await listChatMessagesForConversations(env, context.shopId, conversationIds, params);
+      records = listed.records;
+      nextCursor = listed.nextCursor;
     }
     if (type === 'employees') records = records.map(record => redactEmployee(record, context.role));
-    return json(records);
+    return paginated ? json({ records, nextCursor }) : json(records);
   }
   if (request.method === 'GET' && id) {
     const record = await getEntity(env, context.shopId, type, id);
@@ -198,13 +317,13 @@ export async function handleEntities(request, env, context, segments) {
     }
     if (type === 'customers') {
       const linkedTypes = ['vehicles', 'orders', 'invoices'];
-      const lists = await Promise.all(linkedTypes.map(linkedType => listEntities(env, context.shopId, linkedType)));
-      if (lists.flat().some(record => record.customer === existing.name)) {
+      const links = await Promise.all(linkedTypes.map(linkedType => hasLinkedCustomerEntity(env, context.shopId, linkedType, existing.name)));
+      if (links.some(Boolean)) {
         throw new HttpError(409, "Delete this customer's vehicles, work orders, and invoices first");
       }
     }
     const relatedPayments = type === 'invoices'
-      ? await listEntities(env, context.shopId, 'payments')
+      ? await listPaymentsByInvoice(env, context.shopId, existing.number || existing.id)
       : [];
     await env.DB.batch(buildEntityDeleteStatements(env, context, type, id, existing, relatedPayments));
     return new Response(null, { status: 204 });

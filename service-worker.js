@@ -20,6 +20,11 @@ const SHELL_FILES = [
   './assets/fonts/jetbrains-mono-latin-600-normal.woff2',
 ];
 
+function isImmutableAsset(pathname) {
+  return /^\/assets\/.+-[A-Za-z0-9_-]{6,}\.(js|css)$/.test(pathname)
+    || pathname.endsWith('.woff2');
+}
+
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -62,6 +67,22 @@ self.addEventListener('fetch', event => {
           return response;
         })
         .catch(() => caches.match('./index.html')),
+    );
+    return;
+  }
+
+  if (isImmutableAsset(url.pathname)) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        const network = fetch(request).then(response => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+          }
+          return response;
+        }).catch(() => cached);
+        return cached || network;
+      }),
     );
     return;
   }

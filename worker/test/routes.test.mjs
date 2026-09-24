@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEntityDeleteStatements } from '../src/routes/entities.mjs';
+import { buildEntityDeleteStatements, listEntities } from '../src/routes/entities.mjs';
 import { assertUploadContentType, assertUploadSize, handleFiles } from '../src/routes/files.mjs';
 import { HttpError } from '../src/http.mjs';
 
@@ -55,6 +55,57 @@ test('invoice delete removes linked payments without requiring employee branch',
   assert.equal(statements.length, 2);
   assert.match(statements[1].sql, /DELETE FROM entities/i);
   assert.deepEqual(statements[1].args, ['shop-1', 'payments', 'pay-1']);
+});
+
+test('listEntities keeps full-array response when no pagination parameters are supplied', async () => {
+  const env = {
+    DB: {
+      prepare() {
+        return {
+          bind() {
+            return {
+              async all() {
+                return {
+                  results: [
+                    { data_json: JSON.stringify({ id: 'a' }), updated_at: '2026-09-24T00:00:00.000Z' },
+                    { data_json: JSON.stringify({ id: 'b' }), updated_at: '2026-09-24T00:01:00.000Z' },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const records = await listEntities(env, 'shop-1', 'orders');
+  assert.deepEqual(records.map(record => record.id), ['a', 'b']);
+});
+
+test('listEntities returns cursor metadata when limit is provided', async () => {
+  const env = {
+    DB: {
+      prepare() {
+        return {
+          bind() {
+            return {
+              async all() {
+                return {
+                  results: [
+                    { data_json: JSON.stringify({ id: 'a' }), updated_at: '2026-09-24T00:00:00.000Z' },
+                    { data_json: JSON.stringify({ id: 'b' }), updated_at: '2026-09-24T00:01:00.000Z' },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const paged = await listEntities(env, 'shop-1', 'orders', { limit: 2 });
+  assert.deepEqual(paged.records.map(record => record.id), ['a', 'b']);
+  assert.equal(paged.nextCursor, '2026-09-24T00:01:00.000Z');
 });
 
 test('upload size guard rejects oversized and empty declarations', () => {
