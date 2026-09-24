@@ -149,24 +149,27 @@ async function listConversationIdsForMember(env, shopId, email, { limit = 0, cur
   };
 }
 
-async function listChatMessagesForConversations(env, shopId, conversationIds, { limit = 0, cursor = '' } = {}) {
-  if (!conversationIds.length) return { records: [], nextCursor: null };
+async function listChatMessagesForConversations(env, shopId, email, { limit = 0, cursor = '', conversationId = '' } = {}) {
   const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
     ? Math.min(200, Math.floor(Number(limit)))
     : 0;
-  const placeholders = conversationIds.map(() => '?').join(', ');
-  const bindValues = [shopId, ...conversationIds];
+  const bindValues = [shopId, email.toLowerCase()];
   let sql = `
-    SELECT data_json, updated_at
-    FROM entities
-    WHERE shop_id = ? AND entity_type = 'chatmessages'
-      AND json_extract(data_json, '$.conversationId') IN (${placeholders})
+    SELECT m.data_json, m.updated_at FROM entities m
+    WHERE m.shop_id = ?1 AND m.entity_type = 'chatmessages'
+      AND json_extract(m.data_json, '$.conversationId') IN (
+        SELECT c.entity_id FROM entities c, json_each(c.data_json, '$.memberEmails') mem
+        WHERE c.shop_id = ?1 AND c.entity_type = 'conversations' AND lower(trim(mem.value)) = ?2)
   `;
+  if (conversationId) {
+    sql += " AND json_extract(m.data_json, '$.conversationId') = ?";
+    bindValues.push(conversationId);
+  }
   if (cursor) {
-    sql += ' AND updated_at > ?';
+    sql += ' AND m.updated_at > ?';
     bindValues.push(cursor);
   }
-  sql += ' ORDER BY updated_at';
+  sql += ' ORDER BY m.updated_at';
   if (boundedLimit) {
     sql += ' LIMIT ?';
     bindValues.push(boundedLimit);
@@ -243,9 +246,8 @@ export async function handleEntities(request, env, context, segments) {
     if (type === 'chatmessages') {
       const allowedResult = await listConversationIdsForMember(env, context.shopId, context.email);
       const allowedIds = new Set(allowedResult.ids);
-      const conversationIds = params.conversationId ? [params.conversationId] : [...allowedIds];
       if (params.conversationId && !allowedIds.has(params.conversationId)) throw new HttpError(404, 'Conversation not found');
-      const listed = await listChatMessagesForConversations(env, context.shopId, conversationIds, params);
+      const listed = await listChatMessagesForConversations(env, context.shopId, context.email, params);
       records = listed.records;
       nextCursor = listed.nextCursor;
     }
