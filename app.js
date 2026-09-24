@@ -477,9 +477,27 @@
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
+  function encodeStateSnapshot(text) {
+    try {
+      return `enc:v1:${btoa(unescape(encodeURIComponent(text)))}`;
+    } catch {
+      return text;
+    }
+  }
+  function decodeStateSnapshot(text) {
+    if (typeof text !== "string" || !text) return text;
+    if (!text.startsWith("enc:v1:")) return text;
+    try {
+      return decodeURIComponent(escape(atob(text.slice(7))));
+    } catch {
+      return text;
+    }
+  }
   function load() {
     try {
-      const value2 = JSON.parse(localStorage.getItem(STORE));
+      const raw = localStorage.getItem(STORE);
+      const decoded = decodeStateSnapshot(raw);
+      const value2 = JSON.parse(decoded);
       return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
@@ -492,7 +510,7 @@
   }
   function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
-    localStorage.setItem(STORE, pendingStateSnapshot);
+    localStorage.setItem(STORE, encodeStateSnapshot(pendingStateSnapshot));
     persistedStateSnapshot = pendingStateSnapshot;
     pendingStateSnapshot = null;
   }
