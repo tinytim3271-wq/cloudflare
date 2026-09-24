@@ -92,8 +92,8 @@ test('listEntities returns cursor metadata when limit is provided', async () => 
               async all() {
                 return {
                   results: [
-                    { data_json: JSON.stringify({ id: 'a' }), updated_at: '2026-09-24T00:00:00.000Z' },
-                    { data_json: JSON.stringify({ id: 'b' }), updated_at: '2026-09-24T00:01:00.000Z' },
+                    { data_json: JSON.stringify({ id: 'a' }), updated_at: '2026-09-24T00:00:00.000Z', entity_id: 'a' },
+                    { data_json: JSON.stringify({ id: 'b' }), updated_at: '2026-09-24T00:01:00.000Z', entity_id: 'b' },
                   ],
                 };
               },
@@ -105,7 +105,7 @@ test('listEntities returns cursor metadata when limit is provided', async () => 
   };
   const paged = await listEntities(env, 'shop-1', 'orders', { limit: 2 });
   assert.deepEqual(paged.records.map(record => record.id), ['a', 'b']);
-  assert.equal(paged.nextCursor, '2026-09-24T00:01:00.000Z');
+  assert.equal(paged.nextCursor, '2026-09-24T00:01:00.000Z|b');
 });
 
 test('upload size guard rejects oversized and empty declarations', () => {
