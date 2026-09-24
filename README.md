@@ -139,28 +139,50 @@ loginUrl, returnTo }`; its optional bearer secret is stored as
 API. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
 subscription webhook endpoint.
 
-### Troubleshooting email sign-in
+### Fixing email sign-in
 
-An "Email delivery is not configured" or "Email sign-in is unavailable" error
-means the `mechpro-api` Worker has no `AUTH_EMAIL_WEBHOOK` setting. The application
-does not send mail by itself. Configure an HTTPS endpoint you control that accepts
-the JSON payload above, sends the sign-in email, and returns a successful HTTP
-status only after the email provider accepts the message. A provider API URL
-alone will not work unless it supports this exact payload.
+If MechPro says `Email sign-in is unavailable...AUTH_EMAIL_WEBHOOK`, it means the
+deployed Worker has not been connected to email delivery yet. MechPro does not
+send the email by itself: it calls a webhook that **you** provide, and that
+webhook must send the sign-in email.
 
-Run `npx wrangler secret put AUTH_EMAIL_WEBHOOK` and enter that endpoint URL.
-If the endpoint requires bearer authentication, also set
-`AUTH_EMAIL_WEBHOOK_SECRET`. These commands update the deployed Worker; local
-`.dev.vars` settings and GitHub secrets alone do not. Using Worker secrets keeps
-the endpoint credentials out of source control and preserves the settings across
-normal deployments. Do not set `AUTH_EXPOSE_LOGIN_LINK=1` in production: it returns
-the sign-in token directly without proving ownership of the email address.
+The easiest setup is the guided command:
 
-After configuration, request a link using an inbox you control, verify the email
-arrives, and follow it to confirm sign-in. New requests made without email
-configuration do not store tokens or start the 15-minute retry cooldown. A
-cooldown left by the older code may still need to expire before retrying.
-`/api/healthz` checks API availability, not email delivery.
+```bash
+npm run setup:email
+```
+
+The script explains each step, asks for confirmation before saving anything, and
+stores the values as **remote Worker secrets** through Wrangler. Your
+administrator needs an **HTTPS** webhook endpoint that accepts MechPro's JSON
+payload:
+
+```json
+{ "email": "customer@example.com", "loginUrl": "https://example.com/api/auth/callback?token=...", "returnTo": "/" }
+```
+
+If your webhook needs bearer authentication, the same guided flow can also store
+`AUTH_EMAIL_WEBHOOK_SECRET`.
+
+Important:
+
+- **Production sign-in uses remote Worker secrets**, not local `.dev.vars`.
+- `.dev.vars` is only for local `wrangler dev` testing on your own machine.
+- **Do not enable `AUTH_EXPOSE_LOGIN_LINK=1` in production.** That bypass returns
+  the magic sign-in link directly instead of proving email ownership.
+
+After the script saves the secret, deploy the Worker:
+
+```bash
+npm run deploy:worker
+```
+
+Simple verification:
+
+1. Open your MechPro site and visit `/login`.
+2. Request a sign-in link with an email address you control.
+3. Confirm your webhook receives `{ email, loginUrl, returnTo }`.
+4. Confirm the email arrives and that the login link signs you in.
 
 Apply schema and deploy:
 
