@@ -33,10 +33,11 @@ export async function listEntities(env, shopId, type, { limit = 0, cursor = '' }
   const filters = ['shop_id = ?', 'entity_type = ?'];
   const bindValues = [shopId, type];
   if (nextCursor) {
-    filters.push('updated_at > ?');
-    bindValues.push(nextCursor);
+    const [cursorTs, cursorId] = nextCursor.split('|');
+    filters.push('(updated_at > ? OR (updated_at = ? AND entity_id > ?))');
+    bindValues.push(cursorTs, cursorTs, cursorId);
   }
-  let sql = `SELECT data_json, updated_at FROM entities WHERE ${filters.join(' AND ')} ORDER BY updated_at`;
+  let sql = `SELECT data_json, updated_at, entity_id FROM entities WHERE ${filters.join(' AND ')} ORDER BY updated_at, entity_id`;
   if (boundedLimit) {
     sql += ' LIMIT ?';
     bindValues.push(boundedLimit);
@@ -47,7 +48,7 @@ export async function listEntities(env, shopId, type, { limit = 0, cursor = '' }
   if (!boundedLimit) return records;
   return {
     records,
-    nextCursor: rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+    nextCursor: rows.length === boundedLimit ? `${rows.at(-1)?.updated_at}|${rows.at(-1)?.entity_id}` : null,
   };
 }
 
