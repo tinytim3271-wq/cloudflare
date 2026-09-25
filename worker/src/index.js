@@ -1458,7 +1458,7 @@ async function handleMagicLink(request, env) {
       if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
     }
   } catch (error) {
-    await env.DB.prepare('DELETE FROM login_tokens WHERE email = ? COLLATE NOCASE').bind(email).run();
+    await env.DB.prepare('DELETE FROM login_tokens WHERE token_hash = ?').bind(tokenHash).run();
     throw error instanceof HttpError ? error : new HttpError(502, 'Unable to deliver the sign-in email');
   }
   const payload = {
