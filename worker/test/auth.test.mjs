@@ -164,3 +164,96 @@ test('explicit development link exposure continues to work without an email webh
   const payload = await response.json();
   assert.equal(new URL(payload.loginUrl).pathname, '/api/auth/callback');
 });
+
+test('magic-link callback refuses to mint a session for a disabled user', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const token = 'a'.repeat(32);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  const tokenHash = Buffer.from(digest).toString('hex');
+  let insertedSession = false;
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async first() {
+                if (/FROM login_tokens/.test(sql)) {
+                  assert.equal(args[0], tokenHash);
+                  return {
+                    id: 'login-1',
+                    email: 'disabled@example.test',
+                    return_to: '/app',
+                    expires_at: new Date(Date.now() + 60_000).toISOString(),
+                    used_at: null,
+                  };
+                }
+                if (/FROM users/.test(sql)) {
+                  return {
+                    id: 'user-disabled',
+                    email: 'disabled@example.test',
+                    shop_id: 'shop-1',
+                    role: 'technician',
+                    name: 'Disabled Tech',
+                    enabled: 0,
+                  };
+                }
+                return null;
+              },
+              async run() {
+                assert.fail(`disabled callback must not mutate state: ${sql}`);
+              },
+            };
+          },
+        };
+      },
+      async batch() {
+        insertedSession = true;
+        assert.fail('disabled callback must not create a session');
+      },
+    },
+  };
+  const response = await worker.fetch(
+    new Request(`https://app.example.test/api/auth/callback?token=${token}`),
+    env,
+  );
+  assert.equal(response.status, 403);
+  assert.match((await response.json()).message, /disabled/i);
+  assert.equal(insertedSession, false);
+});
+
+test('cookie sessions for disabled users are rejected on API routes', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const sessionToken = 'b'.repeat(32);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionToken));
+  const tokenHash = Buffer.from(digest).toString('hex');
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async first() {
+                assert.match(sql, /u\.enabled = 1/);
+                assert.equal(args[0], tokenHash);
+                // A disabled user never matches the enabled=1 filter.
+                return null;
+              },
+              async run() {
+                assert.fail(`disabled session lookup must not update state: ${sql}`);
+              },
+              async all() {
+                return { results: [] };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const response = await worker.fetch(new Request('https://app.example.test/api/entities/orders', {
+    headers: { Cookie: `mechpro_session=${sessionToken}` },
+  }), env);
+  assert.equal(response.status, 401);
+  assert.match((await response.json()).message, /Authentication is required/i);
+});

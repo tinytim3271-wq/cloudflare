@@ -198,6 +198,7 @@ async function resolveAppSession(request, env) {
     FROM sessions s
     INNER JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+      AND u.enabled = 1
   `).bind(tokenHash, new Date().toISOString()).first();
   if (!row) return null;
   const now = new Date();
@@ -360,11 +361,21 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
   return record;
 }
 
+async function revokeSessionsForUserIds(env, userIds, revokedAt = new Date().toISOString()) {
+  const ids = [...new Set((userIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  for (const userId of ids) {
+    await env.DB.prepare(
+      'UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL',
+    ).bind(revokedAt, userId).run();
+  }
+}
+
 async function syncAccessUser(env, context, employee) {
   const email = String(employee.email || '').trim().toLowerCase();
   const role = String(employee.role || 'technician');
   if (!email || !SHOP_ROLES.has(role)) throw new HttpError(400, 'Employee email and a valid role are required');
   const now = new Date().toISOString();
+  const enabled = employee.active === false ? 0 : 1;
   await env.DB.prepare(`
     INSERT INTO users (email, shop_id, role, name, enabled, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -379,10 +390,14 @@ async function syncAccessUser(env, context, employee) {
     context.shopId,
     role,
     String(employee.name || email),
-    employee.active === false ? 0 : 1,
+    enabled,
     now,
     now,
   ).run();
+  if (!enabled) {
+    const row = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(email).first();
+    await revokeSessionsForUserIds(env, [row?.id], now);
+  }
 }
 
 function members(record) {
@@ -1303,6 +1318,10 @@ async function handleAdmin(request, env, context, segments, analytics) {
     ).bind(body.suspended ? 1 : 0, now, target).run();
     if (!result.meta.changes) throw new HttpError(404, 'Customer account not found');
     await env.DB.prepare('UPDATE users SET enabled = ?, updated_at = ? WHERE shop_id = ?').bind(body.suspended ? 0 : 1, now, target).run();
+    if (body.suspended) {
+      const userRows = await env.DB.prepare('SELECT id FROM users WHERE shop_id = ?').bind(target).all();
+      await revokeSessionsForUserIds(env, (userRows.results || []).map((row) => row.id), now);
+    }
     captureForContext(analytics, context, 'account_status_changed', {
       target_shop_id: target,
       suspended: body.suspended,
@@ -1488,6 +1507,9 @@ async function handleAuthCallback(request, env) {
   }
   const email = String(loginToken.email || '').trim().toLowerCase();
   const user = await ensureSaasUser(env, email, email.split('@')[0]);
+  if (Number(user.enabled) !== 1) {
+    throw new HttpError(403, 'This account has been disabled. Contact your shop administrator.');
+  }
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
