@@ -25,19 +25,43 @@ gitignored) and writes the matching `DIAGNOSTICS_SIGNING_PRIVATE_KEY` into
 
 ## Production
 
-CI must provision matching keys:
-- set the Worker secret: `wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY`
-- place the SPKI public key at `diagnostics/keys/capability-public-key.pem`
-  (or ship it in the packaged desktop resources) so hosts can verify.
+### Recommended: provision via GitHub secret (hands-off)
 
-Generate a pair:
+The `Cloudflare deploy` workflow auto-provisions the Worker secret from a GitHub
+Actions repo secret on every deploy, so you never touch the Worker directly:
+
+1. Generate a key pair and get the base64 private key + the public key:
+   ```bash
+   bash scripts/setup-diagnostics-signing-key.sh --print-secret
+   ```
+   (`--print-secret` prints the base64 DER private key instead of calling
+   `wrangler`, and still writes `diagnostics/keys/capability-public-key.pem`.)
+2. Add the printed value as the GitHub repo secret **`DIAGNOSTICS_SIGNING_PRIVATE_KEY`**
+   (Settings → Secrets and variables → Actions → New repository secret).
+3. Commit `diagnostics/keys/capability-public-key.pem` (public key — safe to commit).
+4. Re-run the deploy. The workflow's **Provision diagnostics signing key secret**
+   step pushes the key to the Worker (`wrangler secret put`) before Pages deploy,
+   and the post-deploy **Verify diagnostics signing key secret** step confirms it.
+
+Rotating: generate a new pair (`--rotate --print-secret`), update the GitHub
+secret, commit the new public key. Rotation invalidates tokens signed by the old
+key.
+
+### Alternative: set it directly with wrangler
+
+On a machine where `wrangler` is authenticated to Cloudflare:
+
+```bash
+bash scripts/setup-diagnostics-signing-key.sh   # generates keys, sets the Worker secret, writes the public key
+```
+
+Or manually:
 
 ```bash
 openssl ecparam -name prime256v1 -genkey -noout -out ec.pem
 openssl pkcs8 -topk8 -nocrypt -in ec.pem -out capability-private-key.pkcs8.pem
 openssl ec -in ec.pem -pubout -out capability-public-key.pem
-# Worker secret value (single-line base64 DER):
-grep -v -- '-----' capability-private-key.pkcs8.pem | tr -d '\n'
+grep -v -- '-----' capability-private-key.pkcs8.pem | tr -d '\n' | wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
 ```
 
 Never commit a private key. Public keys are safe to commit.

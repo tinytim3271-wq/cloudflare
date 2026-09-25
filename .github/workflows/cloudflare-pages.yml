@@ -162,27 +162,22 @@ jobs:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
-      - name: Verify diagnostics signing key secret
+      - name: Provision diagnostics signing key secret
         if: steps.verify-creds.outputs.valid == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SIGNING_KEY: ${{ secrets.DIAGNOSTICS_SIGNING_PRIVATE_KEY }}
         run: |
-          # Self-activating guard: only require the signing key once worker/src
-          # actually uses it (i.e. the diagnostics programming feature is present),
-          # so this never blocks deploys that don't include the feature.
-          if ! grep -rq "DIAGNOSTICS_SIGNING_PRIVATE_KEY" worker/src; then
-            echo "worker/src does not reference DIAGNOSTICS_SIGNING_PRIVATE_KEY; skipping signing-key check."
+          # Self-healing: push the ECDSA signing key to the Worker from the GitHub
+          # secret on every deploy, so the diagnostics programming endpoints work
+          # hands-off. No-op when the GitHub secret is not set.
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "No DIAGNOSTICS_SIGNING_PRIVATE_KEY GitHub secret set; skipping provisioning."
             exit 0
           fi
-          echo "Checking that DIAGNOSTICS_SIGNING_PRIVATE_KEY is set on the Worker..."
-          secrets_json="$(npx wrangler secret list 2>/dev/null || echo '[]')"
-          if echo "$secrets_json" | grep -q '"DIAGNOSTICS_SIGNING_PRIVATE_KEY"'; then
-            echo "OK: DIAGNOSTICS_SIGNING_PRIVATE_KEY is configured on the Worker."
-          else
-            echo "::error title=Missing Worker secret::worker/src uses DIAGNOSTICS_SIGNING_PRIVATE_KEY but it is not set on the Worker, so POST /api/diagnostics/authorize will return 503. Set it once with: bash scripts/setup-diagnostics-signing-key.sh (see diagnostics/keys/README.md), then re-run this deploy."
-            exit 1
-          fi
+          printf '%s' "$SIGNING_KEY" | npx wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
+          echo "Provisioned DIAGNOSTICS_SIGNING_PRIVATE_KEY on the Worker from the GitHub secret."
       - name: Build and stage Pages
         if: steps.verify-creds.outputs.valid == 'true'
         run: npm run build:web && npm run stage:pages
@@ -193,6 +188,26 @@ jobs:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy .pages-dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT || 'mechpro-dispatch' }} --commit-dirty=true
+      - name: Verify diagnostics signing key secret
+        if: steps.verify-creds.outputs.valid == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Runs AFTER Worker + Pages deploy so a missing signing key never blocks
+          # shipping the app; it only turns the run red to flag the misconfig.
+          # Self-activating: only enforced when worker/src actually uses the key.
+          if ! grep -rq "DIAGNOSTICS_SIGNING_PRIVATE_KEY" worker/src; then
+            echo "worker/src does not reference DIAGNOSTICS_SIGNING_PRIVATE_KEY; skipping signing-key check."
+            exit 0
+          fi
+          secrets_json="$(npx wrangler secret list 2>/dev/null || echo '[]')"
+          if echo "$secrets_json" | grep -q '"DIAGNOSTICS_SIGNING_PRIVATE_KEY"'; then
+            echo "OK: DIAGNOSTICS_SIGNING_PRIVATE_KEY is configured on the Worker."
+          else
+            echo "::error title=Missing Worker secret::worker/src uses DIAGNOSTICS_SIGNING_PRIVATE_KEY but it is not set on the Worker, so POST /api/diagnostics/authorize returns 503. Add the GitHub repo secret DIAGNOSTICS_SIGNING_PRIVATE_KEY (auto-provisioned on deploy), or run scripts/setup-diagnostics-signing-key.sh."
+            exit 1
+          fi
       - name: Post-deploy smoke checks
         if: steps.verify-creds.outputs.valid == 'true'
         env:
