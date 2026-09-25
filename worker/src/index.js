@@ -1,3 +1,4 @@
+import { PostHog } from 'posthog-node/edge';
 import coverageBundle from '../data/coverage.json' with { type: 'json' };
 import { isApiRequest, pagesProxyUrl, publicDownloadObjectKey } from './routing.mjs';
 import {
@@ -23,10 +24,81 @@ import {
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
+import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
+
+function createPostHog(env) {
+  const apiKey = String(env.POSTHOG_API_KEY || '').trim();
+  const host = String(env.POSTHOG_HOST || '').trim();
+  const missingVariable = !apiKey ? 'POSTHOG_API_KEY' : !host ? 'POSTHOG_HOST' : null;
+  if (missingVariable) {
+    if (env.ENVIRONMENT === 'development' || env.NODE_ENV === 'development') {
+      throw new Error(`${missingVariable} variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once ${missingVariable} is configured`);
+    }
+    return null;
+  }
+  return new PostHog(apiKey, {
+    host,
+    flushAt: 20,
+    flushInterval: 10000,
+    enableExceptionAutocapture: true,
+  });
+}
+
+function captureForContext(analytics, context, event, properties = {}) {
+  analytics.client?.capture({
+    distinctId: context.userId,
+    event,
+    properties: {
+      shop_id: context.shopId,
+      role: context.role,
+      ...properties,
+    },
+    groups: { shop: context.shopId },
+  });
+}
+
+let posthogClient = null;
+
+function getPostHog(env) {
+  const apiKey = String(env.POSTHOG_API_KEY || '').trim();
+  const host = String(env.POSTHOG_HOST || '').trim();
+  if (!apiKey) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_API_KEY variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_API_KEY is configured');
+    }
+    return null;
+  }
+  if (!host) {
+    if (env.ENVIRONMENT === 'development') {
+      throw new Error('POSTHOG_HOST variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_HOST is configured');
+    }
+    return null;
+  }
+  if (!posthogClient) {
+    posthogClient = new PostHog(apiKey, {
+      host,
+      flushAt: 20,
+      flushInterval: 10000,
+      enableExceptionAutocapture: true,
+    });
+  }
+  return posthogClient;
+}
+
+function capturePostHogEvent(env, context, event, properties = {}) {
+  const posthog = getPostHog(env);
+  if (!posthog) return;
+  posthog.capture({
+    distinctId: context.userId,
+    event,
+    properties,
+    groups: context.shopId ? { shop: context.shopId } : undefined,
+  });
+}
 
 // Recursively redact sensitive fields before persisting diagnostic audit events.
 const SENSITIVE_AUDIT_KEYS = new Set([
@@ -128,7 +200,11 @@ async function resolveAppSession(request, env) {
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
   `).bind(tokenHash, new Date().toISOString()).first();
   if (!row) return null;
-  await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date().toISOString(), row.session_id).run();
+  const now = new Date();
+  const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    'UPDATE sessions SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)',
+  ).bind(now.toISOString(), row.session_id, lastSeenCutoff).run();
   return {
     shopId: String(row.shop_id),
     role: String(row.role || 'admin'),
@@ -232,11 +308,30 @@ async function getEntity(env, shopId, type, id) {
   ).bind(shopId, type, id).first());
 }
 
-async function listEntities(env, shopId, type) {
-  const result = await env.DB.prepare(
-    'SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = ? ORDER BY updated_at',
-  ).bind(shopId, type).all();
-  return result.results.map(entityRecord);
+async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const nextCursor = String(cursor || '').trim();
+  const filters = ['shop_id = ?', 'entity_type = ?'];
+  const bindValues = [shopId, type];
+  if (nextCursor) {
+    filters.push('updated_at > ?');
+    bindValues.push(nextCursor);
+  }
+  let sql = `SELECT data_json, updated_at FROM entities WHERE ${filters.join(' AND ')} ORDER BY updated_at`;
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  if (!boundedLimit) return records;
+  return {
+    records,
+    nextCursor: rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
 }
 
 async function putEntity(env, context, type, id, body, expectedUpdatedAt = null, createdBy = context.userId) {
@@ -295,7 +390,92 @@ function members(record) {
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
 }
 
-async function handleEntities(request, env, context, segments) {
+function listParams(request) {
+  const url = new URL(request.url);
+  const requestedLimit = Number(url.searchParams.get('limit'));
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(200, Math.floor(requestedLimit))
+    : 0;
+  return {
+    limit,
+    cursor: String(url.searchParams.get('cursor') || '').trim(),
+    conversationId: String(url.searchParams.get('conversationId') || '').trim(),
+  };
+}
+
+async function listConversationIdsForMember(env, shopId, email, { limit = 0, cursor = '' } = {}) {
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const bindValues = [shopId, email.toLowerCase()];
+  let sql = `
+    SELECT e.entity_id, e.updated_at, e.data_json
+    FROM entities e, json_each(e.data_json, '$.memberEmails') member
+    WHERE e.shop_id = ? AND e.entity_type = 'conversations' AND lower(member.value) = ?
+  `;
+  if (cursor) {
+    sql += ' AND e.updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY e.updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  const records = rows.map(entityRecord).filter(Boolean);
+  return {
+    records,
+    ids: records.map(record => String(record.id || '')).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function listChatMessagesForConversations(env, shopId, conversationIds, { limit = 0, cursor = '' } = {}) {
+  if (!conversationIds.length) return { records: [], nextCursor: null };
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(200, Math.floor(Number(limit)))
+    : 0;
+  const placeholders = conversationIds.map(() => '?').join(', ');
+  const bindValues = [shopId, ...conversationIds];
+  let sql = `
+    SELECT data_json, updated_at
+    FROM entities
+    WHERE shop_id = ? AND entity_type = 'chatmessages'
+      AND json_extract(data_json, '$.conversationId') IN (${placeholders})
+  `;
+  if (cursor) {
+    sql += ' AND updated_at > ?';
+    bindValues.push(cursor);
+  }
+  sql += ' ORDER BY updated_at';
+  if (boundedLimit) {
+    sql += ' LIMIT ?';
+    bindValues.push(boundedLimit);
+  }
+  const result = await env.DB.prepare(sql).bind(...bindValues).all();
+  const rows = result.results || [];
+  return {
+    records: rows.map(entityRecord).filter(Boolean),
+    nextCursor: boundedLimit && rows.length === boundedLimit ? String(rows.at(-1)?.updated_at || '') : null,
+  };
+}
+
+async function hasLinkedCustomerEntity(env, shopId, type, customerName) {
+  return Boolean(await env.DB.prepare(
+    "SELECT 1 AS found FROM entities WHERE shop_id = ? AND entity_type = ? AND json_extract(data_json, '$.customer') = ? LIMIT 1",
+  ).bind(shopId, type, customerName).first());
+}
+
+async function listPaymentsByInvoice(env, shopId, invoiceNumber) {
+  const result = await env.DB.prepare(
+    "SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = 'payments' AND json_extract(data_json, '$.invoiceNumber') = ?",
+  ).bind(shopId, invoiceNumber).all();
+  return (result.results || []).map(entityRecord).filter(Boolean);
+}
+
+async function handleEntities(request, env, context, segments, analytics) {
   const sourceType = String(segments[1] || '').toLowerCase();
   const type = normalizeEntityType(sourceType);
   const id = segments[2] ? decodeURIComponent(segments.slice(2).join('/')) : null;
@@ -304,15 +484,30 @@ async function handleEntities(request, env, context, segments) {
   if (request.method !== 'GET' && !canWriteEntity(type, context.role)) throw new HttpError(403, `Role ${context.role} cannot modify ${type}`);
 
   if (request.method === 'GET' && !id) {
-    let records = await listEntities(env, context.shopId, type);
-    if (type === 'conversations') records = records.filter(record => members(record).includes(context.email));
+    const params = listParams(request);
+    const paginated = params.limit > 0;
+    let records;
+    let nextCursor = null;
+    if (type === 'conversations') {
+      const result = await listConversationIdsForMember(env, context.shopId, context.email, params);
+      records = result.records;
+      nextCursor = result.nextCursor;
+    } else {
+      const result = await listEntities(env, context.shopId, type, params);
+      records = paginated ? result.records : result;
+      nextCursor = paginated ? result.nextCursor : null;
+    }
     if (type === 'chatmessages') {
-      const allowed = new Set((await listEntities(env, context.shopId, 'conversations'))
-        .filter(record => members(record).includes(context.email)).map(record => record.id));
-      records = records.filter(record => allowed.has(record.conversationId));
+      const allowedResult = await listConversationIdsForMember(env, context.shopId, context.email);
+      const allowedIds = new Set(allowedResult.ids);
+      const conversationIds = params.conversationId ? [params.conversationId] : [...allowedIds];
+      if (params.conversationId && !allowedIds.has(params.conversationId)) throw new HttpError(404, 'Conversation not found');
+      const listed = await listChatMessagesForConversations(env, context.shopId, conversationIds, params);
+      records = listed.records;
+      nextCursor = listed.nextCursor;
     }
     if (type === 'employees') records = records.map(record => redactEmployee(record, context.role));
-    return json(records);
+    return paginated ? json({ records, nextCursor }) : json(records);
   }
   if (request.method === 'GET' && id) {
     const record = await getEntity(env, context.shopId, type, id);
@@ -346,6 +541,11 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, newId, body);
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    captureForContext(analytics, context, 'entity_created', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_created', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved, 201);
   }
   if (request.method === 'PUT' && id) {
@@ -361,6 +561,11 @@ async function handleEntities(request, env, context, segments) {
     }
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
     if (type === 'employees') await syncAccessUser(env, context, saved);
+    captureForContext(analytics, context, 'entity_updated', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_updated', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return json(saved);
   }
   if (request.method === 'DELETE' && id) {
@@ -372,8 +577,8 @@ async function handleEntities(request, env, context, segments) {
     }
     if (type === 'customers') {
       const linkedTypes = ['vehicles', 'orders', 'invoices'];
-      const lists = await Promise.all(linkedTypes.map(linkedType => listEntities(env, context.shopId, linkedType)));
-      if (lists.flat().some(record => record.customer === existing.name)) {
+      const links = await Promise.all(linkedTypes.map(linkedType => hasLinkedCustomerEntity(env, context.shopId, linkedType, existing.name)));
+      if (links.some(Boolean)) {
         throw new HttpError(409, "Delete this customer's vehicles, work orders, and invoices first");
       }
     }
@@ -381,7 +586,7 @@ async function handleEntities(request, env, context, segments) {
       'DELETE FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
     ).bind(context.shopId, type, id)];
     if (type === 'invoices') {
-      const payments = await listEntities(env, context.shopId, 'payments');
+      const payments = await listPaymentsByInvoice(env, context.shopId, existing.number || existing.id);
       for (const payment of payments.filter(record => record.invoiceNumber === (existing.number || existing.id))) {
         statements.push(env.DB.prepare(
           'DELETE FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
@@ -394,13 +599,28 @@ async function handleEntities(request, env, context, segments) {
       ).bind(existing.email, context.shopId));
     }
     await env.DB.batch(statements);
+    captureForContext(analytics, context, 'entity_deleted', { entity_type: type });
+    capturePostHogEvent(env, context, 'entity_deleted', {
+      entity_type: type,
+      actor_role: context.role,
+    });
     return new Response(null, { status: 204 });
   }
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleAuthSession(context) {
+async function handleAuthSession(context, analytics) {
   const expires = Math.floor(Date.now() / 1000) + 3600;
+  analytics.client?.identify({
+    distinctId: context.userId,
+    properties: {
+      email: context.email,
+      name: context.name,
+      role: context.role,
+      shop_id: context.shopId,
+    },
+  });
+  captureForContext(analytics, context, 'auth_session_started');
   return json({
     claims: {
       sub: context.userId,
@@ -462,7 +682,7 @@ async function recordDiagnosticAudit(env, context, event) {
   return id;
 }
 
-async function handleDiagnostics(request, env, context, segments) {
+async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
   requireRole(context, ['admin', 'technician', 'service_writer']);
@@ -496,8 +716,19 @@ async function handleDiagnostics(request, env, context, segments) {
     const { token, payload } = await mintCapabilityToken(env, {
       procedure, vin, shopId: context.shopId, mode, actor: context.userId,
     });
+    captureForContext(analytics, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
+    });
     await recordDiagnosticAudit(env, context, {
       kind: 'diagnostics.authorize', procedure, scope: spec.klass, vin, mode, jti: payload.jti,
+    });
+    capturePostHogEvent(env, context, 'diagnostics_authorized', {
+      procedure,
+      diagnostic_scope: spec.klass,
+      mode,
+      actor_role: context.role,
     });
     return json({
       authorized: true, procedure, scope: spec.klass, mode, vin, token,
@@ -507,7 +738,7 @@ async function handleDiagnostics(request, env, context, segments) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleOnboarding(request, env, context) {
+async function handleOnboarding(request, env, context, analytics) {
   requireRole(context, ['admin']);
   const records = await env.DB.prepare(
     "SELECT entity_type, entity_id, data_json FROM entities WHERE shop_id = ? AND entity_type != 'employees'",
@@ -533,10 +764,18 @@ async function handleOnboarding(request, env, context) {
   await putEntity(env, context, 'shopsettings', 'onboarding', {
     startedAt, sampleRecordsRemoved: resetAll ? 0 : targets.length, allShopDataRemoved: resetAll,
   });
+  captureForContext(analytics, context, 'onboarding_started', {
+    mode: resetAll ? 'all' : 'samples',
+    removed_count: targets.length,
+  });
+  capturePostHogEvent(env, context, 'onboarding_started', {
+    reset_mode: resetAll ? 'all' : 'samples',
+    removed_record_count: targets.length,
+  });
   return json({ startedAt, removed: targets.length, mode: resetAll ? 'all' : 'samples' });
 }
 
-async function handlePayroll(request, env, context) {
+async function handlePayroll(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office']);
   const [orders, employees] = await Promise.all([
@@ -561,6 +800,14 @@ async function handlePayroll(request, env, context) {
     }];
   });
   for (const entry of entries) await putEntity(env, context, 'payrollentries', entry.id, entry);
+  captureForContext(analytics, context, 'payroll_synced', {
+    period,
+    posted_entries: entries.length,
+  });
+  capturePostHogEvent(env, context, 'payroll_synced', {
+    posted_entry_count: entries.length,
+    actor_role: context.role,
+  });
   return json({ period, postedEntries: entries.length });
 }
 
@@ -595,15 +842,19 @@ async function enforceAiRateLimit(env, context) {
 }
 
 async function shopContext(env, shopId) {
+  const compact = value => {
+    const text = String(value || '');
+    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+  };
   const result = await env.DB.prepare(
-    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type != 'employees' ORDER BY updated_at DESC LIMIT 120",
+    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type IN ('orders','invoices','payments','customers','appointments','vehicles','conversations') ORDER BY updated_at DESC LIMIT 60",
   ).bind(shopId).all();
   return result.results.map(row => {
     const item = entityRecord(row);
     return {
-      type: row.entity_type, id: item.id, name: item.name, status: item.status, customer: item.customer,
-      vehicle: item.vehicle, amount: item.amount, due: item.due, technician: item.tech,
-      promise: item.promise, concern: item.complaint,
+      type: row.entity_type, id: compact(item.id), name: compact(item.name), status: compact(item.status), customer: compact(item.customer),
+      vehicle: compact(item.vehicle), amount: Number(item.amount || 0), due: compact(item.due), technician: compact(item.tech),
+      promise: compact(item.promise), concern: compact(item.complaint),
     };
   });
 }
@@ -624,7 +875,7 @@ async function aiAnswer(env, shopId, message, history = []) {
   return { text: result.response || 'I could not produce an answer right now.', model };
 }
 
-async function handleAssistant(request, env, context) {
+async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
   await enforceAiRateLimit(env, context);
@@ -632,6 +883,7 @@ async function handleAssistant(request, env, context) {
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
   const result = await aiAnswer(env, context.shopId, message, Array.isArray(body.history) ? body.history : []);
+  captureForContext(analytics, context, 'ai_assistant_queried', { model: result.model });
   return json({ message: result.text, model: result.model });
 }
 
@@ -712,7 +964,7 @@ async function handleAgentPhoneConfigure(request, env, context) {
   const webhookUrl = `${new URL(request.url).origin}/api/agentphone/webhook/${encodeURIComponent(context.shopId)}`;
   const response = await fetch(`https://api.agentphone.ai/v1/agents/${encodeURIComponent(agentId)}/webhook`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: ['Bearer', apiKey].join(' '), 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: webhookUrl, contextLimit, timeout }),
   });
   const result = await response.json().catch(() => ({}));
@@ -725,6 +977,11 @@ async function handleAgentPhoneConfigure(request, env, context) {
       status: result.status || 'active', configuredAt: new Date().toISOString(),
     }),
   ]);
+  captureForContext(analytics, context, 'agentphone_configured', {
+    status: result.status || 'active',
+    context_limit: contextLimit,
+    timeout_seconds: timeout,
+  });
   return json({ configured: true, status: result.status || 'active', agentId, webhookUrl, contextLimit, timeout });
 }
 
@@ -748,7 +1005,7 @@ async function handleAgentPhoneWebhook(request, env, shopId) {
   return json(await aiAnswer(env, shopId, transcript, body.recentHistory || []));
 }
 
-async function handleFiles(request, env, context, segments) {
+async function handleFiles(request, env, context, segments, analytics) {
   const action = segments[1];
   if (action === 'presign-upload' && request.method === 'POST') {
     const body = await requestJson(request);
@@ -788,6 +1045,11 @@ async function handleFiles(request, env, context, segments) {
     } catch {
       throw new HttpError(413, 'File exceeds 15 MB');
     }
+    captureForContext(analytics, context, 'file_uploaded', {
+      file_kind: key.split('/')[2],
+      content_type: request.headers.get('Content-Type') || 'application/octet-stream',
+      size_bytes: received,
+    });
     return new Response(null, { status: 204 });
   }
   if (action === 'presign-download' && request.method === 'GET') {
@@ -807,7 +1069,7 @@ async function handleFiles(request, env, context, segments) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleCheckout(request, env, context) {
+async function handleCheckout(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer']);
   const body = await requestJson(request);
@@ -815,7 +1077,7 @@ async function handleCheckout(request, env, context) {
   if (!invoiceNumber) throw new HttpError(400, 'invoiceNumber is required');
   const invoice = await getEntity(env, context.shopId, 'invoices', invoiceNumber);
   if (!invoice) throw new HttpError(404, 'Invoice not found');
-  const payments = (await listEntities(env, context.shopId, 'payments')).filter(payment => payment.invoiceNumber === invoiceNumber);
+  const payments = await listPaymentsByInvoice(env, context.shopId, invoiceNumber);
   const balance = openInvoiceBalance(invoice.amount, payments);
   if (balance <= 0) throw new HttpError(409, 'Invoice has no open balance');
   const origin = request.headers.get('Origin');
@@ -850,10 +1112,21 @@ async function handleCheckout(request, env, context) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new HttpError(502, 'Stripe rejected the checkout session request');
+  captureForContext(analytics, context, 'checkout_session_created', {
+    amount: balance,
+    currency: 'usd',
+    processor: 'stripe',
+  });
+  capturePostHogEvent(env, context, 'payment_checkout_started', {
+    amount: balance,
+    currency: 'usd',
+    actor_role: context.role,
+  });
   return json({ url: result.url, sessionId: result.id });
 }
 
-async function handleStripeWebhook(request, env, shopId) {
+async function handleStripeWebhook(request, env, shopId, analytics) {
+  analytics.distinctId = `stripe-webhook:${shopId}`;
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   const payload = await request.text();
   const signature = request.headers.get('Stripe-Signature') || '';
@@ -876,12 +1149,18 @@ async function handleStripeWebhook(request, env, shopId) {
       const id = String(session.id);
       if (await getEntity(env, shopId, 'payments', id)) return json({ received: true, duplicate: true });
       const context = { shopId, userId: 'stripe-webhook' };
-      const payments = (await listEntities(env, shopId, 'payments')).filter(payment => payment.invoiceNumber === invoiceNumber);
+      const payments = await listPaymentsByInvoice(env, shopId, invoiceNumber);
       const amount = Number(session.amount_total || 0) / 100;
       if (amount <= 0 || amount > openInvoiceBalance(invoice.amount, payments)) throw new HttpError(400, 'Payment amount exceeds the invoice balance');
       await putEntity(env, context, 'payments', id, {
         invoiceNumber, amount, method: 'processor', processor: 'stripe',
         processorTransactionId: id, status: 'completed', receivedAt: new Date().toISOString(),
+      });
+      capturePostHogEvent(env, { shopId, userId: `stripe-webhook:${shopId}` }, 'payment_completed', {
+        amount,
+        currency: 'usd',
+        processor: 'stripe',
+        $process_person_profile: false,
       });
     }
   }
@@ -902,7 +1181,7 @@ async function handleEntitlement(request, env, context) {
   return json({ active, status, expiresAt }, active ? 200 : 403);
 }
 
-async function handleAdmin(request, env, context, segments) {
+async function handleAdmin(request, env, context, segments, analytics) {
   requireRole(context, ['super_admin']);
   if (segments.length === 2 && request.method === 'GET') {
     const accounts = await env.DB.prepare('SELECT * FROM accounts ORDER BY created_at DESC').all();
@@ -1024,6 +1303,10 @@ async function handleAdmin(request, env, context, segments) {
     ).bind(body.suspended ? 1 : 0, now, target).run();
     if (!result.meta.changes) throw new HttpError(404, 'Customer account not found');
     await env.DB.prepare('UPDATE users SET enabled = ?, updated_at = ? WHERE shop_id = ?').bind(body.suspended ? 0 : 1, now, target).run();
+    captureForContext(analytics, context, 'account_status_changed', {
+      target_shop_id: target,
+      suspended: body.suspended,
+    });
     return json({ shopId: target, suspended: body.suspended });
   }
   if (request.method === 'POST' && action === 'subscription') {
@@ -1135,7 +1418,8 @@ async function handleMagicLink(request, env) {
   const returnTo = safeReturnPath(body.returnTo || body.return_to || body.redirectTo);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
   const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
-  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
+  const sendDirectly = canSendLoginEmail(env);
+  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink && !sendDirectly) {
     throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
   }
   const recent = await env.DB.prepare(
@@ -1160,15 +1444,22 @@ async function handleMagicLink(request, env) {
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
   const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
   loginUrl.searchParams.set('token', token);
-  if (env.AUTH_EMAIL_WEBHOOK) {
-    const headers = { 'Content-Type': 'application/json' };
-    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = `Bearer ${env.AUTH_EMAIL_WEBHOOK_SECRET}`;
-    const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
-    });
-    if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+  try {
+    if (sendDirectly) {
+      await deliverLoginEmail(env, { email, loginUrl: loginUrl.toString() });
+    } else if (env.AUTH_EMAIL_WEBHOOK) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = ['Bearer', env.AUTH_EMAIL_WEBHOOK_SECRET].join(' ');
+      const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
+      });
+      if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+    }
+  } catch (error) {
+    await env.DB.prepare('DELETE FROM login_tokens WHERE token_hash = ?').bind(tokenHash).run();
+    throw error instanceof HttpError ? error : new HttpError(502, 'Unable to deliver the sign-in email');
   }
   const payload = {
     ok: true,
@@ -1208,6 +1499,20 @@ async function handleAuthCallback(request, env) {
     `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()),
     env.DB.prepare('UPDATE login_tokens SET used_at = ? WHERE id = ?').bind(new Date().toISOString(), loginToken.id),
   ]);
+  const posthog = getPostHog(env);
+  posthog?.identify({
+    distinctId: String(user.id),
+    properties: {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      shop_id: user.shop_id,
+    },
+  });
+  capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
+    auth_method: 'magic_link',
+    actor_role: user.role,
+  });
   const redirect = new URL(safeReturnPath(loginToken.return_to), url.origin);
   return new Response(null, {
     status: 302,
@@ -1225,6 +1530,9 @@ async function handleLogout(request, env) {
   if (sessionId) {
     await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
   }
+  capturePostHogEvent(env, context, 'user_logged_out', {
+    actor_role: context.role,
+  });
   return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
@@ -1234,6 +1542,7 @@ async function handleLogout(request, env) {
 async function handleAuth(request, env, segments) {
   const action = segments[1] || '';
   if (action === 'magic-link') return handleMagicLink(request, env);
+  if (action === 'send-login') return handleSendLogin(request, env);
   if (action === 'callback') return handleAuthCallback(request, env);
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
@@ -1275,6 +1584,11 @@ async function handleBilling(request, env, context, segments) {
       });
       const session = await response.json().catch(() => ({}));
       if (!response.ok || !session.url) throw new HttpError(502, session.error?.message || 'Stripe checkout could not be created');
+      capturePostHogEvent(env, context, 'billing_checkout_started', {
+        plan_id: plan.id,
+        provider: 'stripe',
+        actor_role: context.role,
+      });
       return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
     }
     throw new HttpError(503, 'Billing is not configured for this plan');
@@ -1354,6 +1668,11 @@ async function handleBilling(request, env, context, segments) {
           ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
             current_period_end = NULL, updated_at = excluded.updated_at
         `).bind(shopId, planId, nowIso, nowIso).run();
+        capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_activated', {
+          plan_id: planId,
+          provider: 'stripe',
+          $process_person_profile: false,
+        });
       }
     }
     return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);
@@ -1389,20 +1708,21 @@ async function route(request, env) {
     return handleBilling(request, env, context, segments);
   }
   const context = await resolveContext(request, env);
+  analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
-  if (path === '/auth/session') return handleAuthSession(context);
-  if (segments[0] === 'entities') return handleEntities(request, env, context, segments);
+  if (path === '/auth/session') return handleAuthSession(context, analytics);
+  if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
-  if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments);
-  if (path === '/onboarding/start') return handleOnboarding(request, env, context);
-  if (path === '/payroll/sync') return handlePayroll(request, env, context);
+  if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
+  if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
+  if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
-  if (path === '/ai/assistant') return handleAssistant(request, env, context);
-  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context);
-  if (segments[0] === 'files') return handleFiles(request, env, context, segments);
-  if (path === '/payments/checkout-session') return handleCheckout(request, env, context);
+  if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
+  if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
+  if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
-  if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments);
+  if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
   throw new HttpError(404, 'Not found');
 }
 
@@ -1450,7 +1770,8 @@ async function proxyPagesRequest(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
+    const posthog = getPostHog(env);
     try {
       if (!isApiRequest(request)) {
         const download = await servePublicDownload(request, env);
@@ -1460,6 +1781,11 @@ export default {
       return withCors(await route(request, env), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+      posthog?.captureException(error, undefined, {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        status,
+      });
       console.error(JSON.stringify({
         message: 'request failed',
         method: request.method,
@@ -1472,6 +1798,14 @@ export default {
           ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
           : error.message,
       }, status), request, env);
+    } finally {
+      if (posthog) {
+        const flush = posthog.flush().catch((error) => {
+          console.error('PostHog flush failed', error);
+        });
+        if (executionCtx?.waitUntil) executionCtx.waitUntil(flush);
+        else void flush;
+      }
     }
   },
 };

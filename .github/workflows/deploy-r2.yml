@@ -18,10 +18,10 @@ jobs:
     environment: production
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
@@ -31,16 +31,19 @@ jobs:
           dotnet build diagnostics/j2534-service/J2534Service.sln -c Release --no-restore
 
       - name: Publish
-        run: dotnet publish diagnostics/j2534-service/J2534Service.sln -c Release -o ./artifacts/publish
+        run: dotnet publish diagnostics/j2534-service/src/J2534.Host/J2534.Host.csproj -c Release --no-build -o ./artifacts/publish
 
       - name: Create zip
         run: |
           cd artifacts
-          apt-get update && apt-get install -y zip
+          if ! command -v zip >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zip
+          fi
           zip -r publish.zip publish
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 

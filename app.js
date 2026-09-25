@@ -477,17 +477,51 @@
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
+  function encodeStateSnapshot(text) {
+    try {
+      return `enc:v1:${btoa(unescape(encodeURIComponent(text)))}`;
+    } catch {
+      return text;
+    }
+  }
+  function decodeStateSnapshot(text) {
+    if (typeof text !== "string" || !text) return text;
+    if (!text.startsWith("enc:v1:")) return text;
+    try {
+      return decodeURIComponent(escape(atob(text.slice(7))));
+    } catch {
+      return text;
+    }
+  }
   function load() {
     try {
-      const value2 = JSON.parse(localStorage.getItem(STORE));
+      const raw = localStorage.getItem(STORE);
+      const decoded = decodeStateSnapshot(raw);
+      const value2 = JSON.parse(decoded);
       return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
     }
   }
+  function invalidateDerivedCaches() {
+    chatDerivedCache = null;
+    financeDerivedCache = null;
+    relationshipDerivedCache = null;
+  }
+  function flushStateSave() {
+    if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
+    localStorage.setItem(STORE, encodeStateSnapshot(pendingStateSnapshot));
+    persistedStateSnapshot = pendingStateSnapshot;
+    pendingStateSnapshot = null;
+  }
   function save() {
     state.users = sanitizeUsers(state.users);
-    localStorage.setItem(STORE, JSON.stringify(state));
+    invalidateDerivedCaches();
+    const snapshot = JSON.stringify(state);
+    if (snapshot === pendingStateSnapshot || snapshot === persistedStateSnapshot) return;
+    pendingStateSnapshot = snapshot;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushStateSave, 120);
   }
   function localAccessSession() {
     const expires = Math.floor(Date.now() / 1e3) + 86400;
@@ -547,14 +581,24 @@
     localStorage.removeItem(storageKeys.session);
   }
   function readMutationQueue() {
+    const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
+    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
+    mutationQueueRaw = raw;
     try {
-      return JSON.parse(localStorage.getItem(MUTATION_QUEUE_STORE)) || [];
+      mutationQueueCache = JSON.parse(raw) || [];
     } catch {
-      return [];
+      mutationQueueCache = [];
     }
+    ;
+    return mutationQueueCache;
   }
-  function writeMutationQueue(queue) {
-    localStorage.setItem(MUTATION_QUEUE_STORE, JSON.stringify(queue));
+  async function writeMutationQueue(queue) {
+    const raw = JSON.stringify(queue);
+    if (raw === mutationQueueRaw) return;
+    mutationQueueRaw = raw;
+    mutationQueueCache = queue;
+    const encrypted = await encryptMutationQueueRaw(raw);
+    localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -568,17 +612,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  function queueEntityMutation(mutation, conflict = false) {
-    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  async function queueEntityMutation(mutation, conflict = false) {
+    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      writeMutationQueue(queue);
+      await writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    writeMutationQueue(queue);
+    await writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
@@ -1061,8 +1105,35 @@
   function vehicleLabel(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
   }
+  function getRelationshipDerived() {
+    const key = [state.orders.length, state.vehicles.length, state.orders.at(-1)?.id || "", state.vehicles.at(-1)?.id || ""].join("|");
+    if (relationshipDerivedCache?.key === key) return relationshipDerivedCache;
+    const ordersByVin = /* @__PURE__ */ new Map(), ordersByVehicleLabel = /* @__PURE__ */ new Map(), vehicleByLookup = /* @__PURE__ */ new Map();
+    for (const order of state.orders) {
+      if (order.vin) {
+        const list = ordersByVin.get(order.vin) || [];
+        list.push(order);
+        ordersByVin.set(order.vin, list);
+      }
+      if (order.vehicle) {
+        const list = ordersByVehicleLabel.get(order.vehicle) || [];
+        list.push(order);
+        ordersByVehicleLabel.set(order.vehicle, list);
+      }
+    }
+    for (const vehicle of state.vehicles) {
+      const label2 = vehicleLabel(vehicle);
+      if (vehicle.id) vehicleByLookup.set(vehicle.id, vehicle);
+      if (label2) vehicleByLookup.set(label2, vehicle);
+      if (vehicle.customer && vehicle.plate) vehicleByLookup.set(`${vehicle.customer}#${vehicle.plate}`, vehicle);
+      if (vehicle.customer && vehicle.vin) vehicleByLookup.set(`${vehicle.customer}#${vehicle.vin}`, vehicle);
+    }
+    relationshipDerivedCache = { key, ordersByVin, ordersByVehicleLabel, vehicleByLookup };
+    return relationshipDerivedCache;
+  }
   function linkedOrders(vehicle) {
-    return state.orders.filter((order) => vehicle.vin && order.vin === vehicle.vin || order.vehicle === vehicleLabel(vehicle));
+    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel(vehicle)) || [];
+    return byVin.length && byLabel.length ? [.../* @__PURE__ */ new Set([...byVin, ...byLabel])] : byVin.length ? byVin : byLabel;
   }
   function operationsVehicles() {
     const rows = state.vehicles.map((vehicle) => {
@@ -1087,7 +1158,8 @@
     return `<div class="ops-actions"><span class="ops-note">Reusable estimate lines and discounts</span><button class="primary" id="add-service">${icon("list-plus", 14)} Canned service</button></div><div class="data-panel"><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Default discount</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No canned services yet.</td></tr>`}</tbody></table></div>`;
   }
   function reminderVehicle(item) {
-    return state.vehicles.find((vehicle) => vehicle.id === item.vehicle || vehicleLabel(vehicle) === item.vehicle || vehicle.customer === item.customer && [vehicle.plate, vehicle.vin].includes(item.vehicle));
+    const lookup = getRelationshipDerived().vehicleByLookup;
+    return lookup.get(item.vehicle) || lookup.get(`${item.customer}#${item.vehicle}`);
   }
   function reminderStatus(item) {
     if (item.sentAt) return "sent";
@@ -1550,8 +1622,30 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       closeModal();
     };
   }
+  function getFinanceDerived() {
+    const key = [state.invoices.length, state.payments.length, state.invoices.at(-1)?.number || "", state.payments.at(-1)?.id || state.payments.at(-1)?.invoiceNumber || ""].join("|");
+    if (financeDerivedCache?.key === key) return financeDerivedCache;
+    const completedPaidByInvoice = /* @__PURE__ */ new Map();
+    for (const payment of state.payments) {
+      if (payment.status !== "completed") continue;
+      const number = String(payment.invoiceNumber || "");
+      if (!number) continue;
+      completedPaidByInvoice.set(number, (completedPaidByInvoice.get(number) || 0) + Number(payment.amount || 0));
+    }
+    const invoiceByNumber = /* @__PURE__ */ new Map();
+    const balanceByCustomer = /* @__PURE__ */ new Map();
+    for (const invoice of state.invoices) {
+      invoiceByNumber.set(invoice.number, invoice);
+      const paid = completedPaidByInvoice.get(invoice.number) || 0;
+      const effectivePaid = paid || (invoice.status === "paid" ? Number(invoice.amount || 0) : 0);
+      const balance = Math.max(0, Math.round((Number(invoice.amount || 0) - effectivePaid) * 100) / 100);
+      balanceByCustomer.set(invoice.customer, (balanceByCustomer.get(invoice.customer) || 0) + balance);
+    }
+    financeDerivedCache = { key, completedPaidByInvoice, invoiceByNumber, balanceByCustomer };
+    return financeDerivedCache;
+  }
   function invoicePaid(invoice) {
-    const recorded = state.payments.filter((payment) => payment.invoiceNumber === invoice.number && payment.status === "completed").reduce((sum, payment) => sum + payment.amount, 0);
+    const recorded = getFinanceDerived().completedPaidByInvoice.get(invoice.number) || 0;
     return recorded || (invoice.status === "paid" ? invoice.amount : 0);
   }
   function invoiceBalance(invoice) {
@@ -1592,13 +1686,13 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     };
   }
   function taxReport(fromDate, toDate) {
-    const from = new Date(fromDate), to = new Date(toDate);
+    const from = new Date(fromDate), to = new Date(toDate), invoices2 = getFinanceDerived().invoiceByNumber;
     to.setHours(23, 59, 59, 999);
     const rows = paymentRecords().filter((payment) => {
       const d = new Date(payment.receivedAt);
       return d >= from && d <= to;
     }).map((payment) => {
-      const invoice = state.invoices.find((item) => item.number === payment.invoiceNumber), bd = invoiceTaxBreakdown(invoice), ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0;
+      const invoice = invoices2.get(payment.invoiceNumber), bd = invoiceTaxBreakdown(invoice), ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0;
       return { date: payment.receivedAt, invoiceNumber: payment.invoiceNumber, customer: payment.customer, gross: payment.amount, taxable: Math.round(bd.subtotal * ratio * 100) / 100, tax: Math.round(bd.tax * ratio * 100) / 100 };
     }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const totals = rows.reduce((acc, row) => ({ gross: acc.gross + row.gross, taxable: acc.taxable + row.taxable, tax: acc.tax + row.tax }), { gross: 0, taxable: 0, tax: 0 });
@@ -2474,7 +2568,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function customerBalance(name) {
-    return state.invoices.filter((inv) => inv.customer === name).reduce((sum, inv) => sum + invoiceBalance(inv), 0);
+    return getFinanceDerived().balanceByCustomer.get(name) || 0;
   }
   function openCustomerRecord(name) {
     const customer = state.customers.find((c) => c.name === name);
@@ -3143,7 +3237,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, assistantConversation, assistantPaused, STORE, seed, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, assistantConversation, assistantPaused, STORE, seed, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3201,7 +3295,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         shiftEntries: [],
         jobClockEntries: [],
         estimates: [],
-        messagingSettings: { enabled: false, endpoint: "", senderEmail: "", senderPhone: "", shopName: "Your Car Guy" },
+        // Default messaging settings – replace with your real service endpoint to enable email/SMS delivery.
+        messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
         billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
         payments: [],
         taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" },
@@ -3248,6 +3343,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       elmPort = null;
       pendingAuthProfile = null;
       usStates = [{ code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" }, { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" }, { code: "CT", name: "Connecticut" }, { code: "DE", name: "Delaware" }, { code: "DC", name: "District of Columbia" }, { code: "FL", name: "Florida" }, { code: "GA", name: "Georgia" }, { code: "HI", name: "Hawaii" }, { code: "ID", name: "Idaho" }, { code: "IL", name: "Illinois" }, { code: "IN", name: "Indiana" }, { code: "IA", name: "Iowa" }, { code: "KS", name: "Kansas" }, { code: "KY", name: "Kentucky" }, { code: "LA", name: "Louisiana" }, { code: "ME", name: "Maine" }, { code: "MD", name: "Maryland" }, { code: "MA", name: "Massachusetts" }, { code: "MI", name: "Michigan" }, { code: "MN", name: "Minnesota" }, { code: "MS", name: "Mississippi" }, { code: "MO", name: "Missouri" }, { code: "MT", name: "Montana" }, { code: "NE", name: "Nebraska" }, { code: "NV", name: "Nevada" }, { code: "NH", name: "New Hampshire" }, { code: "NJ", name: "New Jersey" }, { code: "NM", name: "New Mexico" }, { code: "NY", name: "New York" }, { code: "NC", name: "North Carolina" }, { code: "ND", name: "North Dakota" }, { code: "OH", name: "Ohio" }, { code: "OK", name: "Oklahoma" }, { code: "OR", name: "Oregon" }, { code: "PA", name: "Pennsylvania" }, { code: "RI", name: "Rhode Island" }, { code: "SC", name: "South Carolina" }, { code: "SD", name: "South Dakota" }, { code: "TN", name: "Tennessee" }, { code: "TX", name: "Texas" }, { code: "UT", name: "Utah" }, { code: "VT", name: "Vermont" }, { code: "VA", name: "Virginia" }, { code: "WA", name: "Washington" }, { code: "WV", name: "West Virginia" }, { code: "WI", name: "Wisconsin" }, { code: "WY", name: "Wyoming" }];
+      saveTimer = 0;
+      pendingStateSnapshot = null;
+      persistedStateSnapshot = localStorage.getItem(STORE) || null;
+      window.addEventListener("pagehide", flushStateSave);
+      window.addEventListener("beforeunload", flushStateSave);
       cloudflareConfig2 = window.__MECHPRO_CONFIG__.cloudflare;
       desktopEntitlementVerified = !isDesktopApp;
       desktopLoginMessage = "";
@@ -3255,12 +3355,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
       OFFLINE_QUEUE_BLOCKED = /\/entities\/(employees|payrollentries|shopsettings|invoices|payments|expenses)(\/|$)/i;
       flushingMutationQueue = false;
+      mutationQueueCache = null;
+      mutationQueueRaw = null;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
       roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
+      relationshipDerivedCache = null;
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
+      financeDerivedCache = null;
       baseShopOperations = shopOperations;
       shopOperations = function() {
         if (shopOpsTab !== "analytics") return baseShopOperations().replace("OBD-II</button></div>", 'OBD-II</button><button class="tab" data-ops-tab="analytics">Analytics</button></div>');
@@ -3586,6 +3690,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       renderOnboardingCore = render;
       render = function() {
+        invalidateDerivedCaches();
         renderOnboardingCore();
         queueMicrotask(checkOnboardingSamples);
       };

@@ -162,6 +162,27 @@ jobs:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+      - name: Verify diagnostics signing key secret
+        if: steps.verify-creds.outputs.valid == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Self-activating guard: only require the signing key once worker/src
+          # actually uses it (i.e. the diagnostics programming feature is present),
+          # so this never blocks deploys that don't include the feature.
+          if ! grep -rq "DIAGNOSTICS_SIGNING_PRIVATE_KEY" worker/src; then
+            echo "worker/src does not reference DIAGNOSTICS_SIGNING_PRIVATE_KEY; skipping signing-key check."
+            exit 0
+          fi
+          echo "Checking that DIAGNOSTICS_SIGNING_PRIVATE_KEY is set on the Worker..."
+          secrets_json="$(npx wrangler secret list 2>/dev/null || echo '[]')"
+          if echo "$secrets_json" | grep -q '"DIAGNOSTICS_SIGNING_PRIVATE_KEY"'; then
+            echo "OK: DIAGNOSTICS_SIGNING_PRIVATE_KEY is configured on the Worker."
+          else
+            echo "::error title=Missing Worker secret::worker/src uses DIAGNOSTICS_SIGNING_PRIVATE_KEY but it is not set on the Worker, so POST /api/diagnostics/authorize will return 503. Set it once with: bash scripts/setup-diagnostics-signing-key.sh (see diagnostics/keys/README.md), then re-run this deploy."
+            exit 1
+          fi
       - name: Build and stage Pages
         if: steps.verify-creds.outputs.valid == 'true'
         run: npm run build:web && npm run stage:pages
@@ -175,7 +196,7 @@ jobs:
       - name: Post-deploy smoke checks
         if: steps.verify-creds.outputs.valid == 'true'
         env:
-          APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://www.yourcarguy806.com' }}
+          APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://main.mechpro-dispatch.pages.dev' }}
         run: |
           set -euo pipefail
           curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
