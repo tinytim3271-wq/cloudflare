@@ -141,12 +141,18 @@ subscription webhook endpoint.
 
 ### Fixing email sign-in
 
-If MechPro says `Email sign-in is unavailable...AUTH_EMAIL_WEBHOOK`, it means the
-deployed Worker has not been connected to email delivery yet. MechPro does not
-send the email by itself: it calls a webhook that **you** provide, and that
-webhook must send the sign-in email.
+Sign-in mail is sent by this Worker. `POST /api/auth/send-login` accepts
+`{ email, loginUrl, returnTo }`, checks the bearer secret, and returns HTTP 202
+only after Cloudflare Email accepts the message. Its address is:
 
-The easiest setup is the guided command:
+`https://www.yourcarguy806.com/api/auth/send-login`
+
+Enable Email Routing for `yourcarguy806.com`, then deploy `mechpro-api`. After
+that deploy, magic-link sign-in uses the `EMAIL` binding directly. Until then,
+point `AUTH_EMAIL_WEBHOOK` at the address above. `Unable to deliver the sign-in
+email` means the current webhook did not accept the message.
+
+The guided setup command is:
 
 ```bash
 npm run setup:email

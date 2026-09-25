@@ -24,6 +24,7 @@ import {
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
+import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -1417,7 +1418,8 @@ async function handleMagicLink(request, env) {
   const returnTo = safeReturnPath(body.returnTo || body.return_to || body.redirectTo);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
   const exposeLoginLink = env.AUTH_EXPOSE_LOGIN_LINK === '1';
-  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink) {
+  const sendDirectly = canSendLoginEmail(env);
+  if (!env.AUTH_EMAIL_WEBHOOK && !exposeLoginLink && !sendDirectly) {
     throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
   }
   const recent = await env.DB.prepare(
@@ -1442,15 +1444,22 @@ async function handleMagicLink(request, env) {
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
   const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
   loginUrl.searchParams.set('token', token);
-  if (env.AUTH_EMAIL_WEBHOOK) {
-    const headers = { 'Content-Type': 'application/json' };
-    if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = ['Bearer', env.AUTH_EMAIL_WEBHOOK_SECRET].join(' ');
-    const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
-    });
-    if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+  try {
+    if (sendDirectly) {
+      await deliverLoginEmail(env, { email, loginUrl: loginUrl.toString() });
+    } else if (env.AUTH_EMAIL_WEBHOOK) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (env.AUTH_EMAIL_WEBHOOK_SECRET) headers.Authorization = ['Bearer', env.AUTH_EMAIL_WEBHOOK_SECRET].join(' ');
+      const delivery = await fetch(env.AUTH_EMAIL_WEBHOOK, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email, loginUrl: loginUrl.toString(), returnTo }),
+      });
+      if (!delivery.ok) throw new HttpError(502, 'Unable to deliver the sign-in email');
+    }
+  } catch (error) {
+    await env.DB.prepare('DELETE FROM login_tokens WHERE token_hash = ?').bind(tokenHash).run();
+    throw error instanceof HttpError ? error : new HttpError(502, 'Unable to deliver the sign-in email');
   }
   const payload = {
     ok: true,
@@ -1533,6 +1542,7 @@ async function handleLogout(request, env) {
 async function handleAuth(request, env, segments) {
   const action = segments[1] || '';
   if (action === 'magic-link') return handleMagicLink(request, env);
+  if (action === 'send-login') return handleSendLogin(request, env);
   if (action === 'callback') return handleAuthCallback(request, env);
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
