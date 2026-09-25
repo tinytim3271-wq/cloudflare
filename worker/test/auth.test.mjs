@@ -19,7 +19,7 @@ function mockLoginDb() {
         bind(...args) {
           return {
             async first() {
-              assert.match(sql, /SELECT created_at FROM login_tokens/);
+              assert.match(sql, /SELECT created_at, used_at, expires_at FROM login_tokens/);
               return token;
             },
             async run() {
@@ -91,8 +91,25 @@ test('configuring email after a failed request allows delivery without a cooldow
   assert.equal(payload.loginUrl, undefined);
   assert.equal(delivery.mock.callCount(), 1);
 
-  assert.equal((await worker.fetch(signInRequest(), env)).status, 429);
+  const limited = await worker.fetch(signInRequest(), env);
+  assert.equal(limited.status, 429);
+  assert.match((await limited.json()).message, /sign-in link was just sent/i);
+  assert.ok(Number(limited.headers.get('Retry-After')) >= 1);
   assert.equal(delivery.mock.callCount(), 1);
+
+  DB.token.used_at = new Date().toISOString();
+  assert.equal((await worker.fetch(signInRequest(), env)).status, 200);
+  assert.equal(delivery.mock.callCount(), 2);
+
+  DB.token.used_at = null;
+  DB.token.expires_at = new Date(Date.now() - 1000).toISOString();
+  assert.equal((await worker.fetch(signInRequest(), env)).status, 200);
+  assert.equal(delivery.mock.callCount(), 3);
+
+  DB.token.expires_at = null;
+  DB.token.created_at = new Date(Date.now() - 61 * 1000).toISOString();
+  assert.equal((await worker.fetch(signInRequest(), env)).status, 200);
+  assert.equal(delivery.mock.callCount(), 4);
 });
 
 test('worker email binding sends the login link and ignores a broken webhook', async (t) => {

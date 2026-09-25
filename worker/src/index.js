@@ -1422,6 +1422,21 @@ async function ensureSaasUser(env, email, name) {
   return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
 }
 
+const SIGN_IN_RESEND_COOLDOWN_MS = 60 * 1000;
+
+function signInResendRetryAfter(recent, now = Date.now()) {
+  if (!recent?.created_at || recent.used_at) return 0;
+  if (recent.expires_at) {
+    const expires = new Date(recent.expires_at).getTime();
+    if (Number.isFinite(expires) && expires <= now) return 0;
+  }
+  const created = new Date(recent.created_at).getTime();
+  if (!Number.isFinite(created)) return 0;
+  const remaining = SIGN_IN_RESEND_COOLDOWN_MS - (now - created);
+  if (remaining <= 0) return 0;
+  return Math.max(1, Math.min(60, Math.ceil(remaining / 1000)));
+}
+
 async function handleMagicLink(request, env) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   const contentType = request.headers.get('Content-Type') || '';
@@ -1442,10 +1457,16 @@ async function handleMagicLink(request, env) {
     throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
   }
   const recent = await env.DB.prepare(
-    "SELECT created_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1",
+    'SELECT created_at, used_at, expires_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1',
   ).bind(email).first();
-  if (recent?.created_at && Date.now() - new Date(recent.created_at).getTime() < 15 * 60 * 1000) {
-    throw new HttpError(429, 'Too many sign-in requests. Try again later.');
+  const retryAfter = signInResendRetryAfter(recent);
+  if (retryAfter) {
+    const unit = retryAfter === 1 ? 'second' : 'seconds';
+    throw new HttpError(
+      429,
+      `A sign-in link was just sent. Check your inbox and spam folder, then try again in ${retryAfter} ${unit}.`,
+      { 'Retry-After': String(retryAfter) },
+    );
   }
   const token = crypto.randomUUID().replaceAll('-', '');
   const tokenHash = await hashValue(token);
@@ -1819,7 +1840,7 @@ export default {
         message: status === 500
           ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
           : error.message,
-      }, status), request, env);
+      }, status, error instanceof HttpError && error.headers ? error.headers : {}), request, env);
     } finally {
       if (posthog) {
         const flush = posthog.flush().catch((error) => {

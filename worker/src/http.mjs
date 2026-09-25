@@ -4,9 +4,10 @@ const JSON_HEADERS = {
 };
 
 export class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, headers = undefined) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }
 

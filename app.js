@@ -114,15 +114,48 @@
     const other = conversation.memberEmails.map(chatUser).find((user) => user && user.id !== currentUser().id);
     return other?.name || "Direct message";
   }
+  function getChatDerived() {
+    const key = [
+      state.conversations.length,
+      state.chatMessages.length,
+      Object.keys(state.chatLastRead || {}).length,
+      state.chatMessages.at(-1)?.id || state.chatMessages.at(-1)?.createdAt || "",
+      state.conversations.at(-1)?.id || "",
+      cleanEmail(currentUser()?.email)
+    ].join("|");
+    if (chatDerivedCache?.key === key) return chatDerivedCache;
+    const messagesByConversation = /* @__PURE__ */ new Map();
+    for (const message of state.chatMessages) {
+      if (!message?.conversationId) continue;
+      const list = messagesByConversation.get(message.conversationId) || [];
+      list.push(message);
+      messagesByConversation.set(message.conversationId, list);
+    }
+    for (const list of messagesByConversation.values()) list.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    const activityByConversation = /* @__PURE__ */ new Map();
+    const unreadByConversation = /* @__PURE__ */ new Map();
+    const me = cleanEmail(currentUser()?.email);
+    for (const conversation of state.conversations) {
+      const list = messagesByConversation.get(conversation.id) || [];
+      activityByConversation.set(conversation.id, list.at(-1)?.createdAt || conversation.createdAt || "");
+      const readAt = state.chatLastRead?.[conversation.id] || "";
+      let unread = 0;
+      for (const message of list) {
+        if (cleanEmail(message.senderEmail) !== me && String(message.createdAt) > readAt) unread += 1;
+      }
+      unreadByConversation.set(conversation.id, unread);
+    }
+    chatDerivedCache = { key, messagesByConversation, activityByConversation, unreadByConversation };
+    return chatDerivedCache;
+  }
   function conversationMessages(id) {
-    return state.chatMessages.filter((message) => message.conversationId === id).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    return getChatDerived().messagesByConversation.get(id) || [];
   }
   function conversationActivity(conversation) {
-    return conversationMessages(conversation.id).at(-1)?.createdAt || conversation.createdAt || "";
+    return getChatDerived().activityByConversation.get(conversation.id) || conversation.createdAt || "";
   }
   function chatUnread(conversation) {
-    const readAt = state.chatLastRead?.[conversation.id] || "";
-    return conversationMessages(conversation.id).filter((message) => message.senderEmail !== cleanEmail(currentUser().email) && String(message.createdAt) > readAt).length;
+    return getChatDerived().unreadByConversation.get(conversation.id) || 0;
   }
   function teamChat() {
     const conversations = [...state.conversations].sort((a, b) => conversationActivity(b).localeCompare(conversationActivity(a)));
@@ -340,10 +373,10 @@
     return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
   }
   function diagnosticsResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Diagnostic report</div><h2>${escapeHtml(result.vehicle)}</h2><p>${result.urgency} priority \xB7 ${result.hours.toFixed(2)} labor hours estimated</p></div></div><div class="ai-result-grid"><section><h3>Probable causes</h3><ul class="ai-causes">${result.causes.map((c) => `<li><b>${c.cause}</b><span class="ai-tag ${c.likelihood.toLowerCase()}">${c.likelihood}</span><small>${c.explanation}</small></li>`).join("")}</ul></section><section><h3>Recommended tests</h3><ul class="ai-checklist">${result.tests.map((test) => `<li>${icon("check-circle-2", 13)}${test}</li>`).join("")}</ul><p class="ai-disclaimer">${result.notes}</p></section></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Diagnostic report</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} priority \xB7 ${result.hours.toFixed(2)} labor hours estimated</p></div></div><div class="ai-result-grid"><section><h3>Probable causes</h3><ul class="ai-causes">${result.causes.map((c) => `<li><b>${escapeHtml(c.cause)}</b><span class="ai-tag ${escapeAttr(c.likelihood.toLowerCase())}">${escapeHtml(c.likelihood)}</span><small>${escapeHtml(c.explanation)}</small></li>`).join("")}</ul></section><section><h3>Recommended tests</h3><ul class="ai-checklist">${result.tests.map((test) => `<li>${icon("check-circle-2", 13)}${escapeHtml(test)}</li>`).join("")}</ul><p class="ai-disclaimer">${escapeHtml(result.notes)}</p></section></div></section>`;
   }
   function estimateResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${result.summary}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money(line.labor)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money(result.subtotal)}</span><span>Tax ${money(result.tax)}</span><b>Total ${money(result.total)}</b></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.summary)}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money(line.labor)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money(result.subtotal)}</span><span>Tax ${money(result.tax)}</span><b>Total ${money(result.total)}</b></div></section>`;
   }
   function savedEstimates() {
     const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td>${estimate.status === "approved" ? `<span class="badge paid">Approved</span>` : `<span class="badge estimate">Pending</span>`}</td><td><b>${money(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
@@ -393,7 +426,7 @@
   function openSignature(id) {
     const estimate = state.estimates.find((item) => item.id === id);
     if (!estimate) return;
-    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${estimate.customer === "Walk-in customer" ? "" : estimate.customer}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
+    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
     initSignaturePad(estimate);
   }
   function canvasToBlob(canvas) {
@@ -469,35 +502,17 @@
     };
   }
   function guideResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Repair guide</div><h2>${result.title}</h2><p>${result.difficulty} \xB7 ${result.time}</p></div></div><div class="ai-result-grid"><section><h3>Tools required</h3><ul class="ai-checklist">${result.tools.map((tool) => `<li>${icon("wrench", 13)}${tool}</li>`).join("")}</ul><h3>Parts needed</h3><ul class="ai-checklist">${result.parts.map((part) => `<li>${icon("package", 13)}${part}</li>`).join("")}</ul></section><section><h3>Repair steps</h3><ol class="ai-steps">${result.steps.map((step, index) => `<li><b>${index + 1}</b><span>${step}</span></li>`).join("")}</ol><h3>Safety notes</h3><ul class="ai-checklist">${result.safety.map((note) => `<li>${icon("triangle-alert", 13)}${note}</li>`).join("")}</ul></section></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Repair guide</div><h2>${escapeHtml(result.title)}</h2><p>${escapeHtml(result.difficulty)} \xB7 ${escapeHtml(result.time)}</p></div></div><div class="ai-result-grid"><section><h3>Tools required</h3><ul class="ai-checklist">${result.tools.map((tool) => `<li>${icon("wrench", 13)}${escapeHtml(tool)}</li>`).join("")}</ul><h3>Parts needed</h3><ul class="ai-checklist">${result.parts.map((part) => `<li>${icon("package", 13)}${escapeHtml(part)}</li>`).join("")}</ul></section><section><h3>Repair steps</h3><ol class="ai-steps">${result.steps.map((step, index) => `<li><b>${index + 1}</b><span>${escapeHtml(step)}</span></li>`).join("")}</ol><h3>Safety notes</h3><ul class="ai-checklist">${result.safety.map((note) => `<li>${icon("triangle-alert", 13)}${escapeHtml(note)}</li>`).join("")}</ul></section></div></section>`;
   }
   function phoneResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Call intake summary</div><h2>${escapeHtml(result.vehicle)}</h2><p>${result.urgency} \xB7 ${result.service}</p></div></div><div class="ai-result-grid"><section><h3>Customer concern</h3><p class="ai-copy">${result.symptoms}</p><h3>Suggested response</h3><p class="ai-copy">${result.response}</p></section><section><h3>Follow-up questions</h3><ul class="ai-checklist">${result.questions.map((question) => `<li>${icon("circle-help", 13)}${question}</li>`).join("")}</ul><div class="ai-booking">${icon("calendar-check", 16)} Booking recommended</div></section></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Call intake summary</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} \xB7 ${escapeHtml(result.service)}</p></div></div><div class="ai-result-grid"><section><h3>Customer concern</h3><p class="ai-copy">${escapeHtml(result.symptoms)}</p><h3>Suggested response</h3><p class="ai-copy">${escapeHtml(result.response)}</p></section><section><h3>Follow-up questions</h3><ul class="ai-checklist">${result.questions.map((question) => `<li>${icon("circle-help", 13)}${escapeHtml(question)}</li>`).join("")}</ul><div class="ai-booking">${icon("calendar-check", 16)} Booking recommended</div></section></div></section>`;
   }
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
-  function encodeStateSnapshot(text) {
-    try {
-      return `enc:v1:${btoa(unescape(encodeURIComponent(text)))}`;
-    } catch {
-      return text;
-    }
-  }
-  function decodeStateSnapshot(text) {
-    if (typeof text !== "string" || !text) return text;
-    if (!text.startsWith("enc:v1:")) return text;
-    try {
-      return decodeURIComponent(escape(atob(text.slice(7))));
-    } catch {
-      return text;
-    }
-  }
   function load() {
     try {
-      const raw = localStorage.getItem(STORE);
-      const decoded = decodeStateSnapshot(raw);
-      const value2 = JSON.parse(decoded);
+      const value2 = JSON.parse(localStorage.getItem(STORE));
       return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
@@ -510,7 +525,7 @@
   }
   function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
-    localStorage.setItem(STORE, encodeStateSnapshot(pendingStateSnapshot));
+    localStorage.setItem(STORE, pendingStateSnapshot);
     persistedStateSnapshot = pendingStateSnapshot;
     pendingStateSnapshot = null;
   }
@@ -554,7 +569,7 @@
       return { redirecting: true, email };
     }
     ;
-    throw new Error(payload.message || "Check your email for a sign-in link. If nothing arrives, ask an administrator to enable email delivery.");
+    return { sent: true, email, message: payload.message || "Check your email for a sign-in link. It expires in 15 minutes. Look in spam if it is not in your inbox." };
   }
   function authSession() {
     try {
@@ -592,13 +607,12 @@
     ;
     return mutationQueueCache;
   }
-  async function writeMutationQueue(queue) {
+  function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    const encrypted = await encryptMutationQueueRaw(raw);
-    localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
+    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -612,17 +626,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  async function queueEntityMutation(mutation, conflict = false) {
-    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  function queueEntityMutation(mutation, conflict = false) {
+    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      await writeMutationQueue(queue);
+      writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    await writeMutationQueue(queue);
+    writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
@@ -1768,7 +1782,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><p class="login-sent" id="login-sent" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
   }
   async function upgradeShopPlan() {
     try {
@@ -3237,7 +3251,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, assistantConversation, assistantPaused, STORE, seed, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3245,6 +3259,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_detect();
       init_utils();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2 } = window.__MECHPRO_HOME__);
+      chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
       STORE = storageKeys.dispatch;
@@ -3458,8 +3473,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         original.replaceWith(form);
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
+          const errorEl = form.querySelector("#login-error"), sentEl = form.querySelector("#login-sent"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
           errorEl.hidden = true;
+          if (sentEl) sentEl.hidden = true;
           submitButton.disabled = true;
           desktopEntitlementVerified = !isDesktopApp;
           try {
@@ -3487,6 +3503,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             if (!email) throw new Error("Enter your work email to continue.");
             const result = await requestMagicLinkSignIn(email);
             if (result?.redirecting) return;
+            if (result?.sent) {
+              if (sentEl) {
+                sentEl.textContent = result.message || "Check your email for a sign-in link. It expires in 15 minutes.";
+                sentEl.hidden = false;
+              }
+              submitButton.disabled = false;
+              submitButton.textContent = "Resend sign-in link";
+              return;
+            }
             throw new Error("Check your email for a sign-in link.");
           } catch (error) {
             clearAuthSession();
