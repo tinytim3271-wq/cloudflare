@@ -1,0 +1,53 @@
+name: Auto-merge
+
+# Enables GitHub's native squash auto-merge on eligible pull requests so that,
+# once required status checks (and any required reviews) pass, the PR merges
+# automatically — which in turn triggers the Cloudflare deploy on `main`.
+#
+# This does NOT bypass review rules: auto-merge only completes when branch
+# protection on the base branch is satisfied. See
+# docs/auto-merge-and-branch-protection.md for the settings this pairs with.
+#
+# Eligible PRs (into the default branch, not drafts, same-repo):
+#   - authored by the Cursor Cloud Agent bot, or
+#   - carrying the `auto-merge` label (explicit opt-in for anyone else).
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, labeled, synchronize]
+
+# Least privilege: only what `gh pr merge --auto` needs. No code is checked out
+# or executed from the PR, so pull_request_target is safe here.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  enable-auto-merge:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        contains(fromJSON('["cursor[bot]", "cursor"]'), github.event.pull_request.user.login) ||
+        contains(github.event.pull_request.labels.*.name, 'auto-merge')
+      )
+    steps:
+      - name: Enable squash auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Auto-merge requires the repo setting "Allow auto-merge" AND a branch
+          # protection rule with a merge requirement on the base branch. If those
+          # are not configured yet, warn instead of failing the workflow.
+          if gh pr merge "$PR_NUMBER" --squash --auto --repo "$GITHUB_REPOSITORY"; then
+            echo "Auto-merge enabled for PR #$PR_NUMBER; it will merge once required checks pass."
+          else
+            echo "::warning title=Auto-merge not enabled::Could not enable auto-merge for PR #$PR_NUMBER. Confirm 'Allow auto-merge' is on and a branch protection rule with required checks/reviews exists on the default branch (see docs/auto-merge-and-branch-protection.md)."
+          fi
