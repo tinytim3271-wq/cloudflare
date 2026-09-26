@@ -52,8 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -68,7 +68,7 @@ jobs:
           test -f .pages-dist/index.html
           grep -q '<div id="root"></div>' .pages-dist/index.html
           grep -q 'app.js' .pages-dist/index.html
-      - run: npx wrangler deploy --dry-run
+      - run: npx --no-install wrangler deploy --dry-run
 
   publish:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CLOUDFLARE_DEPLOY_ENABLED != 'false'
@@ -77,8 +77,8 @@ jobs:
     timeout-minutes: 20
     environment: production
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -150,14 +150,14 @@ jobs:
           NODE
       - name: Apply D1 migrations
         if: steps.verify-creds.outputs.valid == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 migrations apply DB --remote
       - name: Deploy API Worker
         if: steps.verify-creds.outputs.valid == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -176,14 +176,14 @@ jobs:
             echo "No DIAGNOSTICS_SIGNING_PRIVATE_KEY GitHub secret set; skipping provisioning."
             exit 0
           fi
-          printf '%s' "$SIGNING_KEY" | npx wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
+          printf '%s' "$SIGNING_KEY" | npx --no-install wrangler secret put DIAGNOSTICS_SIGNING_PRIVATE_KEY
           echo "Provisioned DIAGNOSTICS_SIGNING_PRIVATE_KEY on the Worker from the GitHub secret."
       - name: Build and stage Pages
         if: steps.verify-creds.outputs.valid == 'true'
         run: npm run build:web && npm run stage:pages
       - name: Deploy Pages
         if: steps.verify-creds.outputs.valid == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -201,7 +201,7 @@ jobs:
             echo "worker/src does not reference DIAGNOSTICS_SIGNING_PRIVATE_KEY; skipping signing-key check."
             exit 0
           fi
-          secrets_json="$(npx wrangler secret list 2>/dev/null || echo '[]')"
+          secrets_json="$(npx --no-install wrangler secret list 2>/dev/null || echo '[]')"
           if echo "$secrets_json" | grep -q '"DIAGNOSTICS_SIGNING_PRIVATE_KEY"'; then
             echo "OK: DIAGNOSTICS_SIGNING_PRIVATE_KEY is configured on the Worker."
           else
