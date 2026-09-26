@@ -168,8 +168,8 @@ jobs:
             echo "::error title=Missing Google OAuth credentials::Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as production repository secrets before deploying."
             exit 1
           fi
-          printf '%s' "$GOOGLE_CLIENT_ID" | npx wrangler secret put GOOGLE_CLIENT_ID
-          printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
+          printf '%s' "$GOOGLE_CLIENT_ID" | ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_ID
+          printf '%s' "$GOOGLE_CLIENT_SECRET" | ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_SECRET
           echo "Provisioned Google OAuth credentials on the Worker."
       - name: Deploy API Worker
         if: steps.verify-creds.outputs.valid == 'true'

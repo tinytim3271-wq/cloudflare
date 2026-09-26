@@ -26,6 +26,26 @@ function audienceMatches(audience, expected) {
   return (Array.isArray(audience) ? audience : [audience]).map(String).includes(expected);
 }
 
+async function verifyRs256Jwk(parsed, keysUrl, keyLabel, fetcher) {
+  const response = await fetcher(keysUrl, {
+    cf: { cacheEverything: true, cacheTtl: 3600 },
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Unable to load ${keyLabel} signing keys`);
+  const { keys = [] } = await response.json();
+  const jwk = keys.find(key => key.kid === parsed.header.kid);
+  if (!jwk) throw new Error(`${keyLabel} signing key not found`);
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
+  if (!valid) throw new Error(`Invalid ${keyLabel} token signature`);
+}
+
 export async function verifyGoogleIdToken(token, clientId, expectedNonce, fetcher = fetch, nowSeconds = Date.now() / 1000) {
   if (!clientId || !expectedNonce) throw new Error('Google sign-in is not configured');
   const parsed = parseJwt(token);
@@ -45,23 +65,7 @@ export async function verifyGoogleIdToken(token, clientId, expectedNonce, fetche
   if (parsed.payload.email_verified !== true || !parsed.payload.email || !parsed.payload.sub) {
     throw new Error('Google account email is not verified');
   }
-  const response = await fetcher('https://www.googleapis.com/oauth2/v3/certs', {
-    cf: { cacheEverything: true, cacheTtl: 3600 },
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok) throw new Error('Unable to load Google signing keys');
-  const { keys = [] } = await response.json();
-  const jwk = keys.find(key => key.kid === parsed.header.kid);
-  if (!jwk) throw new Error('Google signing key not found');
-  const key = await crypto.subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['verify'],
-  );
-  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
-  if (!valid) throw new Error('Invalid Google ID token signature');
+  await verifyRs256Jwk(parsed, 'https://www.googleapis.com/oauth2/v3/certs', 'Google', fetcher);
   return parsed.payload;
 }
 
@@ -74,23 +78,7 @@ export async function verifyAccessJwt(token, teamDomain, audience, fetcher = fet
   if (Number(parsed.payload.exp || 0) <= nowSeconds || Number(parsed.payload.nbf || 0) > nowSeconds) {
     throw new Error('Expired Access token');
   }
-  const response = await fetcher(`${issuer}/cdn-cgi/access/certs`, {
-    cf: { cacheEverything: true, cacheTtl: 3600 },
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok) throw new Error('Unable to load Access signing keys');
-  const { keys = [] } = await response.json();
-  const jwk = keys.find(key => key.kid === parsed.header.kid);
-  if (!jwk) throw new Error('Access signing key not found');
-  const key = await crypto.subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['verify'],
-  );
-  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
-  if (!valid) throw new Error('Invalid Access token signature');
+  await verifyRs256Jwk(parsed, `${issuer}/cdn-cgi/access/certs`, 'Access', fetcher);
   return parsed.payload;
 }
 
