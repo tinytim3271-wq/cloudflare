@@ -1605,10 +1605,16 @@ async function handleMagicLink(request, env) {
     throw new HttpError(503, 'Email sign-in is unavailable. Ask an administrator to configure email delivery (AUTH_EMAIL_WEBHOOK).');
   }
   const recent = await env.DB.prepare(
-    "SELECT created_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1",
+    'SELECT created_at, used_at, expires_at FROM login_tokens WHERE email = ? COLLATE NOCASE LIMIT 1',
   ).bind(email).first();
-  if (recent?.created_at && Date.now() - new Date(recent.created_at).getTime() < 15 * 60 * 1000) {
-    throw new HttpError(429, 'Too many sign-in requests. Try again later.');
+  const retryAfter = signInResendRetryAfter(recent);
+  if (retryAfter) {
+    const unit = retryAfter === 1 ? 'second' : 'seconds';
+    throw new HttpError(
+      429,
+      `A sign-in link was just sent. Check your inbox and spam folder, then try again in ${retryAfter} ${unit}.`,
+      { 'Retry-After': String(retryAfter) },
+    );
   }
   const token = crypto.randomUUID().replaceAll('-', '');
   const tokenHash = await hashValue(token);
@@ -1985,7 +1991,7 @@ export default {
         message: status === 500
           ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
           : error.message,
-      }, status), request, env);
+      }, status, error instanceof HttpError && error.headers ? error.headers : {}), request, env);
     } finally {
       if (posthog) {
         const flush = posthog.flush().catch((error) => {

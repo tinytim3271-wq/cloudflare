@@ -16,6 +16,7 @@
       .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: #94a3b8; font-size: .75rem; text-transform: uppercase; }
       .divider::before, .divider::after { height: 1px; flex: 1; background: rgba(148,163,184,.3); content: ""; }
       .error { color: #fecaca; margin-top: 12px; }
+      .success { color: #bbf7d0; margin-top: 12px; line-height: 1.45; }
       .hint { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
       label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
       label + input { margin-top: 6px; }
@@ -36,14 +37,17 @@
         <button type="submit">Email me a sign-in link</button>
       </form>
       <p id="error" class="error" hidden></p>
+      <p id="sent" class="success" hidden></p>
       <p>Need a shop? <a href="/signup">Create your account</a></p>
     </div>
     <script>
       const form = document.querySelector('#login-form');
       const errorEl = document.querySelector('#error');
+      const sentEl = document.querySelector('#sent');
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         errorEl.hidden = true;
+        sentEl.hidden = true;
         const button = form.querySelector('button');
         const email = String(new FormData(form).get('email') || '').trim().toLowerCase();
         button.disabled = true;
@@ -61,7 +65,10 @@
             location.assign(loginUrl);
             return;
           }
-          throw new Error(payload.message || 'Check your email for a sign-in link.');
+          sentEl.textContent = payload.message || 'Check your email for a sign-in link. It expires in 15 minutes. Look in spam if it is not in your inbox. You can resend after one minute.';
+          sentEl.hidden = false;
+          button.disabled = false;
+          button.textContent = 'Resend sign-in link';
         } catch (error) {
           const raw = String(error?.message || '');
           errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)

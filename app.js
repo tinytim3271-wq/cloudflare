@@ -530,7 +530,7 @@
     financeDerivedCache = null;
     relationshipDerivedCache = null;
   }
-  function flushStateSave() {
+  async function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
     localStorage.setItem(STORE, pendingStateSnapshot);
     persistedStateSnapshot = pendingStateSnapshot;
@@ -576,7 +576,7 @@
       return { redirecting: true, email };
     }
     ;
-    throw new Error(payload.message || "Check your email for a sign-in link. If nothing arrives, ask an administrator to enable email delivery.");
+    return { sent: true, email, message: payload.message || "Check your email for a sign-in link. It expires in 15 minutes. Look in spam if it is not in your inbox." };
   }
   function authSession() {
     try {
@@ -3477,8 +3477,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         original.replaceWith(form);
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          const errorEl = form.querySelector("#login-error"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
+          const errorEl = form.querySelector("#login-error"), sentEl = form.querySelector("#login-sent"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email");
           errorEl.hidden = true;
+          if (sentEl) sentEl.hidden = true;
           submitButton.disabled = true;
           desktopEntitlementVerified = !isDesktopApp;
           try {
@@ -3506,6 +3507,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             if (!email) throw new Error("Enter your work email to continue.");
             const result = await requestMagicLinkSignIn(email);
             if (result?.redirecting) return;
+            if (result?.sent) {
+              if (sentEl) {
+                sentEl.textContent = result.message || "Check your email for a sign-in link. It expires in 15 minutes.";
+                sentEl.hidden = false;
+              }
+              submitButton.disabled = false;
+              submitButton.textContent = "Resend sign-in link";
+              return;
+            }
             throw new Error("Check your email for a sign-in link.");
           } catch (error) {
             clearAuthSession();
