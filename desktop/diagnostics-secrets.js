@@ -11,7 +11,8 @@ function isPackagedApp() {
   }
 }
 
-function publicKeyCandidates() {
+function publicKeyCandidates(options = {}) {
+  if (Array.isArray(options.candidates)) return options.candidates;
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, 'diagnostics-keys', 'capability-public-key.pem'));
