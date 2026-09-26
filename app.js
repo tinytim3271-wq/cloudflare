@@ -603,19 +603,22 @@
     localStorage.removeItem(storageKeys.session);
   }
   function readMutationQueue() {
-    if (Array.isArray(mutationQueueCache)) return mutationQueueCache;
     const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
-    localStorage.removeItem(MUTATION_QUEUE_STORE);
+    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
+    mutationQueueRaw = raw;
     try {
       mutationQueueCache = JSON.parse(raw) || [];
     } catch {
       mutationQueueCache = [];
     }
-    ;
     return mutationQueueCache;
   }
   function writeMutationQueue(queue) {
+    const raw = JSON.stringify(queue);
+    if (raw === mutationQueueRaw) return;
+    mutationQueueRaw = raw;
     mutationQueueCache = queue;
+    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
