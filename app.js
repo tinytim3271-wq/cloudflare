@@ -511,42 +511,9 @@
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
-  const STATE_ENCRYPTION_PREFIX = "enc:v1:";
-  const STATE_ENCRYPTION_PASSPHRASE = "mechpro-local-state-key";
-  function bytesToBase64(bytes) {
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
-  }
-  function base64ToBytes(value2) {
-    const binary = atob(value2), out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
-  }
-  async function stateCryptoKey() {
-    const enc = new TextEncoder();
-    const hash = await crypto.subtle.digest("SHA-256", enc.encode(STATE_ENCRYPTION_PASSPHRASE));
-    return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-  }
-  async function encryptStateSnapshot(plainText) {
-    const key = await stateCryptoKey(), iv = crypto.getRandomValues(new Uint8Array(12));
-    const data = new TextEncoder().encode(plainText);
-    const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data));
-    return `${STATE_ENCRYPTION_PREFIX}${bytesToBase64(iv)}.${bytesToBase64(cipher)}`;
-  }
-  async function decryptStateSnapshot(payload) {
-    const raw = payload.slice(STATE_ENCRYPTION_PREFIX.length), parts = raw.split(".");
-    if (parts.length !== 2) throw new Error("Invalid encrypted state payload");
-    const iv = base64ToBytes(parts[0]), cipher = base64ToBytes(parts[1]), key = await stateCryptoKey();
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipher);
-    return new TextDecoder().decode(plain);
-  }
-  async function load() {
+  function load() {
     try {
-      const stored = localStorage.getItem(STORE);
-      if (!stored) return structuredClone(seed);
-      const json = stored.startsWith(STATE_ENCRYPTION_PREFIX) ? await decryptStateSnapshot(stored) : stored;
-      const value2 = JSON.parse(json);
+      const value2 = JSON.parse(localStorage.getItem(STORE));
       return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
@@ -557,10 +524,9 @@
     financeDerivedCache = null;
     relationshipDerivedCache = null;
   }
-  async function flushStateSave() {
+  function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
-    const encrypted = await encryptStateSnapshot(pendingStateSnapshot);
-    localStorage.setItem(STORE, encrypted);
+    localStorage.setItem(STORE, pendingStateSnapshot);
     persistedStateSnapshot = pendingStateSnapshot;
     pendingStateSnapshot = null;
   }
@@ -571,10 +537,7 @@
     if (snapshot === pendingStateSnapshot || snapshot === persistedStateSnapshot) return;
     pendingStateSnapshot = snapshot;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      flushStateSave().catch(() => {
-      });
-    }, 120);
+    saveTimer = setTimeout(flushStateSave, 120);
   }
   function localAccessSession() {
     const expires = Math.floor(Date.now() / 1e3) + 86400;
@@ -671,7 +634,7 @@
       writeMutationQueue(queue);
       return;
     }
-    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: void 0, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
+    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
     writeMutationQueue(queue);
@@ -3380,7 +3343,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           { number: "INV-2032", ro: "RO-1034", customer: "Demo Realty Co", date: "Jul 21, 2026", due: "Aug 5, 2026", amount: 1276.18, subtotal: 1178.92, taxRate: 8.25, tax: 97.26, status: "overdue" }
         ]
       };
-      state = await load();
+      state = load();
       filter = "active";
       query = "";
       importPreview = null;
