@@ -52,13 +52,13 @@ describe('resolveDiagnosticsPublicKey', () => {
   });
 
   it('does not throw when packaged public key is missing', () => {
-    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: true });
+    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: true, candidates: [] });
     assert.equal(result.publicKey, '');
     assert.equal(result.source, 'missing-packaged');
   });
 
   it('does not throw when the dev public key is missing', () => {
-    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: false });
+    const result = resolveDiagnosticsPublicKey({ env: {}, packaged: false, candidates: [] });
     assert.equal(result.publicKey, '');
     assert.equal(result.source, 'missing-dev');
   });
