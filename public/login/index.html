@@ -11,6 +11,10 @@
       button { background: #67e8f9; border: none; color: #082f49; font-weight: 700; cursor: pointer; }
       button:disabled { opacity: 0.6; cursor: wait; }
       a { color: #7dd3fc; }
+      .google { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 12px 14px; margin: 18px 0; border: 1px solid rgba(148,163,184,.45); border-radius: 10px; color: #111827; background: #fff; font-weight: 700; text-decoration: none; }
+      .google-mark { color: #4285f4; font-size: 18px; font-weight: 800; }
+      .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: #94a3b8; font-size: .75rem; text-transform: uppercase; }
+      .divider::before, .divider::after { height: 1px; flex: 1; background: rgba(148,163,184,.3); content: ""; }
       .error { color: #fecaca; margin-top: 12px; }
       .hint { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
       label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
@@ -20,11 +24,16 @@
   <body>
     <div class="card">
       <h1>Sign in to MechPro</h1>
-      <p class="hint">Enter your work email. We will open a one-time sign-in link for this browser.</p>
+      <p class="hint">Use your verified Google account, or receive a one-time link at your work email.</p>
+      <a class="google" href="/api/auth/google?returnTo=%2F">
+        <span class="google-mark" aria-hidden="true">G</span>
+        <span>Continue with Google</span>
+      </a>
+      <div class="divider"><span>or use your email</span></div>
       <form id="login-form">
         <label for="email">Work email</label>
         <input id="email" type="email" name="email" placeholder="name@shop.com" autocomplete="username" required />
-        <button type="submit">Continue securely</button>
+        <button type="submit">Email me a sign-in link</button>
       </form>
       <p id="error" class="error" hidden></p>
       <p>Need a shop? <a href="/signup">Create your account</a></p>

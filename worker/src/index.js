@@ -21,6 +21,7 @@ import {
   hmacBase64Url,
   hmacHex,
   verifyAccessJwt,
+  verifyGoogleIdToken,
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
@@ -28,6 +29,10 @@ import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-e
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
+const GOOGLE_STATE_COOKIE = '__Host-mechpro_google_state';
+const GOOGLE_NONCE_COOKIE = '__Host-mechpro_google_nonce';
+const GOOGLE_VERIFIER_COOKIE = '__Host-mechpro_google_verifier';
+const GOOGLE_RETURN_COOKIE = '__Host-mechpro_google_return';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
 
 function createPostHog(env) {
@@ -176,6 +181,14 @@ function getCookieValue(request, name) {
 
 function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
   return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function temporaryCookieHeader(name, value, maxAgeSeconds = 10 * 60) {
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearCookieHeader(name) {
+  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
 }
 
 function safeReturnPath(value, fallback = '/app') {
@@ -1422,6 +1435,121 @@ async function ensureSaasUser(env, email, name) {
   return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
 }
 
+function requireGoogleConfig(env) {
+  const clientId = String(env.GOOGLE_CLIENT_ID || '').trim();
+  const clientSecret = String(env.GOOGLE_CLIENT_SECRET || '').trim();
+  if (!clientId || !clientSecret) throw new HttpError(503, 'Google sign-in is not configured');
+  return { clientId, clientSecret };
+}
+
+function randomBase64Url(byteLength = 32) {
+  return base64UrlEncode(crypto.getRandomValues(new Uint8Array(byteLength)));
+}
+
+async function pkceChallenge(verifier) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return base64UrlEncode(new Uint8Array(digest));
+}
+
+function googleRedirectUri(request) {
+  return new URL('/api/auth/google/callback', new URL(request.url).origin).toString();
+}
+
+async function handleGoogleSignIn(request, env) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  const { clientId } = requireGoogleConfig(env);
+  const requestUrl = new URL(request.url);
+  const state = randomBase64Url();
+  const nonce = randomBase64Url();
+  const verifier = randomBase64Url(48);
+  const returnTo = safeReturnPath(requestUrl.searchParams.get('returnTo') || '/');
+  const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authorizationUrl.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: googleRedirectUri(request),
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    nonce,
+    code_challenge: await pkceChallenge(verifier),
+    code_challenge_method: 'S256',
+    prompt: 'select_account',
+  }).toString();
+  const headers = new Headers({ Location: authorizationUrl.toString(), 'Cache-Control': 'no-store' });
+  headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_STATE_COOKIE, state));
+  headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_NONCE_COOKIE, nonce));
+  headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_VERIFIER_COOKIE, verifier));
+  headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_RETURN_COOKIE, returnTo));
+  return new Response(null, { status: 302, headers });
+}
+
+async function handleGoogleCallback(request, env) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  const { clientId, clientSecret } = requireGoogleConfig(env);
+  const url = new URL(request.url);
+  const providerError = String(url.searchParams.get('error') || '');
+  if (providerError) throw new HttpError(401, providerError === 'access_denied' ? 'Google sign-in was cancelled' : 'Google sign-in failed');
+  const code = String(url.searchParams.get('code') || '');
+  const state = String(url.searchParams.get('state') || '');
+  const expectedState = getCookieValue(request, GOOGLE_STATE_COOKIE);
+  const nonce = getCookieValue(request, GOOGLE_NONCE_COOKIE);
+  const verifier = getCookieValue(request, GOOGLE_VERIFIER_COOKIE);
+  if (!code || !state || !expectedState || !nonce || !verifier || !constantTimeEqual(state, expectedState)) {
+    throw new HttpError(401, 'Google sign-in request is invalid or expired');
+  }
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: googleRedirectUri(request),
+      grant_type: 'authorization_code',
+      code_verifier: verifier,
+    }),
+  });
+  const tokenPayload = await tokenResponse.json().catch(() => ({}));
+  if (!tokenResponse.ok || !tokenPayload.id_token) throw new HttpError(401, 'Google could not verify this sign-in');
+  let claims;
+  try {
+    claims = await verifyGoogleIdToken(tokenPayload.id_token, clientId, nonce);
+  } catch {
+    throw new HttpError(401, 'Google could not verify this sign-in');
+  }
+  const email = String(claims.email || '').trim().toLowerCase();
+  const user = await ensureSaasUser(env, email, String(claims.name || email.split('@')[0]));
+  if (Number(user.enabled) !== 1) {
+    throw new HttpError(403, 'This account has been disabled. Contact your shop administrator.');
+  }
+  const sessionToken = crypto.randomUUID().replaceAll('-', '');
+  const sessionId = crypto.randomUUID();
+  const sessionHash = await hashValue(sessionToken);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare(`
+    INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(sessionId, user.id, sessionHash, expiresAt, new Date().toISOString()).run();
+  const posthog = getPostHog(env);
+  posthog?.identify({
+    distinctId: String(user.id),
+    properties: { email: user.email, name: user.name, role: user.role, shop_id: user.shop_id },
+  });
+  capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
+    auth_method: 'google',
+    actor_role: user.role,
+  });
+  const headers = new Headers({
+    Location: new URL(safeReturnPath(getCookieValue(request, GOOGLE_RETURN_COOKIE), '/'), url.origin).toString(),
+    'Cache-Control': 'no-store',
+  });
+  headers.append('Set-Cookie', sessionCookieHeader(sessionToken));
+  for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE]) {
+    headers.append('Set-Cookie', clearCookieHeader(name));
+  }
+  return new Response(null, { status: 302, headers });
+}
+
 async function handleMagicLink(request, env) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   const contentType = request.headers.get('Content-Type') || '';
@@ -1566,6 +1694,8 @@ async function handleAuth(request, env, segments) {
   if (action === 'magic-link') return handleMagicLink(request, env);
   if (action === 'send-login') return handleSendLogin(request, env);
   if (action === 'callback') return handleAuthCallback(request, env);
+  if (action === 'google' && segments[2] === 'callback') return handleGoogleCallback(request, env);
+  if (action === 'google') return handleGoogleSignIn(request, env);
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
     const context = await resolveContext(request, env);

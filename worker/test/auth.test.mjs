@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
+import { base64UrlEncode } from '../src/security.mjs';
 
 function signInRequest(email = 'owner@example.test') {
   return new Request('https://app.example.test/api/auth/magic-link', {
@@ -256,4 +257,114 @@ test('cookie sessions for disabled users are rejected on API routes', async (t) 
   }), env);
   assert.equal(response.status, 401);
   assert.match((await response.json()).message, /Authentication is required/i);
+});
+
+test('Google sign-in validates the ID token and creates an app session', async (t) => {
+  const clientId = 'google-client.apps.googleusercontent.com';
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+  publicJwk.kid = 'google-key';
+  const env = {
+    GOOGLE_CLIENT_ID: clientId,
+    GOOGLE_CLIENT_SECRET: 'google-secret',
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async first() {
+                assert.match(sql, /FROM users WHERE email/);
+                assert.equal(args[0], 'owner@example.test');
+                return {
+                  id: 'user-google',
+                  email: 'owner@example.test',
+                  shop_id: 'shop-google',
+                  role: 'admin',
+                  name: 'Google Owner',
+                  enabled: 1,
+                };
+              },
+              async run() {
+                assert.match(sql, /INSERT INTO sessions/);
+                assert.equal(args[1], 'user-google');
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const start = await worker.fetch(
+    new Request('https://app.example.test/api/auth/google?returnTo=%2Fdispatch'),
+    env,
+  );
+  assert.equal(start.status, 302);
+  const authorizationUrl = new URL(start.headers.get('location'));
+  assert.equal(authorizationUrl.origin, 'https://accounts.google.com');
+  assert.equal(authorizationUrl.searchParams.get('client_id'), clientId);
+  assert.equal(authorizationUrl.searchParams.get('redirect_uri'), 'https://app.example.test/api/auth/google/callback');
+  assert.equal(authorizationUrl.searchParams.get('code_challenge_method'), 'S256');
+  const state = authorizationUrl.searchParams.get('state');
+  const nonce = authorizationUrl.searchParams.get('nonce');
+  const cookies = start.headers.getSetCookie().map(value => value.split(';', 1)[0]).join('; ');
+  const encode = value => base64UrlEncode(new TextEncoder().encode(JSON.stringify(value)));
+  const header = encode({ alg: 'RS256', kid: publicJwk.kid, typ: 'JWT' });
+  const payload = encode({
+    iss: 'https://accounts.google.com',
+    aud: clientId,
+    sub: 'google-subject',
+    email: 'owner@example.test',
+    email_verified: true,
+    name: 'Google Owner',
+    nonce,
+    iat: Math.floor(Date.now() / 1000) - 5,
+    exp: Math.floor(Date.now() / 1000) + 300,
+  });
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    keyPair.privateKey,
+    new TextEncoder().encode(`${header}.${payload}`),
+  );
+  const idToken = `${header}.${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    if (String(url) === 'https://oauth2.googleapis.com/token') {
+      const body = new URLSearchParams(init.body);
+      assert.equal(body.get('code'), 'authorization-code');
+      assert.equal(body.get('client_secret'), 'google-secret');
+      assert.ok(body.get('code_verifier'));
+      return Response.json({ id_token: idToken });
+    }
+    assert.equal(String(url), 'https://www.googleapis.com/oauth2/v3/certs');
+    return Response.json({ keys: [publicJwk] });
+  });
+  const callback = await worker.fetch(new Request(
+    `https://app.example.test/api/auth/google/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
+    { headers: { Cookie: cookies } },
+  ), env);
+  assert.equal(callback.status, 302);
+  assert.equal(callback.headers.get('location'), 'https://app.example.test/dispatch');
+  assert.match(callback.headers.getSetCookie().join('\n'), /mechpro_session=/);
+  assert.equal(requests.length, 2);
+});
+
+test('Google callback rejects a mismatched OAuth state before token exchange', async (t) => {
+  const fetched = t.mock.method(globalThis, 'fetch', async () => {
+    assert.fail('invalid state must not be exchanged');
+  });
+  const response = await worker.fetch(new Request(
+    'https://app.example.test/api/auth/google/callback?code=code&state=attacker-state',
+    { headers: { Cookie: '__Host-mechpro_google_state=expected; __Host-mechpro_google_nonce=nonce; __Host-mechpro_google_verifier=verifier' } },
+  ), {
+    GOOGLE_CLIENT_ID: 'client-id',
+    GOOGLE_CLIENT_SECRET: 'client-secret',
+  });
+  assert.equal(response.status, 401);
+  assert.match((await response.json()).message, /invalid or expired/i);
+  assert.equal(fetched.mock.callCount(), 0);
 });

@@ -6,6 +6,7 @@ const { resolveDesktopStart } = require('./start-url');
 const trustedOrigins = new Set([
   'https://www.yourcarguy806.com',
   'https://mechpro-dispatch.pages.dev',
+  'https://accounts.google.com',
 ]);
 
 function isTrustedUrl(rawUrl) {
@@ -68,6 +69,9 @@ function createWindow() {
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedUrl(url)) event.preventDefault();
+  });
+  window.webContents.on('will-redirect', (event, url) => {
     if (!isTrustedUrl(url)) event.preventDefault();
   });
   if (smokeTest) {

@@ -17,6 +17,7 @@ export const cloudflareConfig = Object.freeze({
   authEndpoints: {
     magicLink: ${JSON.stringify(apiUrl + '/auth/magic-link')},
     callback: ${JSON.stringify(apiUrl + '/auth/callback')},
+    google: ${JSON.stringify(apiUrl + '/auth/google')},
     session: ${JSON.stringify(apiUrl + '/auth/session')},
     logout: ${JSON.stringify(apiUrl + '/auth/logout')},
   },

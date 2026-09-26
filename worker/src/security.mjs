@@ -26,6 +26,45 @@ function audienceMatches(audience, expected) {
   return (Array.isArray(audience) ? audience : [audience]).map(String).includes(expected);
 }
 
+export async function verifyGoogleIdToken(token, clientId, expectedNonce, fetcher = fetch, nowSeconds = Date.now() / 1000) {
+  if (!clientId || !expectedNonce) throw new Error('Google sign-in is not configured');
+  const parsed = parseJwt(token);
+  if (parsed.header.alg !== 'RS256' || !parsed.header.kid) throw new Error('Unsupported Google ID token');
+  const issuer = String(parsed.payload.iss || '');
+  if (!['https://accounts.google.com', 'accounts.google.com'].includes(issuer)) {
+    throw new Error('Invalid Google ID token issuer');
+  }
+  if (!audienceMatches(parsed.payload.aud, clientId)) throw new Error('Invalid Google ID token audience');
+  if (Array.isArray(parsed.payload.aud) && parsed.payload.aud.length > 1 && parsed.payload.azp !== clientId) {
+    throw new Error('Invalid Google ID token authorized party');
+  }
+  if (Number(parsed.payload.exp || 0) <= nowSeconds || Number(parsed.payload.iat || 0) > nowSeconds + 60) {
+    throw new Error('Expired Google ID token');
+  }
+  if (parsed.payload.nonce !== expectedNonce) throw new Error('Invalid Google ID token nonce');
+  if (parsed.payload.email_verified !== true || !parsed.payload.email || !parsed.payload.sub) {
+    throw new Error('Google account email is not verified');
+  }
+  const response = await fetcher('https://www.googleapis.com/oauth2/v3/certs', {
+    cf: { cacheEverything: true, cacheTtl: 3600 },
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error('Unable to load Google signing keys');
+  const { keys = [] } = await response.json();
+  const jwk = keys.find(key => key.kid === parsed.header.kid);
+  if (!jwk) throw new Error('Google signing key not found');
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, parsed.signature, parsed.signed);
+  if (!valid) throw new Error('Invalid Google ID token signature');
+  return parsed.payload;
+}
+
 export async function verifyAccessJwt(token, teamDomain, audience, fetcher = fetch, nowSeconds = Date.now() / 1000) {
   if (!teamDomain || !audience) throw new Error('Cloudflare Access is not configured');
   const parsed = parseJwt(token);

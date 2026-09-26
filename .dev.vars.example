@@ -18,3 +18,8 @@ DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
 # AUTH_EMAIL_FROM=noreply@yourcarguy806.com
 # AUTH_EMAIL_WEBHOOK=https://www.yourcarguy806.com/api/auth/send-login
 # AUTH_EMAIL_WEBHOOK_SECRET=replace-with-your-webhook-bearer-secret
+
+# Google OpenID Connect. Register this local callback in Google Cloud:
+# http://127.0.0.1:8787/api/auth/google/callback
+# GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+# GOOGLE_CLIENT_SECRET=replace-with-your-google-client-secret

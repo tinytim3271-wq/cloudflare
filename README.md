@@ -123,6 +123,8 @@ npx wrangler secret put ACCESS_AUD
 npx wrangler secret put ACCESS_ADMIN_EMAILS
 npx wrangler secret put AUTH_EMAIL_WEBHOOK
 npx wrangler secret put AUTH_EMAIL_WEBHOOK_SECRET
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
 ```
 
@@ -138,6 +140,13 @@ loginUrl, returnTo }`; its optional bearer secret is stored as
 `AUTH_EMAIL_WEBHOOK_SECRET`. Login links are never returned by the production
 API. `STRIPE_BILLING_WEBHOOK_SECRET` is the signing secret for the SaaS
 subscription webhook endpoint.
+
+For Google sign-in, create an OAuth 2.0 Web application in Google Cloud and
+register `https://www.yourcarguy806.com/api/auth/google/callback` as an
+authorized redirect URI. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are
+required; the Worker refuses to start the OAuth flow when either is missing.
+The callback validates OAuth state, PKCE, the ID-token signature and claims,
+and Google's verified-email flag before issuing a MechPro session.
 
 ### Fixing email sign-in
 
