@@ -110,12 +110,15 @@ function createWindow() {
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
+  const initialDeepLink = process.argv.find(argument => String(argument).startsWith('mechpro://'));
+  if (handleAuthDeepLink(initialDeepLink)) {
+    return;
+  }
   if (start.useLocalAssets) {
     void window.loadFile(path.join(__dirname, '..', 'index.html'));
   } else {
     void window.loadURL(start.remoteUrl);
   }
-  handleAuthDeepLink(process.argv.find(argument => String(argument).startsWith('mechpro://')));
 }
 
 function handleAuthDeepLink(rawUrl) {
