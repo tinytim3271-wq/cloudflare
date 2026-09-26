@@ -510,9 +510,60 @@
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
-  function load() {
+  const STATE_ENVELOPE_VERSION = 1;
+  let stateCryptoKeyPromise = null;
+  function getStateCryptoPassphrase() {
+    return window.__MECHPRO_STATE_KEY || "mechpro-local-dev-state-key";
+  }
+  function bytesToBase64(bytes) {
+    let binary = "";
+    const chunk = 32768;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+  function base64ToBytes(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  async function getStateCryptoKey() {
+    if (!stateCryptoKeyPromise) {
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey("raw", enc.encode(getStateCryptoPassphrase()), "PBKDF2", false, ["deriveKey"]);
+      const salt = enc.encode("mechpro-state-salt-v1");
+      stateCryptoKeyPromise = crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    }
+    return stateCryptoKeyPromise;
+  }
+  async function encryptStateSnapshot(plaintext) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await getStateCryptoKey();
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
+    return JSON.stringify({ v: STATE_ENVELOPE_VERSION, alg: "AES-GCM", iv: bytesToBase64(iv), data: bytesToBase64(ciphertext) });
+  }
+  async function decryptStateSnapshot(envelopeText) {
+    const envelope = JSON.parse(envelopeText);
+    if (!envelope || envelope.v !== STATE_ENVELOPE_VERSION || envelope.alg !== "AES-GCM" || !envelope.iv || !envelope.data) return null;
+    const key = await getStateCryptoKey();
+    const iv = base64ToBytes(envelope.iv);
+    const data = base64ToBytes(envelope.data);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    return new TextDecoder().decode(plaintext);
+  }
+  async function load() {
     try {
-      const value2 = JSON.parse(localStorage.getItem(STORE));
+      const raw = localStorage.getItem(STORE);
+      if (!raw) return structuredClone(seed);
+      let value2;
+      try {
+        const decrypted = await decryptStateSnapshot(raw);
+        value2 = decrypted ? JSON.parse(decrypted) : JSON.parse(raw);
+      } catch {
+        value2 = JSON.parse(raw);
+      }
       return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
     } catch {
       return structuredClone(seed);
@@ -523,9 +574,10 @@
     financeDerivedCache = null;
     relationshipDerivedCache = null;
   }
-  function flushStateSave() {
+  async function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
-    localStorage.setItem(STORE, pendingStateSnapshot);
+    const encrypted = await encryptStateSnapshot(pendingStateSnapshot);
+    localStorage.setItem(STORE, encrypted);
     persistedStateSnapshot = pendingStateSnapshot;
     pendingStateSnapshot = null;
   }
@@ -3341,7 +3393,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           { number: "INV-2032", ro: "RO-1034", customer: "Demo Realty Co", date: "Jul 21, 2026", due: "Aug 5, 2026", amount: 1276.18, subtotal: 1178.92, taxRate: 8.25, tax: 97.26, status: "overdue" }
         ]
       };
-      state = load();
+      state = await load();
       filter = "active";
       query = "";
       importPreview = null;
