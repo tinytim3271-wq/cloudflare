@@ -52,6 +52,7 @@ describe('resolveDiagnosticsPublicKey', () => {
   });
 
   it('does not throw when packaged public key is missing', () => {
+    // candidates: [] isolates the test from the repo's committed public key file.
     const result = resolveDiagnosticsPublicKey({ env: {}, packaged: true, candidates: [] });
     assert.equal(result.publicKey, '');
     assert.equal(result.source, 'missing-packaged');

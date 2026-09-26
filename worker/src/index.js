@@ -1906,7 +1906,7 @@ async function route(request, env) {
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
-  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
+  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
