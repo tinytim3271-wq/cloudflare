@@ -659,12 +659,59 @@
     ;
     return mutationQueueCache;
   }
-  function writeMutationQueue(queue) {
+  const MUTATION_QUEUE_CRYPTO_VERSION = "v1";
+  const MUTATION_QUEUE_CRYPTO_SALT = "mechpro-mutation-queue";
+  function base64FromBytes(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+  function bytesFromBase64(base64) {
+    const binary = atob(base64), out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+  }
+  async function deriveMutationQueueKey() {
+    const session = authSession?.() || {};
+    const seed = String(session.sub || session.email || session.userId || "anonymous");
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey("raw", encoder.encode(seed), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: encoder.encode(MUTATION_QUEUE_CRYPTO_SALT), iterations: 100000, hash: "SHA-256" },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+  async function encryptMutationQueueRaw(raw) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveMutationQueueKey();
+    const plaintext = new TextEncoder().encode(raw);
+    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+    return `${MUTATION_QUEUE_CRYPTO_VERSION}:${base64FromBytes(iv)}:${base64FromBytes(new Uint8Array(encrypted))}`;
+  }
+  async function decryptMutationQueueRaw(payload) {
+    if (!payload || typeof payload !== "string") return "[]";
+    const parts = payload.split(":");
+    if (parts.length !== 3 || parts[0] !== MUTATION_QUEUE_CRYPTO_VERSION) return payload;
+    const iv = bytesFromBase64(parts[1]);
+    const ciphertext = bytesFromBase64(parts[2]);
+    const key = await deriveMutationQueueKey();
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    return new TextDecoder().decode(decrypted);
+  }
+  async function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
+    try {
+      const encrypted = await encryptMutationQueueRaw(raw);
+      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
+    } catch {
+      localStorage.removeItem(MUTATION_QUEUE_STORE);
+    }
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -678,17 +725,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  function queueEntityMutation(mutation, conflict = false) {
-    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  async function queueEntityMutation(mutation, conflict = false) {
+    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      writeMutationQueue(queue);
+      await writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    writeMutationQueue(queue);
+    await writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
