@@ -671,7 +671,7 @@
       writeMutationQueue(queue);
       return;
     }
-    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
+    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: void 0, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
     writeMutationQueue(queue);
