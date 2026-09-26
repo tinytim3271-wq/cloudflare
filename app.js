@@ -25,6 +25,7 @@
         authEndpoints: {
           magicLink: "/api/auth/magic-link",
           callback: "/api/auth/callback",
+          google: "/api/auth/google",
           session: "/api/auth/session",
           logout: "/api/auth/logout"
         }
@@ -176,7 +177,7 @@
     showModal(`<form class="modal" id="direct-chat-form"><div class="modal-head"><h2>New direct message</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Employee<select name="email" required>${people.map((user) => `<option value="${escapeHtml(user.email)}">${escapeHtml(user.name)} \xB7 ${escapeHtml(user.title || roleLabel[user.role])}</option>`).join("")}</select></label></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("message-square-plus", 14)} Open chat</button></div></form>`);
     document.querySelector("#direct-chat-form").onsubmit = async (event) => {
       event.preventDefault();
-      const email = cleanEmail(new FormData(event.target).get("email")), members = [cleanEmail(currentUser().email), email].sort(), existing = state.conversations.find((item) => item.kind === "direct" && JSON.stringify([...item.memberEmails].sort()) === JSON.stringify(members));
+      const email = cleanEmail(new FormData(event.target).get("email")), members = [cleanEmail(currentUser().email), email].sort((a, b) => a.localeCompare(b)), existing = state.conversations.find((item) => item.kind === "direct" && JSON.stringify([...item.memberEmails].sort((a, b) => a.localeCompare(b))) === JSON.stringify(members));
       if (existing) {
         chatConversationId = existing.id;
         closeModal();
@@ -510,62 +511,17 @@
   function sanitizeUsers(users) {
     return users.map(({ password, ...user }) => user);
   }
-  const STATE_ENVELOPE_VERSION = 1;
-  let stateCryptoKeyPromise = null;
-  function getStateCryptoPassphrase() {
-    return window.__MECHPRO_STATE_KEY || "mechpro-local-dev-state-key";
-  }
-  function bytesToBase64(bytes) {
-    let binary = "";
-    const chunk = 32768;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
-    return btoa(binary);
-  }
-  function base64ToBytes(base64) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-  async function getStateCryptoKey() {
-    if (!stateCryptoKeyPromise) {
-      const enc = new TextEncoder();
-      const baseKey = await crypto.subtle.importKey("raw", enc.encode(getStateCryptoPassphrase()), "PBKDF2", false, ["deriveKey"]);
-      const salt = enc.encode("mechpro-state-salt-v1");
-      stateCryptoKeyPromise = crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-    }
-    return stateCryptoKeyPromise;
-  }
-  async function encryptStateSnapshot(plaintext) {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await getStateCryptoKey();
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
-    return JSON.stringify({ v: STATE_ENVELOPE_VERSION, alg: "AES-GCM", iv: bytesToBase64(iv), data: bytesToBase64(ciphertext) });
-  }
-  async function decryptStateSnapshot(envelopeText) {
-    const envelope = JSON.parse(envelopeText);
-    if (!envelope || envelope.v !== STATE_ENVELOPE_VERSION || envelope.alg !== "AES-GCM" || !envelope.iv || !envelope.data) return null;
-    const key = await getStateCryptoKey();
-    const iv = base64ToBytes(envelope.iv);
-    const data = base64ToBytes(envelope.data);
-    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
-    return new TextDecoder().decode(plaintext);
-  }
-  async function load() {
+  function load() {
     try {
-      const raw = localStorage.getItem(STORE);
-      if (!raw) return structuredClone(seed);
-      let value2;
-      try {
-        const decrypted = await decryptStateSnapshot(raw);
-        value2 = decrypted ? JSON.parse(decrypted) : JSON.parse(raw);
-      } catch {
-        value2 = JSON.parse(raw);
+      const value2 = JSON.parse(localStorage.getItem(STORE));
+      if (value2?.version !== LOCAL_PREFERENCES_VERSION) {
+        localStorage.removeItem(STORE);
+        return structuredClone(seed);
       }
-      return value2?.orders ? { ...seed, ...value2, users: sanitizeUsers(value2.users ?? seed.users), currentUserId: Object.hasOwn(value2, "currentUserId") ? value2.currentUserId : seed.currentUserId, chartOfAccounts: value2.chartOfAccounts ?? seed.chartOfAccounts, journalEntries: value2.journalEntries ?? seed.journalEntries, vehicles: value2.vehicles ?? seed.vehicles, inventory: value2.inventory ?? seed.inventory, vendors: value2.vendors ?? seed.vendors, services: value2.services ?? seed.services, inspectionTemplates: value2.inspectionTemplates ?? seed.inspectionTemplates, inspections: value2.inspections ?? seed.inspections, reminders: value2.reminders ?? seed.reminders, appointments: value2.appointments ?? seed.appointments, purchases: value2.purchases ?? seed.purchases, shopSettingsRecords: value2.shopSettingsRecords ?? seed.shopSettingsRecords, expenses: value2.expenses ?? seed.expenses, payrollEntries: value2.payrollEntries ?? seed.payrollEntries, shiftEntries: value2.shiftEntries ?? seed.shiftEntries, jobClockEntries: value2.jobClockEntries ?? seed.jobClockEntries, estimates: value2.estimates ?? seed.estimates, payments: value2.payments ?? seed.payments, conversations: value2.conversations ?? seed.conversations, chatMessages: value2.chatMessages ?? seed.chatMessages, chatLastRead: value2.chatLastRead ?? seed.chatLastRead, messagingSettings: { ...seed.messagingSettings, ...value2.messagingSettings || {} }, billingSettings: { ...seed.billingSettings, ...value2.billingSettings || {} }, taxSettings: { ...seed.taxSettings, ...value2.taxSettings || {} } } : structuredClone(seed);
+      const route = typeof value2.route === "string" && /^[a-z-]+$/.test(value2.route) ? value2.route : seed.route;
+      return { ...structuredClone(seed), route };
     } catch {
+      localStorage.removeItem(STORE);
       return structuredClone(seed);
     }
   }
@@ -576,15 +532,14 @@
   }
   async function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
-    const encrypted = await encryptStateSnapshot(pendingStateSnapshot);
-    localStorage.setItem(STORE, encrypted);
+    localStorage.setItem(STORE, pendingStateSnapshot);
     persistedStateSnapshot = pendingStateSnapshot;
     pendingStateSnapshot = null;
   }
   function save() {
     state.users = sanitizeUsers(state.users);
     invalidateDerivedCaches();
-    const snapshot = JSON.stringify(state);
+    const snapshot = JSON.stringify({ version: LOCAL_PREFERENCES_VERSION, route: state.route });
     if (snapshot === pendingStateSnapshot || snapshot === persistedStateSnapshot) return;
     pendingStateSnapshot = snapshot;
     clearTimeout(saveTimer);
@@ -648,9 +603,9 @@
     localStorage.removeItem(storageKeys.session);
   }
   function readMutationQueue() {
+    if (Array.isArray(mutationQueueCache)) return mutationQueueCache;
     const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
-    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
-    mutationQueueRaw = raw;
+    localStorage.removeItem(MUTATION_QUEUE_STORE);
     try {
       mutationQueueCache = JSON.parse(raw) || [];
     } catch {
@@ -659,59 +614,8 @@
     ;
     return mutationQueueCache;
   }
-  const MUTATION_QUEUE_CRYPTO_VERSION = "v1";
-  const MUTATION_QUEUE_CRYPTO_SALT = "mechpro-mutation-queue";
-  function base64FromBytes(bytes) {
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
-  }
-  function bytesFromBase64(base64) {
-    const binary = atob(base64), out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
-  }
-  async function deriveMutationQueueKey() {
-    const session = authSession?.() || {};
-    const seed = String(session.sub || session.email || session.userId || "anonymous");
-    const encoder = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey("raw", encoder.encode(seed), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt: encoder.encode(MUTATION_QUEUE_CRYPTO_SALT), iterations: 100000, hash: "SHA-256" },
-      keyMaterial,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"]
-    );
-  }
-  async function encryptMutationQueueRaw(raw) {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await deriveMutationQueueKey();
-    const plaintext = new TextEncoder().encode(raw);
-    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
-    return `${MUTATION_QUEUE_CRYPTO_VERSION}:${base64FromBytes(iv)}:${base64FromBytes(new Uint8Array(encrypted))}`;
-  }
-  async function decryptMutationQueueRaw(payload) {
-    if (!payload || typeof payload !== "string") return "[]";
-    const parts = payload.split(":");
-    if (parts.length !== 3 || parts[0] !== MUTATION_QUEUE_CRYPTO_VERSION) return payload;
-    const iv = bytesFromBase64(parts[1]);
-    const ciphertext = bytesFromBase64(parts[2]);
-    const key = await deriveMutationQueueKey();
-    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
-    return new TextDecoder().decode(decrypted);
-  }
-  async function writeMutationQueue(queue) {
-    const raw = JSON.stringify(queue);
-    if (raw === mutationQueueRaw) return;
-    mutationQueueRaw = raw;
+  function writeMutationQueue(queue) {
     mutationQueueCache = queue;
-    try {
-      const encrypted = await encryptMutationQueueRaw(raw);
-      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
-    } catch {
-      localStorage.removeItem(MUTATION_QUEUE_STORE);
-    }
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -725,17 +629,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  async function queueEntityMutation(mutation, conflict = false) {
-    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  function queueEntityMutation(mutation, conflict = false) {
+    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      await writeMutationQueue(queue);
+      writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    await writeMutationQueue(queue);
+    writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
@@ -1881,7 +1785,8 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in with your work email</h1><p>Enter the email for your MechPro account. We will open a one-time sign-in link for this browser. MechPro never receives your password.</p><form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><p class="login-sent" id="login-sent" hidden></p><button class="primary login-button" type="submit">${icon("shield-check", 16)} Continue securely</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Use the same email that is mapped to your MechPro employee profile."}</span></div></section></main>`;
+    const googleUrl = `${cloudflareConfig2.authEndpoints.google}?returnTo=%2F${isDesktopApp ? "&desktop=1" : ""}`, google = isLocalShell() ? "" : `<a class="google-login-button" href="${googleUrl}" ${isDesktopApp ? 'target="_blank" rel="noopener"' : ""}><span class="google-mark" aria-hidden="true">G</span><span>Continue with Google</span></a><div class="login-divider"><span>or use your email</span></div>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>Use your verified Google account, or receive a one-time link at your work email. No password required.</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>`;
   }
   async function upgradeShopPlan() {
     try {
@@ -3350,7 +3255,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3440,7 +3345,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           { number: "INV-2032", ro: "RO-1034", customer: "Demo Realty Co", date: "Jul 21, 2026", due: "Aug 5, 2026", amount: 1276.18, subtotal: 1178.92, taxRate: 8.25, tax: 97.26, status: "overdue" }
         ]
       };
-      state = await load();
+      LOCAL_PREFERENCES_VERSION = 2;
+      state = load();
       filter = "active";
       query = "";
       importPreview = null;
@@ -3470,7 +3376,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       OFFLINE_QUEUE_BLOCKED = /\/entities\/(employees|payrollentries|shopsettings|invoices|payments|expenses)(\/|$)/i;
       flushingMutationQueue = false;
       mutationQueueCache = null;
-      mutationQueueRaw = null;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };

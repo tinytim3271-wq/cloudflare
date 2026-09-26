@@ -9,6 +9,7 @@ export const cloudflareConfig = Object.freeze({
   authEndpoints: {
     magicLink: "/api/auth/magic-link",
     callback: "/api/auth/callback",
+    google: "/api/auth/google",
     session: "/api/auth/session",
     logout: "/api/auth/logout",
   },

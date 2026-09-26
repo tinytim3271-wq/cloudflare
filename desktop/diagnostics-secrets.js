@@ -11,7 +11,8 @@ function isPackagedApp() {
   }
 }
 
-function publicKeyCandidates() {
+function publicKeyCandidates(options = {}) {
+  if (Array.isArray(options.candidates)) return options.candidates;
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, 'diagnostics-keys', 'capability-public-key.pem'));
@@ -48,7 +49,10 @@ function resolveDiagnosticsPublicKey(options = {}) {
     if (fromEnvFile) return { publicKey: fromEnvFile, source: fromEnvFilePath };
   }
 
-  for (const candidate of publicKeyCandidates()) {
+  // `options.candidates` allows tests to control the file lookup hermetically
+  // (e.g. assert the "missing" path without the repo's committed public key).
+  const candidates = options.candidates || publicKeyCandidates();
+  for (const candidate of candidates) {
     const fromFile = readFile(candidate);
     if (fromFile) return { publicKey: fromFile, source: candidate };
   }
