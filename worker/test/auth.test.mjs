@@ -259,7 +259,7 @@ test('cookie sessions for disabled users are rejected on API routes', async (t) 
   assert.match((await response.json()).message, /Authentication is required/i);
 });
 
-test('Google sign-in validates the ID token and creates an app session', async (t) => {
+test('Google sign-in validates the ID token and creates a one-time desktop handoff', async (t) => {
   const clientId = 'google-client.apps.googleusercontent.com';
   const keyPair = await crypto.subtle.generateKey(
     { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
@@ -289,8 +289,9 @@ test('Google sign-in validates the ID token and creates an app session', async (
                 };
               },
               async run() {
-                assert.match(sql, /INSERT INTO sessions/);
-                assert.equal(args[1], 'user-google');
+                assert.match(sql, /INSERT INTO login_tokens/);
+                assert.equal(args[1], 'owner@example.test');
+                assert.equal(args[3], '/dispatch');
               },
             };
           },
@@ -299,7 +300,7 @@ test('Google sign-in validates the ID token and creates an app session', async (
     },
   };
   const start = await worker.fetch(
-    new Request('https://app.example.test/api/auth/google?returnTo=%2Fdispatch'),
+    new Request('https://app.example.test/api/auth/google?returnTo=%2Fdispatch&desktop=1'),
     env,
   );
   assert.equal(start.status, 302);
@@ -348,8 +349,8 @@ test('Google sign-in validates the ID token and creates an app session', async (
     { headers: { Cookie: cookies } },
   ), env);
   assert.equal(callback.status, 302);
-  assert.equal(callback.headers.get('location'), 'https://app.example.test/dispatch');
-  assert.match(callback.headers.getSetCookie().join('\n'), /mechpro_session=/);
+  assert.match(callback.headers.get('location'), /^mechpro:\/\/auth\?token=[a-f0-9]{32}$/);
+  assert.doesNotMatch(callback.headers.getSetCookie().join('\n'), /mechpro_session=/);
   assert.equal(requests.length, 2);
 });
 

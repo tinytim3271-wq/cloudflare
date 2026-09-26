@@ -33,6 +33,7 @@ const GOOGLE_STATE_COOKIE = '__Host-mechpro_google_state';
 const GOOGLE_NONCE_COOKIE = '__Host-mechpro_google_nonce';
 const GOOGLE_VERIFIER_COOKIE = '__Host-mechpro_google_verifier';
 const GOOGLE_RETURN_COOKIE = '__Host-mechpro_google_return';
+const GOOGLE_DESKTOP_COOKIE = '__Host-mechpro_google_desktop';
 const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
 
 function createPostHog(env) {
@@ -1463,6 +1464,7 @@ async function handleGoogleSignIn(request, env) {
   const nonce = randomBase64Url();
   const verifier = randomBase64Url(48);
   const returnTo = safeReturnPath(requestUrl.searchParams.get('returnTo') || '/');
+  const desktop = requestUrl.searchParams.get('desktop') === '1';
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorizationUrl.search = new URLSearchParams({
     client_id: clientId,
@@ -1480,6 +1482,7 @@ async function handleGoogleSignIn(request, env) {
   headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_NONCE_COOKIE, nonce));
   headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_VERIFIER_COOKIE, verifier));
   headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_RETURN_COOKIE, returnTo));
+  headers.append('Set-Cookie', temporaryCookieHeader(GOOGLE_DESKTOP_COOKIE, desktop ? '1' : '0'));
   return new Response(null, { status: 302, headers });
 }
 
@@ -1522,6 +1525,38 @@ async function handleGoogleCallback(request, env) {
   if (Number(user.enabled) !== 1) {
     throw new HttpError(403, 'This account has been disabled. Contact your shop administrator.');
   }
+  const isDesktop = getCookieValue(request, GOOGLE_DESKTOP_COOKIE) === '1';
+  if (isDesktop) {
+    const handoffToken = crypto.randomUUID().replaceAll('-', '');
+    const handoffHash = await hashValue(handoffToken);
+    const now = new Date().toISOString();
+    await env.DB.prepare(`
+      INSERT INTO login_tokens (id, email, token_hash, return_to, expires_at, created_at, auth_method)
+      VALUES (?, ?, ?, ?, ?, ?, 'google')
+      ON CONFLICT(email) DO UPDATE SET
+        token_hash = excluded.token_hash,
+        return_to = excluded.return_to,
+        expires_at = excluded.expires_at,
+        used_at = NULL,
+        created_at = excluded.created_at,
+        auth_method = excluded.auth_method
+    `).bind(
+      crypto.randomUUID(),
+      email,
+      handoffHash,
+      safeReturnPath(getCookieValue(request, GOOGLE_RETURN_COOKIE), '/'),
+      new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+      now,
+    ).run();
+    const headers = new Headers({
+      Location: `mechpro://auth?token=${encodeURIComponent(handoffToken)}`,
+      'Cache-Control': 'no-store',
+    });
+    for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE, GOOGLE_DESKTOP_COOKIE]) {
+      headers.append('Set-Cookie', clearCookieHeader(name));
+    }
+    return new Response(null, { status: 302, headers });
+  }
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
@@ -1544,7 +1579,7 @@ async function handleGoogleCallback(request, env) {
     'Cache-Control': 'no-store',
   });
   headers.append('Set-Cookie', sessionCookieHeader(sessionToken));
-  for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE]) {
+  for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE, GOOGLE_DESKTOP_COOKIE]) {
     headers.append('Set-Cookie', clearCookieHeader(name));
   }
   return new Response(null, { status: 302, headers });
@@ -1580,14 +1615,15 @@ async function handleMagicLink(request, env) {
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const now = new Date().toISOString();
   await env.DB.prepare(`
-    INSERT INTO login_tokens (id, email, token_hash, return_to, expires_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO login_tokens (id, email, token_hash, return_to, expires_at, created_at, auth_method)
+    VALUES (?, ?, ?, ?, ?, ?, 'magic_link')
     ON CONFLICT(email) DO UPDATE SET
       token_hash = excluded.token_hash,
       return_to = excluded.return_to,
       expires_at = excluded.expires_at,
       used_at = NULL,
-      created_at = excluded.created_at
+      created_at = excluded.created_at,
+      auth_method = excluded.auth_method
   `).bind(crypto.randomUUID(), email, tokenHash, returnTo, expiresAt, now).run();
   const loginUrl = new URL('/api/auth/callback', new URL(request.url).origin);
   loginUrl.searchParams.set('token', token);
@@ -1627,7 +1663,7 @@ async function handleAuthCallback(request, env) {
   if (!token) throw new HttpError(400, 'Missing login token');
   const tokenHash = await hashValue(token);
   const loginToken = await env.DB.prepare(
-    'SELECT id, email, return_to, expires_at, used_at FROM login_tokens WHERE token_hash = ? LIMIT 1',
+    'SELECT id, email, return_to, expires_at, used_at, auth_method FROM login_tokens WHERE token_hash = ? LIMIT 1',
   ).bind(tokenHash).first();
   if (!loginToken) throw new HttpError(401, 'The sign-in link is invalid or expired');
   if (loginToken.used_at || new Date(loginToken.expires_at).getTime() <= Date.now()) {
@@ -1660,7 +1696,7 @@ async function handleAuthCallback(request, env) {
     },
   });
   capturePostHogEvent(env, { userId: String(user.id), shopId: user.shop_id }, 'user_signed_in', {
-    auth_method: 'magic_link',
+    auth_method: loginToken.auth_method || 'magic_link',
     actor_role: user.role,
   });
   const redirect = new URL(safeReturnPath(loginToken.return_to), url.origin);

@@ -39,7 +39,7 @@
     "test:html": "node --test src/shared/html.test.mjs",
     "test:chat": "node --test src/modules/chat/utils.test.mjs",
     "test:storage": "node --test src/modules/storage.test.mjs",
-    "test:desktop": "node --test desktop/start-url.test.js desktop/diagnostics-secrets.test.js",
+    "test:desktop": "node --test desktop/start-url.test.js desktop/auth-deep-link.test.js desktop/diagnostics-secrets.test.js",
     "test:modules": "npm run test:home && npm run test:html && npm run test:chat && npm run test:storage && npm run test:desktop"
   },
   "devDependencies": {
@@ -53,6 +53,12 @@
   "build": {
     "appId": "com.mechpro.dispatch",
     "productName": "MechPro",
+    "protocols": [
+      {
+        "name": "MechPro authentication",
+        "schemes": ["mechpro"]
+      }
+    ],
     "artifactName": "MechPro-Setup-${version}.${ext}",
     "publish": null,
     "directories": {

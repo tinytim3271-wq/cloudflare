@@ -2,6 +2,9 @@ const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('node:path');
 const diagnostics = require('./diagnostics-bridge');
 const { resolveDesktopStart } = require('./start-url');
+const { resolveAuthDeepLink } = require('./auth-deep-link');
+
+let mainWindow = null;
 
 const trustedOrigins = new Set([
   'https://www.yourcarguy806.com',
@@ -103,14 +106,46 @@ function createWindow() {
   // calls are same-origin. Loading index.html via file:// made fetch('/api/...') fail
   // with TypeError: Failed to fetch. Use --smoke-test / --local-assets for file://.
   const start = resolveDesktopStart();
+  mainWindow = window;
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
   if (start.useLocalAssets) {
     void window.loadFile(path.join(__dirname, '..', 'index.html'));
   } else {
     void window.loadURL(start.remoteUrl);
   }
+  handleAuthDeepLink(process.argv.find(argument => String(argument).startsWith('mechpro://')));
 }
 
-app.whenReady().then(() => {
+function handleAuthDeepLink(rawUrl) {
+  if (!rawUrl || !mainWindow) return false;
+  const callbackUrl = resolveAuthDeepLink(rawUrl, resolveDesktopStart().remoteUrl);
+  if (!callbackUrl) return false;
+  void mainWindow.loadURL(callbackUrl);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+  return true;
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+
+app.on('second-instance', (_event, argv) => {
+  handleAuthDeepLink(argv.find(argument => String(argument).startsWith('mechpro://')));
+});
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handleAuthDeepLink(url);
+});
+
+if (process.defaultApp) {
+  app.setAsDefaultProtocolClient('mechpro', process.execPath, [path.resolve(process.argv[1] || '.')]);
+} else {
+  app.setAsDefaultProtocolClient('mechpro');
+}
+
+if (hasSingleInstanceLock) app.whenReady().then(() => {
   registerDiagnosticsIpc();
   // Do not auto-start the J2534 host — start on first user-initiated diagnostics action.
   createWindow();
