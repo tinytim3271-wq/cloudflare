@@ -143,7 +143,7 @@
     showModal(`<form class="modal" id="direct-chat-form"><div class="modal-head"><h2>New direct message</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Employee<select name="email" required>${people.map((user) => `<option value="${escapeHtml(user.email)}">${escapeHtml(user.name)} \xB7 ${escapeHtml(user.title || roleLabel[user.role])}</option>`).join("")}</select></label></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("message-square-plus", 14)} Open chat</button></div></form>`);
     document.querySelector("#direct-chat-form").onsubmit = async (event) => {
       event.preventDefault();
-      const email = cleanEmail(new FormData(event.target).get("email")), members = [cleanEmail(currentUser().email), email].sort(), existing = state.conversations.find((item) => item.kind === "direct" && JSON.stringify([...item.memberEmails].sort()) === JSON.stringify(members));
+      const email = cleanEmail(new FormData(event.target).get("email")), members = [cleanEmail(currentUser().email), email].sort((a, b) => a.localeCompare(b)), existing = state.conversations.find((item) => item.kind === "direct" && JSON.stringify([...item.memberEmails].sort((a, b) => a.localeCompare(b))) === JSON.stringify(members));
       if (existing) {
         chatConversationId = existing.id;
         closeModal();
