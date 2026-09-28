@@ -530,7 +530,7 @@
     financeDerivedCache = null;
     relationshipDerivedCache = null;
   }
-  async function flushStateSave() {
+  function flushStateSave() {
     if (pendingStateSnapshot == null || pendingStateSnapshot === persistedStateSnapshot) return;
     localStorage.setItem(STORE, pendingStateSnapshot);
     persistedStateSnapshot = pendingStateSnapshot;
@@ -603,9 +603,9 @@
     localStorage.removeItem(storageKeys.session);
   }
   function readMutationQueue() {
-    if (Array.isArray(mutationQueueCache)) return mutationQueueCache;
     const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
-    localStorage.removeItem(MUTATION_QUEUE_STORE);
+    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
+    mutationQueueRaw = raw;
     try {
       mutationQueueCache = JSON.parse(raw) || [];
     } catch {
@@ -614,8 +614,49 @@
     ;
     return mutationQueueCache;
   }
+  const MUTATION_QUEUE_KEY_STORE = `${MUTATION_QUEUE_STORE}:key`;
+  let mutationQueueCryptoKeyPromise;
+  function bytesToBase64(bytes) {
+    let binary = "";
+    bytes.forEach((b) => binary += String.fromCharCode(b));
+    return btoa(binary);
+  }
+  function base64ToBytes(base64) {
+    const binary = atob(base64), bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  async function getMutationQueueCryptoKey() {
+    if (mutationQueueCryptoKeyPromise) return mutationQueueCryptoKeyPromise;
+    mutationQueueCryptoKeyPromise = (async () => {
+      const stored = localStorage.getItem(MUTATION_QUEUE_KEY_STORE);
+      if (stored) {
+        const rawKey = base64ToBytes(stored);
+        return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+      }
+      const rawKey = crypto.getRandomValues(new Uint8Array(32));
+      localStorage.setItem(MUTATION_QUEUE_KEY_STORE, bytesToBase64(rawKey));
+      return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    })();
+    return mutationQueueCryptoKeyPromise;
+  }
+  async function encryptMutationQueueRaw(raw) {
+    const key = await getMutationQueueCryptoKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(raw);
+    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+    return JSON.stringify({ v: 1, iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(cipher)) });
+  }
   function writeMutationQueue(queue) {
+    const raw = JSON.stringify(queue);
+    if (raw === mutationQueueRaw) return;
+    mutationQueueRaw = raw;
     mutationQueueCache = queue;
+    void encryptMutationQueueRaw(raw).then((encrypted) => {
+      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
+    }).catch(() => {
+      localStorage.removeItem(MUTATION_QUEUE_STORE);
+    });
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -3255,7 +3296,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3376,6 +3417,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       OFFLINE_QUEUE_BLOCKED = /\/entities\/(employees|payrollentries|shopsettings|invoices|payments|expenses)(\/|$)/i;
       flushingMutationQueue = false;
       mutationQueueCache = null;
+      mutationQueueRaw = null;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };

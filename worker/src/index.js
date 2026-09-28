@@ -980,7 +980,7 @@ async function handleAutoAuth(request, env, context) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleAgentPhoneConfigure(request, env, context) {
+async function handleAgentPhoneConfigure(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin']);
   const body = await requestJson(request);
@@ -1585,6 +1585,21 @@ async function handleGoogleCallback(request, env) {
   return new Response(null, { status: 302, headers });
 }
 
+const SIGN_IN_RESEND_COOLDOWN_MS = 60 * 1000;
+
+function signInResendRetryAfter(recent, now = Date.now()) {
+  if (!recent?.created_at || recent.used_at) return 0;
+  if (recent.expires_at) {
+    const expires = new Date(recent.expires_at).getTime();
+    if (Number.isFinite(expires) && expires <= now) return 0;
+  }
+  const created = new Date(recent.created_at).getTime();
+  if (!Number.isFinite(created)) return 0;
+  const remaining = SIGN_IN_RESEND_COOLDOWN_MS - (now - created);
+  if (remaining <= 0) return 0;
+  return Math.max(1, Math.min(60, Math.ceil(remaining / 1000)));
+}
+
 async function handleMagicLink(request, env) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   const contentType = request.headers.get('Content-Type') || '';
@@ -1731,7 +1746,7 @@ async function handleLogout(request, env) {
   });
 }
 
-async function handleAuth(request, env, segments) {
+async function handleAuth(request, env, segments, analytics) {
   const action = segments[1] || '';
   if (action === 'magic-link') return handleMagicLink(request, env);
   if (action === 'send-login') return handleSendLogin(request, env);
@@ -1741,7 +1756,7 @@ async function handleAuth(request, env, segments) {
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
     const context = await resolveContext(request, env);
-    return handleAuthSession(context);
+    return handleAuthSession(context, analytics || { client: null });
   }
   throw new HttpError(404, 'Not found');
 }
@@ -1874,7 +1889,7 @@ async function handleBilling(request, env, context, segments) {
   throw new HttpError(404, 'Not found');
 }
 
-async function route(request, env) {
+async function route(request, env, analytics) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
   const segments = path.split('/').filter(Boolean);
@@ -1893,8 +1908,10 @@ async function route(request, env) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
-  if (segments[0] === 'auth') return handleAuth(request, env, segments);
-  if (segments[0] === 'payments' && segments[1] === 'webhook') return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''));
+  if (segments[0] === 'auth') return handleAuth(request, env, segments, analytics);
+  if (segments[0] === 'payments' && segments[1] === 'webhook') {
+    return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
+  }
   if (segments[0] === 'agentphone' && segments[1] === 'webhook') return handleAgentPhoneWebhook(request, env, decodeURIComponent(segments[2] || ''));
   if (segments[0] === 'billing') {
     const action = segments[1] || '';
@@ -1912,7 +1929,7 @@ async function route(request, env) {
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
-  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context);
+  if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
@@ -1966,16 +1983,22 @@ async function proxyPagesRequest(request, env) {
 export default {
   async fetch(request, env, executionCtx) {
     const posthog = getPostHog(env);
+    const analytics = {
+      client: posthog,
+      distinctId: request.headers.get('X-PostHog-Distinct-ID')
+        || request.headers.get('X-PostHog-Session-ID')
+        || crypto.randomUUID(),
+    };
     try {
       if (!isApiRequest(request)) {
         const download = await servePublicDownload(request, env);
         if (download) return download;
         return proxyPagesRequest(request, env);
       }
-      return withCors(await route(request, env), request, env);
+      return withCors(await route(request, env, analytics), request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      posthog?.captureException(error, undefined, {
+      posthog?.captureException(error, analytics.distinctId, {
         method: request.method,
         path: new URL(request.url).pathname,
         status,
