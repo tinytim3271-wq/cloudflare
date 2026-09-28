@@ -614,12 +614,49 @@
     ;
     return mutationQueueCache;
   }
+  const MUTATION_QUEUE_KEY_STORE = `${MUTATION_QUEUE_STORE}:key`;
+  let mutationQueueCryptoKeyPromise;
+  function bytesToBase64(bytes) {
+    let binary = "";
+    bytes.forEach((b) => binary += String.fromCharCode(b));
+    return btoa(binary);
+  }
+  function base64ToBytes(base64) {
+    const binary = atob(base64), bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  async function getMutationQueueCryptoKey() {
+    if (mutationQueueCryptoKeyPromise) return mutationQueueCryptoKeyPromise;
+    mutationQueueCryptoKeyPromise = (async () => {
+      const stored = localStorage.getItem(MUTATION_QUEUE_KEY_STORE);
+      if (stored) {
+        const rawKey = base64ToBytes(stored);
+        return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+      }
+      const rawKey = crypto.getRandomValues(new Uint8Array(32));
+      localStorage.setItem(MUTATION_QUEUE_KEY_STORE, bytesToBase64(rawKey));
+      return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    })();
+    return mutationQueueCryptoKeyPromise;
+  }
+  async function encryptMutationQueueRaw(raw) {
+    const key = await getMutationQueueCryptoKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(raw);
+    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+    return JSON.stringify({ v: 1, iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(cipher)) });
+  }
   function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
+    void encryptMutationQueueRaw(raw).then((encrypted) => {
+      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
+    }).catch(() => {
+      localStorage.removeItem(MUTATION_QUEUE_STORE);
+    });
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
