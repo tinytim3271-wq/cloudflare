@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEntityDeleteStatements, listEntities } from '../src/routes/entities.mjs';
+import { buildEntityDeleteStatements, listChatMessagesForConversations, listEntities } from '../src/routes/entities.mjs';
 import { assertUploadContentType, assertUploadSize, handleFiles } from '../src/routes/files.mjs';
 import { HttpError } from '../src/http.mjs';
 
@@ -106,6 +106,70 @@ test('listEntities returns cursor metadata when limit is provided', async () => 
   const paged = await listEntities(env, 'shop-1', 'orders', { limit: 2 });
   assert.deepEqual(paged.records.map(record => record.id), ['a', 'b']);
   assert.equal(paged.nextCursor, '2026-09-24T00:01:00.000Z|b');
+});
+
+test('listChatMessagesForConversations keeps bind count fixed under D1\'s 100-parameter cap', async () => {
+  const statements = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            statements.push({ sql, args });
+            return {
+              async all() {
+                return { results: [] };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  await listChatMessagesForConversations(env, 'shop-1', 'tech@shop.test');
+  assert.equal(statements.length, 1);
+  assert.equal(statements[0].args.length, 2);
+  assert.deepEqual(statements[0].args, ['shop-1', 'tech@shop.test']);
+  assert.match(statements[0].sql, /json_each\(c\.data_json, '\$\.memberEmails'\)/);
+  assert.doesNotMatch(statements[0].sql, /IN \(\?(?:, \?)+\)/);
+});
+
+test('listEntities compound cursor does not skip same-timestamp siblings', async () => {
+  const statements = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            statements.push({ sql, args });
+            return {
+              async all() {
+                return {
+                  results: [
+                    { data_json: JSON.stringify({ id: 'c' }), updated_at: '2026-09-24T00:00:00.000Z', entity_id: 'c' },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const paged = await listEntities(env, 'shop-1', 'orders', {
+    limit: 1,
+    cursor: '2026-09-24T00:00:00.000Z|b',
+  });
+  assert.equal(statements.length, 1);
+  assert.match(statements[0].sql, /updated_at > \? OR \(updated_at = \? AND entity_id > \?\)/);
+  assert.deepEqual(statements[0].args.slice(0, 5), [
+    'shop-1',
+    'orders',
+    '2026-09-24T00:00:00.000Z',
+    '2026-09-24T00:00:00.000Z',
+    'b',
+  ]);
+  assert.equal(paged.records[0].id, 'c');
 });
 
 test('upload size guard rejects oversized and empty declarations', () => {
