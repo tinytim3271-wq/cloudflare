@@ -1,12 +1,13 @@
 # MechPro Dispatch
 
-MechPro is a local-first shop dispatch and work-order PWA with optional cloud
-synchronization. The hosted application runs on Cloudflare today, and the target
-public SaaS architecture is documented in
+MechPro is a local-first shop dispatch and work-order PWA with cloud
+synchronization on **Cloudflare only** (Pages, Workers, D1, R2, Workers AI).
+There is no AWS / Cognito / Amplify path in this product.
+The target SaaS architecture is documented in
 [`docs/cloudflare-saas-architecture.md`](docs/cloudflare-saas-architecture.md).
-The app now supports a public customer-auth path using the `mechpro_session`
-HTTP-only cookie, with magic-link sign-in endpoints at
-`/api/auth/magic-link`, `/api/auth/callback`, and `/api/auth/logout`.
+The app supports a public customer-auth path using the `mechpro_session`
+HTTP-only cookie, with magic-link and Google sign-in endpoints at
+`/api/auth/magic-link`, `/api/auth/google`, `/api/auth/callback`, and `/api/auth/logout`.
 - **Pages** serves the static PWA.
 - **Workers** provides the existing HTTP API routes under `/api`.
 - **D1** stores tenant accounts, identity mappings, entities, audit events, and
@@ -29,7 +30,7 @@ queues non-sensitive entity mutations until connectivity returns.
 | Android APK | Builds Android package from Capacitor wrapper | `.github/workflows/android-apk.yml`, `android/` |
 | Windows Desktop | Builds desktop installer and release artifacts | `.github/workflows/windows-desktop.yml`, `desktop/` |
 
-`amplify.yml` was removed as a legacy configuration to prevent deployment-source drift; active deployment paths are Cloudflare workflows and `wrangler.jsonc`.
+`amplify.yml` and the former AWS CDK/`infra/` tree are gone. Active deployment paths are Cloudflare workflows and `wrangler.jsonc` only.
 
 ## Local Development
 
@@ -70,14 +71,13 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 
 | Variable | Purpose | Scope |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Auth for Pages/Worker deploy and R2 publish actions | GitHub Actions (`cloudflare-pages.yml`, `windows-desktop.yml`, optional `deploy-r2.yml`) |
+| `CLOUDFLARE_API_TOKEN` | Auth for Pages/Worker deploy and R2 publish (`wrangler`) | GitHub Actions (`cloudflare-pages.yml`, `windows-desktop.yml`, `deploy-r2.yml`) |
 | `CLOUDFLARE_ACCOUNT_ID` | Selects target Cloudflare account in CI/deploy scripts | GitHub Actions + local deploy CLI |
 | `CLOUDFLARE_D1_DATABASE_ID` | Optional CI override for Worker D1 binding `database_id` | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_PAGES_PROJECT` | Optional Pages project name override | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_APP_ORIGIN` | Optional smoke-check origin used by deploy verification (`/` + `/api/healthz`) | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_ALLOWED_ORIGINS` | Optional Worker CORS origins override in CI deploy | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `false` to skip production Cloudflare publish | GitHub Actions variable (`cloudflare-pages.yml`) |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | S3-compatible credentials for `deploy-r2.yml` uploads | GitHub Actions secrets (`deploy-r2.yml`) |
 | `CLOUDFLARE_R2_BUCKET` (or `R2_BUCKET`) | Target R2 bucket for download/object uploads | GitHub Actions variable/secret (`deploy-r2.yml`, `windows-desktop.yml`) |
 | `INTEGRATION_ENCRYPTION_KEY` | Encrypts integration secrets at rest in D1 | Worker secret (`wrangler secret put`) |
 | `DIAGNOSTICS_SIGNING_PRIVATE_KEY` | Required ECDSA signing key for `/api/diagnostics/authorize` | Worker secret (`wrangler secret put`) |

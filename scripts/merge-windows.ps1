@@ -52,8 +52,8 @@ $KnownPaths = @(
   'C:\Users\secon\Downloads\MechPro.worktrees'
 )
 
-$MergeSurfaces = @('src', 'desktop', 'infra', 'scripts', 'docs', 'assets')
-$SkipDirNames = @('.git', 'node_modules', 'dist', 'cdk.out', '.cursor', '.vscode', 'coverage')
+$MergeSurfaces = @('src', 'desktop', 'worker', 'scripts', 'docs', 'assets')
+$SkipDirNames = @('.git', 'node_modules', 'dist', '.cursor', '.vscode', 'coverage')
 
 function Write-Step([string]$Message) {
   Write-Host ""
@@ -233,7 +233,7 @@ foreach ($external in $ComparePaths) {
   }
 
   $allReports += $report
-  Write-Host "  Kind: $($report.kind)  Layout: src=$($report.layout.hasSrc) desktop=$($report.layout.hasDesktop) infra=$($report.layout.hasInfra) legacy=$($report.layout.hasLegacyRoot)"
+  Write-Host "  Kind: $($report.kind)  Layout: src=$($report.layout.hasSrc) desktop=$($report.layout.hasDesktop) worker=$($report.layout.hasWorker) legacyAws=$($report.layout.hasLegacyAws) legacy=$($report.layout.hasLegacyRoot)"
 
   if ($report.layout.hasLegacyRoot) {
     Write-Host "  NOTE: Legacy root app.js detected. Map changes to src/runtime/legacy.js manually or rely on repo (modular) version." -ForegroundColor Yellow

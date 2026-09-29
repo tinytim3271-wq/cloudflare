@@ -1,11 +1,19 @@
 /**
  * One-shot: copy Google OAuth secrets from this Worker onto mechpro-api.
- * Deployed temporarily onto `mechpro`; values are never logged.
+ * Values are never logged or returned.
  */
 export default {
   async fetch(request, env) {
-    const expected = String(env.MIGRATE_TOKEN || '');
-    const provided = request.headers.get('x-migrate-token') || '';
+    if (request.method === 'GET') {
+      return Response.json({
+        hasMigrateToken: Boolean(String(env.MIGRATE_TOKEN || '').trim()),
+        hasGoogleClientId: Boolean(String(env.GOOGLE_CLIENT_ID || '').trim()),
+        hasGoogleClientSecret: Boolean(String(env.GOOGLE_CLIENT_SECRET || '').trim()),
+      });
+    }
+
+    const expected = String(env.MIGRATE_TOKEN || '').trim();
+    const provided = String(request.headers.get('x-migrate-token') || '').trim();
     if (!expected || provided !== expected) {
       return new Response('unauthorized', { status: 401 });
     }
@@ -33,7 +41,8 @@ export default {
         },
       );
       const body = await response.json().catch(() => ({}));
-      results[`${name}_put`] = body.success === true ? 'ok' : `fail:${response.status}`;
+      const err = body?.errors?.[0]?.code || body?.errors?.[0]?.message || '';
+      results[`${name}_put`] = body.success === true ? 'ok' : `fail:${response.status}${err ? `:${err}` : ''}`;
     }
 
     return Response.json({ ok: true, results });
