@@ -37,15 +37,14 @@ const SKIP_DIRS = new Set([
   '.playwright-mcp',
   '.agents',
   '.claude',
-  'cdk.out',
 ]);
 
-const MERGE_SURFACES = ['src', 'desktop', 'infra', 'scripts', 'docs', 'assets'];
+const MERGE_SURFACES = ['src', 'desktop', 'worker', 'scripts', 'docs', 'assets'];
 
 const SURFACE_HINTS = [
   { prefix: 'src/', surface: 'Frontend (src/)' },
   { prefix: 'desktop/', surface: 'Desktop (desktop/)' },
-  { prefix: 'infra/', surface: 'Backend (infra/)' },
+  { prefix: 'worker/', surface: 'Backend (worker/)' },
   { prefix: 'scripts/', surface: 'Root scripts' },
   { prefix: 'docs/', surface: 'Documentation' },
   { prefix: 'assets/', surface: 'Static assets' },
@@ -58,7 +57,7 @@ function usage() {
 Compare <external-folder> to the unified MechPro repo (default repo root: ${REPO_ROOT}).
 
 Options:
-  --deep     Walk merge surfaces (src/, desktop/, infra/, etc.) and list unique/differing files
+  --deep     Walk merge surfaces (src/, desktop/, worker/, etc.) and list unique/differing files
   --json     Machine-readable JSON report (for merge-windows.ps1)
   -h, --help Show this help
 
@@ -127,9 +126,11 @@ function suggestSurface(relPath) {
   if (/\.(html|css|js|mjs|ts|tsx|jsx)$/.test(top)) {
     return 'Frontend (likely merge into src/ or root static files)';
   }
-  if (top === 'lambda' || top === 'cdk.out') return 'Backend (infra/)';
+  if (top === 'lambda' || top === 'cdk.out' || top === 'infra') {
+    return 'Obsolete AWS tree — do not merge; backend is worker/';
+  }
   if (top === 'electron' || top === 'main.js') return 'Desktop (desktop/)';
-  return 'Review manually — map to src/, desktop/, or infra/';
+  return 'Review manually — map to src/, desktop/, or worker/';
 }
 
 function gitInfo(dir) {
@@ -262,7 +263,8 @@ function buildReport(externalDir, repoRoot, options) {
 
   const hasSrc = existsSync(join(externalDir, 'src'));
   const hasDesktop = existsSync(join(externalDir, 'desktop'));
-  const hasInfra = existsSync(join(externalDir, 'infra'));
+  const hasWorker = existsSync(join(externalDir, 'worker'));
+  const hasLegacyAws = existsSync(join(externalDir, 'infra'));
   const hasLegacyRoot = existsSync(join(externalDir, 'app.js')) && !hasSrc;
 
   const report = {
@@ -272,7 +274,7 @@ function buildReport(externalDir, repoRoot, options) {
     kind,
     git,
     topLevel: { onlyExternal, onlyRepo, shared },
-    layout: { hasSrc, hasDesktop, hasInfra, hasLegacyRoot },
+    layout: { hasSrc, hasDesktop, hasWorker, hasLegacyAws, hasLegacyRoot },
   };
 
   if (options.deep) {
@@ -330,7 +332,8 @@ function printReport(report, deep) {
   console.log('Layout:');
   console.log(`  src/       ${report.layout.hasSrc ? 'present' : 'missing'}`);
   console.log(`  desktop/   ${report.layout.hasDesktop ? 'present' : 'missing'}`);
-  console.log(`  infra/     ${report.layout.hasInfra ? 'present' : 'missing'}`);
+  console.log(`  worker/    ${report.layout.hasWorker ? 'present' : 'missing'}`);
+  console.log(`  legacy AWS ${report.layout.hasLegacyAws ? 'present (ignore — obsolete infra/)' : 'absent'}`);
   console.log(`  legacy PWA ${report.layout.hasLegacyRoot ? 'yes (root app.js, pre-modular)' : 'no'}`);
 
   if (deep && report.deep) {

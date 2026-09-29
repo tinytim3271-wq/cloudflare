@@ -20,10 +20,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0.x'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Restore & build
         run: |
@@ -42,19 +51,9 @@ jobs:
           fi
           zip -r publish.zip publish
 
-      - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: '3.x'
-
-      - name: Install AWS CLI via pip
-        run: |
-          python -m pip install --upgrade pip awscli
-
-      - name: Upload zip to Cloudflare R2 (verbose)
+      - name: Upload zip to Cloudflare R2
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
@@ -71,10 +70,6 @@ jobs:
             exit 0
           fi
           echo "Resolved R2 upload target configuration."
-          aws --version
-          # Try listing the bucket (may fail if permissions are restricted)
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 ls s3://$BUCKET || true
           KEY="j2534-service/publish-${{ github.run_id }}.zip"
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3 cp artifacts/publish.zip s3://$BUCKET/$KEY --debug
-          aws --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null
-          echo "Uploaded s3://$BUCKET/$KEY"
+          npx wrangler r2 object put "${BUCKET}/${KEY}" --file artifacts/publish.zip --remote
+          echo "Uploaded r2://${BUCKET}/${KEY}"

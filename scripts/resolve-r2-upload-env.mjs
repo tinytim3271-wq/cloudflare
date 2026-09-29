@@ -7,17 +7,13 @@ export function normalizeEnvValue(value) {
 }
 
 export function resolveR2UploadEnv(env = process.env) {
-  const accessKeyId = normalizeEnvValue(env.AWS_ACCESS_KEY_ID) || normalizeEnvValue(env.R2_ACCESS_KEY_ID);
-  const secretAccessKey = normalizeEnvValue(env.AWS_SECRET_ACCESS_KEY) || normalizeEnvValue(env.R2_SECRET_ACCESS_KEY);
+  const apiToken = normalizeEnvValue(env.CLOUDFLARE_API_TOKEN);
   const accountId = normalizeEnvValue(env.CLOUDFLARE_ACCOUNT_ID) || normalizeEnvValue(env.CF_ACCOUNT_ID);
   const bucket = normalizeEnvValue(env.CLOUDFLARE_R2_BUCKET) || normalizeEnvValue(env.R2_BUCKET);
   const missing = [];
 
-  if (!accessKeyId) {
-    missing.push('R2_ACCESS_KEY_ID');
-  }
-  if (!secretAccessKey) {
-    missing.push('R2_SECRET_ACCESS_KEY');
+  if (!apiToken) {
+    missing.push('CLOUDFLARE_API_TOKEN');
   }
   if (!accountId) {
     missing.push('CLOUDFLARE_ACCOUNT_ID (or CF_ACCOUNT_ID)');
@@ -26,14 +22,14 @@ export function resolveR2UploadEnv(env = process.env) {
     missing.push('CLOUDFLARE_R2_BUCKET (or R2_BUCKET)');
   }
 
-  return { accessKeyId, secretAccessKey, accountId, bucket, missing };
+  return { apiToken, accountId, bucket, missing };
 }
 
 function shellAssignment(name, value) {
   return `${name}='${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
-export function formatResolvedR2UploadEnv({ accessKeyId, secretAccessKey, accountId, bucket, missing }) {
+export function formatResolvedR2UploadEnv({ apiToken, accountId, bucket, missing }) {
   if (missing.length) {
     return [
       'SKIP_UPLOAD=1',
@@ -43,9 +39,8 @@ export function formatResolvedR2UploadEnv({ accessKeyId, secretAccessKey, accoun
 
   return [
     'SKIP_UPLOAD=0',
-    shellAssignment('AWS_ACCESS_KEY_ID', accessKeyId),
-    shellAssignment('AWS_SECRET_ACCESS_KEY', secretAccessKey),
-    shellAssignment('ACCOUNT_ID', accountId),
+    shellAssignment('CLOUDFLARE_API_TOKEN', apiToken),
+    shellAssignment('CLOUDFLARE_ACCOUNT_ID', accountId),
     shellAssignment('BUCKET', bucket),
   ].join('\n');
 }
