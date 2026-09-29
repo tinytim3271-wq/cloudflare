@@ -652,12 +652,14 @@
     return mutationQueueCache;
   }
   function writeMutationQueue(queue) {
-    const persistedQueue = Array.isArray(queue) ? queue.map((item) => ({ id: String(item?.id || ""), key: String(item?.key || ""), path: String(item?.path || ""), method: String(item?.method || ""), expectedUpdatedAt: item?.expectedUpdatedAt ? String(item.expectedUpdatedAt) : null, queuedAt: String(item?.queuedAt || ""), conflict: Boolean(item?.conflict) })) : [];
-    const raw = JSON.stringify(persistedQueue);
-    if (raw === mutationQueueRaw) return;
+    const raw = "[]";
+    if (raw === mutationQueueRaw) {
+      mutationQueueCache = queue;
+      return;
+    }
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
+    localStorage.removeItem(MUTATION_QUEUE_STORE);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
