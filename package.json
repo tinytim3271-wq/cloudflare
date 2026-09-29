@@ -24,7 +24,7 @@
     "deploy:worker": "wrangler deploy",
     "setup:email": "node scripts/setup-email-signin.mjs",
     "stage:pages": "node scripts/stage-pages.mjs",
-    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=production",
+    "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=production --commit-dirty=true",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
     "validate": "npm run build:web && npm run test:config && npm run test:modules && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",
@@ -40,7 +40,8 @@
     "test:chat": "node --test src/modules/chat/utils.test.mjs",
     "test:storage": "node --test src/modules/storage.test.mjs",
     "test:desktop": "node --test desktop/start-url.test.js desktop/auth-deep-link.test.js desktop/diagnostics-secrets.test.js",
-    "test:modules": "npm run test:home && npm run test:html && npm run test:chat && npm run test:storage && npm run test:desktop"
+    "test:mutation": "node --test src/runtime/prepare-entity-mutation.test.mjs",
+    "test:modules": "npm run test:home && npm run test:mutation && npm run test:html && npm run test:chat && npm run test:storage && npm run test:desktop"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

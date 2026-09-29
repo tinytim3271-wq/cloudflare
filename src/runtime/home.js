@@ -124,6 +124,57 @@ export function mergeRemoteCollection(key, remote, local, isSampleRecord) {
   return remote;
 }
 
+/** Plain-language navigation. Order is the shop day: today, counter, floor, office. */
+export const sidebarCatalog = [
+  {
+    label: 'Today',
+    items: [
+      { route: 'home', icon: 'house', label: 'Home' },
+      { route: 'dispatch', icon: 'layout-dashboard', label: 'Dispatch board', count: 'active' },
+      { route: 'schedule', icon: 'calendar-days', label: 'Schedule' },
+    ],
+  },
+  {
+    label: 'Front counter',
+    items: [
+      { route: 'orders', icon: 'clipboard-list', label: 'Work orders', count: 'orders' },
+      { route: 'customers', icon: 'users', label: 'Customers' },
+      { route: 'invoices', icon: 'receipt-text', label: 'Invoices', count: 'overdue' },
+      { route: 'chat', icon: 'messages-square', label: 'Team chat', count: 'unread' },
+    ],
+  },
+  {
+    label: 'Shop floor',
+    items: [
+      { route: 'shopops', icon: 'blocks', label: 'Vehicles & parts' },
+      { route: 'oem-diagnostics', icon: 'radio-tower', label: 'OEM diagnostics', requiresOem: true },
+      { route: 'ai', icon: 'sparkles', label: 'AI workbench' },
+    ],
+  },
+  {
+    label: 'Back office',
+    items: [
+      { route: 'employees', icon: 'user-round-cog', label: 'Employees' },
+      { route: 'payroll', icon: 'wallet-cards', label: 'Payroll' },
+      { route: 'accounting', icon: 'landmark', label: 'Accounting' },
+      { route: 'reports', icon: 'chart-no-axes-combined', label: 'Reports' },
+      { route: 'imports', icon: 'file-up', label: 'Import data' },
+      { route: 'messaging', icon: 'message-square-more', label: 'Messaging' },
+      { route: 'payments', icon: 'credit-card', label: 'Payments' },
+      { route: 'settings', icon: 'settings', label: 'Settings' },
+    ],
+  },
+];
+
+export function visibleSidebar(canAccess, { oem = false } = {}) {
+  return sidebarCatalog
+    .map((section) => ({
+      label: section.label,
+      items: section.items.filter((item) => (!item.requiresOem || oem) && canAccess(item.route)),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
 if (typeof globalThis !== 'undefined') {
   globalThis.__MECHPRO_HOME__ = {
     buildHomeModel,
@@ -132,6 +183,8 @@ if (typeof globalThis !== 'undefined') {
     greetingForNow,
     localIsoDate,
     mergeRemoteCollection,
+    sidebarCatalog,
+    visibleSidebar,
   };
 }
 

@@ -179,7 +179,7 @@ function oemProgrammingPanel(diag, coverage, vehicle, status) {
         <button class="tab ${mode === 'live' ? 'active' : ''}" data-prog-mode="live">Live (AutoAuth)</button>
       </div>
       <div class="ledger-note">${icon('shield-alert', 15)} ${mode === 'live'
-        ? 'LIVE mode drives real vehicle modules and requires shop AutoAuth credentials. Confirm VIN, a regulated 12V+ supply, and correct ignition state before proceeding.'
+        ? 'LIVE mode drives real vehicle modules. Require a signed repair order, shop AutoAuth credentials, a regulated 12V+ supply, and the correct ignition state before proceeding.'
         : 'SIMULATE mode exercises the bench simulator only — safe for training and verification.'}</div>
       <div class="ops-actions">
         <button class="secondary" id="oem-sec-immo" ${status.connected ? '' : 'disabled'}>${icon('lock-open', 14)} Unlock immobilizer</button>
@@ -224,7 +224,7 @@ function oemDiagnosticsView() {
     : `<div class="ledger-note">${icon('info', 15)} No J2534 hardware detected. Install your adapter vendor software (for TOPDON RLink X7: RLink Platform → Drivers → download the J2534 driver), plug in USB, then click Refresh. MechPro scans both 64-bit and 32-bit Windows J2534 registry entries.</div>`;
 
   return shell(`${heading('Stellantis OEM', 'Dodge / Ram diagnostics', 'Phase 1: J2534 identification, DTC read/clear, and coverage eligibility. Key programming is not enabled in this release.', false)}
-    <section class="oem-phase-notice">${icon('shield-alert', 16)}<span><strong>Diagnostic-only mode.</strong> This module reads vehicle identification and reports procedure eligibility. It does not program keys or remotes. Authorized programming requires AutoAuth credentials (Phase 3).</span></section>
+    <section class="oem-phase-notice">${icon('shield-alert', 16)}<span><strong>Authorized shop use only.</strong> Diagnostics and any programming-class work require a signed repair order, a licensed J2534 interface, and shop AutoAuth credentials for live mode. MechPro does not provide immobilizer bypass, key cloning, rolling-code attacks, or theft-unlock tools.</span></section>
     <section class="diagnostics-console oem-diagnostics">
       <div class="oem-preflight">
         <h3>Pre-flight checklist</h3>
