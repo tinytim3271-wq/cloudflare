@@ -614,12 +614,52 @@
     ;
     return mutationQueueCache;
   }
-  function writeMutationQueue(queue) {
+  const MUTATION_QUEUE_CRYPTO_VERSION = "v1";
+  const MUTATION_QUEUE_CRYPTO_KEY = "mechpro-mutation-queue-key";
+  function bytesToBase64(bytes) {
+    let binary = "";
+    const chunk = 32768;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+  function base64ToBytes(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  async function getMutationQueueCryptoKey() {
+    const enc = new TextEncoder();
+    const material = await crypto.subtle.digest("SHA-256", enc.encode(MUTATION_QUEUE_CRYPTO_KEY));
+    return crypto.subtle.importKey("raw", material, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  }
+  async function encryptMutationQueue(raw) {
+    if (!globalThis.crypto?.subtle?.encrypt || !globalThis.crypto?.getRandomValues) return null;
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const key = await getMutationQueueCryptoKey();
+    const data = new TextEncoder().encode(raw);
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data));
+    return `${MUTATION_QUEUE_CRYPTO_VERSION}:${bytesToBase64(iv)}:${bytesToBase64(encrypted)}`;
+  }
+  async function decryptMutationQueue(payload) {
+    if (typeof payload !== "string") return payload;
+    const [version, ivB64, dataB64] = payload.split(":");
+    if (version !== MUTATION_QUEUE_CRYPTO_VERSION || !ivB64 || !dataB64) return payload;
+    const key = await getMutationQueueCryptoKey();
+    const iv = base64ToBytes(ivB64);
+    const data = base64ToBytes(dataB64);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    return new TextDecoder().decode(decrypted);
+  }
+  async function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
+    const encrypted = await encryptMutationQueue(raw);
+    if (encrypted) localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -633,17 +673,17 @@
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
     return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
   }
-  function queueEntityMutation(mutation, conflict = false) {
-    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  async function queueEntityMutation(mutation, conflict = false) {
+    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      writeMutationQueue(queue);
+      await writeMutationQueue(queue);
       return;
     }
     const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    writeMutationQueue(queue);
+    await writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
@@ -703,7 +743,7 @@
     }
   }
   async function apiFetch(path, options = {}) {
-    if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
+    if ((await readMutationQueue()).some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareEntityMutation(path, options);
     try {
       const response = await authorizedApiRequest(path, mutation.options);
@@ -715,7 +755,7 @@
       return response.status === 204 ? null : response.json();
     } catch (error) {
       if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) {
-        queueEntityMutation(mutation);
+        await queueEntityMutation(mutation);
         toast("Saved offline. MechPro will sync when the connection returns.");
         return { queued: true };
       }
