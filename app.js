@@ -614,49 +614,12 @@
     ;
     return mutationQueueCache;
   }
-  const MUTATION_QUEUE_KEY_STORE = `${MUTATION_QUEUE_STORE}:key`;
-  let mutationQueueCryptoKeyPromise;
-  function bytesToBase64(bytes) {
-    let binary = "";
-    bytes.forEach((b) => binary += String.fromCharCode(b));
-    return btoa(binary);
-  }
-  function base64ToBytes(base64) {
-    const binary = atob(base64), bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-  async function getMutationQueueCryptoKey() {
-    if (mutationQueueCryptoKeyPromise) return mutationQueueCryptoKeyPromise;
-    mutationQueueCryptoKeyPromise = (async () => {
-      const stored = localStorage.getItem(MUTATION_QUEUE_KEY_STORE);
-      if (stored) {
-        const rawKey = base64ToBytes(stored);
-        return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-      }
-      const rawKey = crypto.getRandomValues(new Uint8Array(32));
-      localStorage.setItem(MUTATION_QUEUE_KEY_STORE, bytesToBase64(rawKey));
-      return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    })();
-    return mutationQueueCryptoKeyPromise;
-  }
-  async function encryptMutationQueueRaw(raw) {
-    const key = await getMutationQueueCryptoKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = new TextEncoder().encode(raw);
-    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-    return JSON.stringify({ v: 1, iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(cipher)) });
-  }
   function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    void encryptMutationQueueRaw(raw).then((encrypted) => {
-      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
-    }).catch(() => {
-      localStorage.removeItem(MUTATION_QUEUE_STORE);
-    });
+    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -666,9 +629,17 @@
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
     const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path);
     if (!queueable) return { path, options, queueable: false };
-    let body = options.body ? JSON.parse(options.body) : null;
-    if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
-    return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: true, expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: method === "POST" ? `${path}/${body.id}` : path };
+    let body = null;
+    if (options.body) {
+      try {
+        body = JSON.parse(options.body);
+      } catch {
+        body = null;
+      }
+    }
+    if (method === "POST" && body && typeof body === "object" && !Array.isArray(body) && !body.id) body = { ...body, id: mutationId() };
+    const entityKey = method === "POST" ? body && body.id ? `${path}/${body.id}` : `${path}/${mutationId()}` : path;
+    return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: Boolean(body) || method === "DELETE", expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: entityKey };
   }
   function queueEntityMutation(mutation, conflict = false) {
     const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
@@ -1104,9 +1075,40 @@
   }
   function nav(route, iconName, text, count = "") {
     if (!canAccess(route)) return "";
-    const item = `<button class="nav-button ${state.route === route ? "active" : ""}" data-route="${route}">${icon(iconName)}<span>${text}</span>${count !== "" ? `<span class="count">${count}</span>` : ""}</button>`;
-    const serviceItems = route === "settings" && canAccess("messaging") ? `<button class="nav-button ${state.route === "messaging" ? "active" : ""}" data-route="messaging">${icon("message-square-more")}<span>Messaging service</span></button><button class="nav-button ${state.route === "payments" ? "active" : ""}" data-route="payments">${icon("credit-card")}<span>Payment service</span></button>` : "";
-    return `${serviceItems}${item}`;
+    const current = state.route === route;
+    return `<button class="nav-button ${current ? "active" : ""}" data-route="${route}"${current ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${text}</span>${count !== "" && count !== "0" ? `<span class="count">${count}</span>` : ""}</button>`;
+  }
+  function sidebarNavigation() {
+    const counts = { active: visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, orders: visibleOrders().length, overdue: state.invoices.filter((x) => x.status === "overdue").length, unread: state.conversations.reduce((sum, item) => sum + chatUnread(item), 0) };
+    const oem = typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable();
+    return visibleSidebar2(canAccess, { oem }).map((section) => `<div class="nav-label">${escapeHtml(section.label)}</div><nav class="nav" aria-label="${escapeHtml(section.label)}">${section.items.map((item) => nav(item.route, item.icon, item.label, item.count ? String(counts[item.count] || "") : "")).join("")}</nav>`).join("");
+  }
+  function attentionMenu() {
+    const model = buildHomeModel2({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments || [], now: /* @__PURE__ */ new Date() });
+    const count = model.attention.length;
+    const rows = model.attention.slice(0, 6).map((item) => {
+      const detail = item.type === "overdue" ? `${String(item.detail || "").split(" \xB7 ")[0]} \xB7 ${money(item.amount || 0)}` : item.detail;
+      return `<button type="button" class="attention-item" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail || "")}</small></button>`;
+    }).join("");
+    return `<div class="attention-menu"><button class="icon-button" id="attention-toggle" type="button" aria-label="Needs attention${count ? `, ${count} items` : ""}" aria-expanded="false" aria-controls="attention-panel" title="Needs attention">${icon("bell")}${count ? `<span class="attention-badge">${count}</span>` : ""}</button><div class="attention-panel" id="attention-panel" hidden role="dialog" aria-label="Needs attention"><div class="attention-panel-head"><strong>Needs attention</strong><span>${count ? `${count} open` : "All clear"}</span></div>${rows || `<p class="attention-empty">Nothing is waiting. Home shows the full shop snapshot.</p>`}<button class="mini-action attention-home" type="button" data-route="home">Open home</button></div></div>`;
+  }
+  function bindAttentionPanel() {
+    const toggle = document.querySelector("#attention-toggle"), panel = document.querySelector("#attention-panel");
+    if (!toggle || !panel) return;
+    toggle.onclick = (event) => {
+      event.stopPropagation();
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    };
+    if (attentionDismissBound) return;
+    attentionDismissBound = true;
+    document.addEventListener("click", (event) => {
+      const openPanel = document.querySelector("#attention-panel"), openToggle = document.querySelector("#attention-toggle");
+      if (!openPanel || openPanel.hidden || event.target.closest(".attention-menu")) return;
+      openPanel.hidden = true;
+      openToggle?.setAttribute("aria-expanded", "false");
+    });
   }
   function syncStatusBadge() {
     const pending = readMutationQueue().filter((item) => !item.conflict).length, conflicts = readMutationQueue().filter((item) => item.conflict).length, online = navigator.onLine;
@@ -1116,8 +1118,8 @@
     return `<span class="sync-pill online" title="Connected">${icon("cloud-check", 14)} Online</span>`;
   }
   function shell(content) {
-    const user = currentUser(), active = visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, shift = openShift(user.id);
-    return `<div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="nav-label">Operations</div><nav class="nav">${nav("dispatch", "layout-dashboard", "Dispatch board", active)}${nav("orders", "clipboard-list", "Work orders", visibleOrders().length)}${nav("schedule", "calendar-days", "Schedule")}${nav("customers", "users", "Customers")}${nav("invoices", "receipt-text", "Invoices", state.invoices.filter((x) => x.status === "overdue").length)}</nav><div class="nav-label shop-label">Shop</div><nav class="nav">${nav("ai", "sparkles", "AI Workbench")}${nav("accounting", "landmark", "Accounting")}${nav("payroll", "wallet-cards", "Payroll")}${nav("imports", "file-up", "Import data")}${nav("employees", "user-round-cog", "Employees")}${nav("reports", "chart-no-axes-combined", "Reports")}${nav("settings", "settings", "Settings")}</nav><div class="sidebar-foot"><div class="shop-card"><strong>Your Car Guy</strong><span>Main Shop \xB7 Lubbock, TX</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill">${icon("map-pin", 15)} Main Shop ${icon("chevron-down", 13)}</button><button class="icon-button" type="button" aria-label="Notifications" title="Notifications">${icon("bell")}</button></div></header><div class="content">${content}</div></main></div>`;
+    const user = currentUser(), profile = shopProfile(), shift = openShift(user.id);
+    return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>`;
   }
   function heading(kicker, title, description, action = true) {
     return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>`;
@@ -2007,9 +2009,15 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     if (typeof employees === "function") views.employees = employees;
     if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView;
     root.innerHTML = (views[state.route] || views.home || views.dispatch)();
-    const operationsNav = root.querySelector(".sidebar .nav"), unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
-    if (operationsNav && currentUser().role !== "super_admin") operationsNav.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || ""));
-    if (operationsNav && typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable()) operationsNav.insertAdjacentHTML("afterbegin", nav("oem-diagnostics", "radio-tower", "OEM Diagnostics"));
+    const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
+    if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) {
+      const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav");
+      chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || ""));
+    }
+    if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) {
+      const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav");
+      floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics"));
+    }
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
@@ -2144,12 +2152,17 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     document.querySelectorAll("[data-edit-tax]").forEach((button) => button.onclick = () => openInvoiceTax(button.dataset.editTax));
   }
   function bind() {
+    bindAttentionPanel();
     document.querySelectorAll("[data-route]").forEach((x) => x.onclick = async () => {
       state.route = x.dataset.route;
       save();
       render();
       if (x.dataset.route === "customers") {
         await loadCustomersFromApi();
+        render();
+      }
+      if (x.dataset.route === "shopops") {
+        await loadShopEntities();
         render();
       }
       if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) {
@@ -2304,7 +2317,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     };
     document.body.append(root);
     lucide.createIcons();
-    root.querySelectorAll("[data-close]").forEach((x) => x.onclick = closeModal);
+    root.querySelectorAll("[data-close]").forEach((x) => {
+      if (!x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close");
+      if (!x.getAttribute("title")) x.setAttribute("title", "Close");
+      x.onclick = closeModal;
+    });
     root.querySelector("#job-clock")?.addEventListener("click", (event) => {
       const workOrderId = event.currentTarget.dataset.workOrderId;
       openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId);
@@ -2673,7 +2690,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function attachShopOperationsRoute() {
     const firstNav = document.querySelector(".sidebar .nav");
-    if (!firstNav || currentUser()?.role === "super_admin" || firstNav.querySelector('[data-route="shopops"]')) return;
+    if (!firstNav || currentUser()?.role === "super_admin" || document.querySelector('.sidebar [data-route="shopops"]')) return;
     firstNav.insertAdjacentHTML("beforeend", nav("shopops", "blocks", "Shop operations"));
     const button = firstNav.querySelector('[data-route="shopops"]');
     button.onclick = async () => {
@@ -2788,7 +2805,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function payroll() {
     syncAllPayroll();
     const period = weekPeriod(), admin = currentUser().role === "admin", people = admin ? state.users.filter((user) => user.active) : [currentUser()], stubs = people.map((user) => payStub(user, period));
-    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
+    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}<div class="ai-notice">${icon("landmark", 16)}<span>Payroll figures are a small-shop estimate for planning only. MechPro does not file taxes, generate W-2/1099 forms, or replace a payroll processor.</span></div>${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
   }
   function payStub(user, period) {
     const lines = state.payrollEntries.filter((entry) => entry.employeeId === user.id && entry.periodKey === period.key), hours = lines.reduce((sum, line) => sum + line.hours, 0), shiftHours = state.shiftEntries.filter((entry) => entry.userId === user.id && entry.clockOut && String(entry.clockIn).slice(0, 10) >= period.key).reduce((sum, entry) => sum + Number(entry.hours || 0), 0), jobPay = lines.reduce((sum, line) => sum + line.amount, 0), salaryPay = user.employmentType === "Salary" ? Number(user.payRate || 0) / 52 : 0, gross = jobPay + salaryPay, federal = Math.round(gross * 0.12 * 100) / 100, fica = Math.round(gross * 0.0765 * 100) / 100, other = 0;
@@ -3296,14 +3313,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, shellWithHome, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
       init_html();
       init_detect();
       init_utils();
-      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2 } = window.__MECHPRO_HOME__);
+      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
@@ -3422,6 +3439,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
       roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
+      attentionDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
@@ -3570,7 +3588,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           }
         });
       };
-      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, invoiceFooter: "Thank you for your business.", logoUrl: "", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
@@ -3882,12 +3900,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       ["admin", "technician", "office", "service_writer"].forEach((role) => {
         if (roleRoutes[role] && !roleRoutes[role].includes("home")) roleRoutes[role] = ["home", ...roleRoutes[role]];
       });
-      shellWithHome = shell;
-      shell = function(content) {
-        const html = shellWithHome(content);
-        if (!canAccess("home")) return html;
-        return html.replace('<div class="nav-label">Operations</div><nav class="nav">', `<div class="nav-label">Operations</div><nav class="nav">${nav("home", "house", "Home")}`);
-      };
       renderHomeCore = render;
       render = function() {
         if (currentUser() && state.route === "home") {
@@ -4133,6 +4145,52 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     }
     return remote;
   }
+  var sidebarCatalog = [
+    {
+      label: "Today",
+      items: [
+        { route: "home", icon: "house", label: "Home" },
+        { route: "dispatch", icon: "layout-dashboard", label: "Dispatch board", count: "active" },
+        { route: "schedule", icon: "calendar-days", label: "Schedule" }
+      ]
+    },
+    {
+      label: "Front counter",
+      items: [
+        { route: "orders", icon: "clipboard-list", label: "Work orders", count: "orders" },
+        { route: "customers", icon: "users", label: "Customers" },
+        { route: "invoices", icon: "receipt-text", label: "Invoices", count: "overdue" },
+        { route: "chat", icon: "messages-square", label: "Team chat", count: "unread" }
+      ]
+    },
+    {
+      label: "Shop floor",
+      items: [
+        { route: "shopops", icon: "blocks", label: "Vehicles & parts" },
+        { route: "oem-diagnostics", icon: "radio-tower", label: "OEM diagnostics", requiresOem: true },
+        { route: "ai", icon: "sparkles", label: "AI workbench" }
+      ]
+    },
+    {
+      label: "Back office",
+      items: [
+        { route: "employees", icon: "user-round-cog", label: "Employees" },
+        { route: "payroll", icon: "wallet-cards", label: "Payroll" },
+        { route: "accounting", icon: "landmark", label: "Accounting" },
+        { route: "reports", icon: "chart-no-axes-combined", label: "Reports" },
+        { route: "imports", icon: "file-up", label: "Import data" },
+        { route: "messaging", icon: "message-square-more", label: "Messaging" },
+        { route: "payments", icon: "credit-card", label: "Payments" },
+        { route: "settings", icon: "settings", label: "Settings" }
+      ]
+    }
+  ];
+  function visibleSidebar(canAccess2, { oem = false } = {}) {
+    return sidebarCatalog.map((section) => ({
+      label: section.label,
+      items: section.items.filter((item) => (!item.requiresOem || oem) && canAccess2(item.route))
+    })).filter((section) => section.items.length > 0);
+  }
   if (typeof globalThis !== "undefined") {
     globalThis.__MECHPRO_HOME__ = {
       buildHomeModel,
@@ -4140,7 +4198,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       escapeHtml,
       greetingForNow,
       localIsoDate,
-      mergeRemoteCollection
+      mergeRemoteCollection,
+      sidebarCatalog,
+      visibleSidebar
     };
   }
 

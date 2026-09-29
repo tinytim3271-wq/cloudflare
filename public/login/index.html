@@ -3,51 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MechPro Login</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 0; background: linear-gradient(135deg, #0f172a, #111827); color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; }
-      .card { width: min(92vw, 440px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); padding: 32px; border-radius: 18px; }
-      input, button { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(148,163,184,.35); margin-top: 10px; }
-      button { background: #67e8f9; border: none; color: #082f49; font-weight: 700; cursor: pointer; }
-      button:disabled { opacity: 0.6; cursor: wait; }
-      a { color: #7dd3fc; }
-      .google { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 12px 14px; margin: 18px 0; border: 1px solid rgba(148,163,184,.45); border-radius: 10px; color: #111827; background: #fff; font-weight: 700; text-decoration: none; }
-      .google-mark { color: #4285f4; font-size: 18px; font-weight: 800; }
-      .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: #94a3b8; font-size: .75rem; text-transform: uppercase; }
-      .divider::before, .divider::after { height: 1px; flex: 1; background: rgba(148,163,184,.3); content: ""; }
-      .error { color: #fecaca; margin-top: 12px; }
-      .success { color: #bbf7d0; margin-top: 12px; line-height: 1.45; }
-      .hint { color: #94a3b8; font-size: 0.9rem; line-height: 1.4; }
-      label { display: block; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; }
-      label + input { margin-top: 6px; }
-    </style>
+    <title>Sign in to MechPro</title>
+    <link rel="icon" href="/mechpro-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/fonts/fonts.css" />
+    <link rel="stylesheet" href="/market.css" />
   </head>
-  <body>
-    <div class="card">
-      <h1>Sign in to MechPro</h1>
-      <p class="hint">Use your verified Google account, or receive a one-time link at your work email.</p>
-      <a class="google" href="/api/auth/google?returnTo=%2F">
-        <span class="google-mark" aria-hidden="true">G</span>
-        <span>Continue with Google</span>
-      </a>
-      <div class="divider"><span>or use your email</span></div>
+  <body class="auth-screen">
+    <main class="auth-card">
+      <a class="brand" href="/features"><span class="brand-mark">M</span><span><strong>MECHPRO</strong><small>Shop operating system</small></span></a>
+      <h1>Sign in with your work email</h1>
+      <p>We will open a one-time link for this browser. MechPro never receives your password.</p>
       <form id="login-form">
-        <label for="email">Work email</label>
-        <input id="email" type="email" name="email" placeholder="name@shop.com" autocomplete="username" required />
-        <button type="submit">Email me a sign-in link</button>
+        <label for="email">Work email<input id="email" type="email" name="email" placeholder="you@yourshop.com" autocomplete="username" required /></label>
+        <button class="btn primary" type="submit">Continue securely</button>
       </form>
       <p id="error" class="error" hidden></p>
-      <p id="sent" class="success" hidden></p>
-      <p>Need a shop? <a href="/signup">Create your account</a></p>
-    </div>
+      <div class="auth-links">
+        <a href="/signup">Create a shop</a>
+        <a href="/downloads">Install the apps</a>
+      </div>
+    </main>
     <script>
       const form = document.querySelector('#login-form');
       const errorEl = document.querySelector('#error');
-      const sentEl = document.querySelector('#sent');
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         errorEl.hidden = true;
-        sentEl.hidden = true;
         const button = form.querySelector('button');
         const email = String(new FormData(form).get('email') || '').trim().toLowerCase();
         button.disabled = true;
@@ -65,16 +46,13 @@
             location.assign(loginUrl);
             return;
           }
-          sentEl.textContent = payload.message || 'Check your email for a sign-in link. It expires in 15 minutes. Look in spam if it is not in your inbox. You can resend after one minute.';
-          sentEl.hidden = false;
-          button.disabled = false;
-          button.textContent = 'Resend sign-in link';
+          throw new Error(payload.message || 'Check your email for a sign-in link.');
         } catch (error) {
           const raw = String(error?.message || '');
-          errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)
-            ? 'Could not reach MechPro sign-in. Use the latest Windows installer from /downloads, or open https://www.yourcarguy806.com/login in a browser.'
-            : (raw || 'Sign-in failed.');
           errorEl.hidden = false;
+          errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)
+            ? 'Could not reach MechPro sign-in. Use the latest Windows installer from Downloads, or open the site in a browser.'
+            : (raw || 'Sign-in failed.');
           button.disabled = false;
         }
       });
