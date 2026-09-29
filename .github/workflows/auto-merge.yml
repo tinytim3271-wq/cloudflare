@@ -47,7 +47,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Auto-merge requires the repo setting "Allow auto-merge" AND a branch
           # protection rule with a merge requirement on the base branch. If those
@@ -58,8 +57,8 @@ jobs:
           fi
           state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
           if [ "$state" = "MERGED" ]; then
-            gh workflow run cloudflare-pages.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
-            echo "PR #$PR_NUMBER merged; dispatched the Cloudflare deploy on $DEFAULT_BRANCH."
+            gh workflow run cloudflare-pages.yml --repo "$GITHUB_REPOSITORY"
+            echo "PR #$PR_NUMBER merged; dispatched the Cloudflare deploy on the default branch."
           else
             echo "Auto-merge enabled for PR #$PR_NUMBER; it will merge once required checks pass."
           fi

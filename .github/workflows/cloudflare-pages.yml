@@ -169,7 +169,6 @@ jobs:
           # answers 503 until they exist. "Require Google sign-in secrets" turns
           # the run red after deploy instead.
           if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning title=Google sign-in not provisioned::GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is missing; deploying without changing the Worker's Google credentials."
             exit 0
           fi
