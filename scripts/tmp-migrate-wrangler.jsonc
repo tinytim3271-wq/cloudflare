@@ -2,5 +2,5 @@
   "name": "mechpro",
   "main": "tmp-copy-google-secrets.mjs",
   "compatibility_date": "2026-09-08",
-  "workers_dev": true
+  "workers_dev": false
 }
