@@ -644,7 +644,7 @@
     if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
     mutationQueueRaw = raw;
     try {
-      mutationQueueCache = JSON.parse(raw) || [];
+      mutationQueueCache = (JSON.parse(raw) || []).filter((item) => item?.method === "DELETE" || item?.body);
     } catch {
       mutationQueueCache = [];
     }
@@ -652,11 +652,11 @@
     return mutationQueueCache;
   }
   function writeMutationQueue(queue) {
-    const safeQueue = Array.isArray(queue) ? queue.map((item) => item && typeof item === "object" ? { ...item, body: sanitizeQueuedBody(item.body) } : item) : queue;
-    const raw = JSON.stringify(safeQueue);
+    const persistedQueue = Array.isArray(queue) ? queue.map((item) => ({ id: String(item?.id || ""), key: String(item?.key || ""), path: String(item?.path || ""), method: String(item?.method || ""), expectedUpdatedAt: item?.expectedUpdatedAt ? String(item.expectedUpdatedAt) : null, queuedAt: String(item?.queuedAt || ""), conflict: Boolean(item?.conflict) })) : [];
+    const raw = JSON.stringify(persistedQueue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
-    mutationQueueCache = safeQueue;
+    mutationQueueCache = queue;
     localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
