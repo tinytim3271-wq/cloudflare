@@ -614,49 +614,12 @@
     ;
     return mutationQueueCache;
   }
-  const MUTATION_QUEUE_KEY_STORE = `${MUTATION_QUEUE_STORE}:key`;
-  let mutationQueueCryptoKeyPromise;
-  function bytesToBase64(bytes) {
-    let binary = "";
-    bytes.forEach((b) => binary += String.fromCharCode(b));
-    return btoa(binary);
-  }
-  function base64ToBytes(base64) {
-    const binary = atob(base64), bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-  async function getMutationQueueCryptoKey() {
-    if (mutationQueueCryptoKeyPromise) return mutationQueueCryptoKeyPromise;
-    mutationQueueCryptoKeyPromise = (async () => {
-      const stored = localStorage.getItem(MUTATION_QUEUE_KEY_STORE);
-      if (stored) {
-        const rawKey = base64ToBytes(stored);
-        return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-      }
-      const rawKey = crypto.getRandomValues(new Uint8Array(32));
-      localStorage.setItem(MUTATION_QUEUE_KEY_STORE, bytesToBase64(rawKey));
-      return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    })();
-    return mutationQueueCryptoKeyPromise;
-  }
-  async function encryptMutationQueueRaw(raw) {
-    const key = await getMutationQueueCryptoKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = new TextEncoder().encode(raw);
-    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-    return JSON.stringify({ v: 1, iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(cipher)) });
-  }
   function writeMutationQueue(queue) {
     const raw = JSON.stringify(queue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    void encryptMutationQueueRaw(raw).then((encrypted) => {
-      localStorage.setItem(MUTATION_QUEUE_STORE, encrypted);
-    }).catch(() => {
-      localStorage.removeItem(MUTATION_QUEUE_STORE);
-    });
+    localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -2228,13 +2191,27 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const id = event.currentTarget.dataset.workOrderId;
       openJobClock(id) ? stopJobClock(id) : startJobClock(id);
     });
-    document.querySelectorAll("[data-toggle-user]").forEach((button) => button.onclick = () => {
+    document.querySelectorAll("[data-toggle-user]").forEach((button) => button.onclick = async () => {
       const user = state.users.find((item) => item.id === button.dataset.toggleUser);
       if (!user) return;
-      user.active = !user.active;
-      save();
-      toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`);
-      render();
+      const nextActive = !user.active;
+      button.disabled = true;
+      try {
+        const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, { method: "PUT", body: JSON.stringify({ ...user, active: nextActive }) });
+        if (saved?.queued) {
+          toast("Employee access changes require a live connection. Reconnect and try again.");
+          return;
+        }
+        const index = state.users.findIndex((item) => item.id === user.id);
+        if (index >= 0) state.users[index] = saved;
+        save();
+        toast(`${saved.name || user.name} account ${saved.active ? "activated" : "deactivated"}`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not update employee access");
+      } finally {
+        button.disabled = false;
+      }
     });
     document.querySelector("#sync-payroll")?.addEventListener("click", () => {
       syncAllPayroll();
@@ -2800,7 +2777,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function openEmployee() {
     showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full">Email address *<input type="email" name="email" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
-    document.querySelector("#employee-form").onsubmit = (event) => {
+    document.querySelector("#employee-form").onsubmit = async (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target)), email = data.email.trim().toLowerCase();
       if (state.users.some((user) => user.email.toLowerCase() === email)) {
@@ -2815,11 +2792,25 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         toast("Add the technician dispatch name to create this profile");
         return;
       }
-      state.users.push({ id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(), active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate, employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(), emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus });
-      save();
-      closeModal();
-      toast(`${data.name} profile created as ${roleLabel[data.role]}`);
-      render();
+      const submit = event.target.querySelector("button.primary");
+      if (submit) submit.disabled = true;
+      try {
+        const profile = { id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(), active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate, employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(), emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus, createdAt: now() };
+        const saved = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify(profile) });
+        if (saved?.queued) {
+          toast("Employee profiles require a live connection. Reconnect and try again.");
+          return;
+        }
+        state.users.push(saved);
+        save();
+        closeModal();
+        toast(`${saved.name || data.name} profile created as ${roleLabel[saved.role || data.role]}`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not create employee profile");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
     };
   }
   function paymentRecords() {
