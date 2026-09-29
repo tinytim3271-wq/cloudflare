@@ -36,6 +36,7 @@ export default {
       results[`${name}_put`] = body.success === true ? 'ok' : `fail:${response.status}`;
     }
 
-    return Response.json({ ok: true, results });
+    const ok = names.every((name) => results[name] === 'present' && results[`${name}_put`] === 'ok');
+    return Response.json({ ok, results }, { status: ok ? 200 : 502 });
   },
 };

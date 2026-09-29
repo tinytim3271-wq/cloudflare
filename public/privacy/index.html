@@ -27,7 +27,7 @@
         <h2>Who can see it</h2>
         <p>Access follows the role on the employee profile. Technicians see the jobs assigned to them. Office and admin roles see customers, invoices, and shop settings. A platform administrator can see subscribing shop accounts for support. Customer card numbers are not stored in MechPro; card checkout, when enabled, is completed on the payment processor’s hosted page.</p>
         <h2>Where it lives</h2>
-        <p>The hosted app runs on Cloudflare. The browser also keeps a local copy so the dispatch board can open when the network blips. That local copy stays on the device until you sign out or clear site data. Diagnostic adapter traffic stays on the shop computer unless you explicitly save a scan to a vehicle record.</p>
+        <p>The hosted app runs on Cloudflare. The browser also keeps a local copy so the dispatch board can open when the network blips. Signing out removes the auth session, but local records and queued offline changes remain on the device until you clear site data. Diagnostic adapter traffic stays on the shop computer unless you explicitly save a scan to a vehicle record.</p>
         <h2>What we do not do</h2>
         <p>We do not sell personal information. We do not use shop records to train a public model. AI suggestions inside the workbench are generated to help the technician on that job and should be checked against current service information.</p>
         <h2>Questions</h2>

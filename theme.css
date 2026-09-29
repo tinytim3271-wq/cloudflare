@@ -74,7 +74,7 @@ input,select,textarea{border-color:#cdd7cf;background:#fff}input:hover,select:ho
 .skip-link:focus{top:12px}
 .sidebar .nav-label{margin-top:18px}
 .sidebar .brand+.nav-label{margin-top:2px}
-.nav-button:focus-visible,.primary:focus-visible,.secondary:focus-visible,.icon-button:focus-visible,.home-action:focus-visible,.home-row:focus-visible,.home-job:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+.nav-button:focus-visible,.primary:focus-visible,.secondary:focus-visible,.icon-button:focus-visible,.home-action:focus-visible,.home-row:focus-visible,.home-job:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .attention-menu{position:relative}
 .attention-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;color:#14201c;background:var(--lime);font:700 9px/16px "JetBrains Mono",monospace}
 .attention-panel{position:absolute;top:44px;right:0;z-index:30;display:grid;gap:8px;width:min(320px,calc(100vw - 24px));padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--paper);box-shadow:var(--shadow)}

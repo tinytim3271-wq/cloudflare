@@ -95,6 +95,43 @@
     }
   });
 
+  // src/runtime/prepare-entity-mutation.js
+  function defaultMutationId() {
+    return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  function prepareEntityMutation(path, options, createMutationId = defaultMutationId) {
+    const method = String(options.method || "GET").toUpperCase();
+    const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
+    const containsSensitiveEndpoint = path === "/agentphone/configure";
+    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path) && !containsSensitiveEndpoint;
+    if (!queueable) return { path, options, queueable: false };
+    let body = null;
+    if (options.body) {
+      try {
+        body = JSON.parse(options.body);
+      } catch {
+        body = null;
+      }
+    }
+    if (method === "POST" && body && typeof body === "object" && !Array.isArray(body) && !body.id) {
+      body = { ...body, id: createMutationId() };
+    }
+    const entityKey = method === "POST" ? body && body.id ? `${path}/${body.id}` : `${path}/${createMutationId()}` : path;
+    return {
+      path,
+      options: { ...options, method, body: body ? JSON.stringify(body) : void 0 },
+      queueable: Boolean(body) || method === "DELETE",
+      expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null,
+      key: entityKey
+    };
+  }
+  var OFFLINE_QUEUE_BLOCKED;
+  var init_prepare_entity_mutation = __esm({
+    "src/runtime/prepare-entity-mutation.js"() {
+      OFFLINE_QUEUE_BLOCKED = /\/entities\/(employees|payrollentries|shopsettings|invoices|payments|expenses)(\/|$)/i;
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
@@ -625,12 +662,11 @@
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
-  const SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
-  function sanitizeSensitiveValue(value) {
-    if (!value || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(sanitizeSensitiveValue);
+  function sanitizeSensitiveValue(value2) {
+    if (!value2 || typeof value2 !== "object") return value2;
+    if (Array.isArray(value2)) return value2.map(sanitizeSensitiveValue);
     const out = {};
-    for (const [key, item] of Object.entries(value)) {
+    for (const [key, item] of Object.entries(value2)) {
       if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]";
       else out[key] = sanitizeSensitiveValue(item);
     }
@@ -644,23 +680,8 @@
       return rawBody;
     }
   }
-  function prepareEntityMutation(path, options) {
-    const method = String(options.method || "GET").toUpperCase();
-    const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
-    const containsSensitiveEndpoint = path === "/agentphone/configure";
-    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path) && !containsSensitiveEndpoint;
-    if (!queueable) return { path, options, queueable: false };
-    let body = null;
-    if (options.body) {
-      try {
-        body = JSON.parse(options.body);
-      } catch {
-        body = null;
-      }
-    }
-    if (method === "POST" && body && typeof body === "object" && !Array.isArray(body) && !body.id) body = { ...body, id: mutationId() };
-    const entityKey = method === "POST" ? body && body.id ? `${path}/${body.id}` : `${path}/${mutationId()}` : path;
-    return { path, options: { ...options, method, body: body ? JSON.stringify(body) : void 0 }, queueable: Boolean(body) || method === "DELETE", expectedUpdatedAt: method === "PUT" ? body?.updatedAt : null, key: entityKey };
+  function prepareMutation(path, options) {
+    return prepareEntityMutation(path, options, mutationId);
   }
   function queueEntityMutation(mutation, conflict = false) {
     const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
@@ -733,7 +754,7 @@
   }
   async function apiFetch(path, options = {}) {
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
-    const mutation = prepareEntityMutation(path, options);
+    const mutation = prepareMutation(path, options);
     try {
       const response = await authorizedApiRequest(path, mutation.options);
       if (!response.ok) {
@@ -2339,8 +2360,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.body.append(root);
     lucide.createIcons();
     root.querySelectorAll("[data-close]").forEach((x) => {
-      if (!x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close");
-      if (!x.getAttribute("title")) x.setAttribute("title", "Close");
+      if (!x.textContent.trim() && !x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close");
+      if (!x.getAttribute("title") && !x.textContent.trim()) x.setAttribute("title", "Close");
       x.onclick = closeModal;
     });
     root.querySelector("#job-clock")?.addEventListener("click", (event) => {
@@ -2794,7 +2815,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function shopProfile() {
     const stored = state.shopSettingsRecords.find((item) => item.id === "profile") || {}, themeMode = ["device", "light", "dark"].includes(stored.themeMode) ? stored.themeMode : "device";
-    return { ...shopProfileDefaults, ...stored, logoUrl: safeHttpUrl(stored.logoUrl), brandColor: safeHexColor(stored.brandColor, shopProfileDefaults.brandColor), accentColor: safeHexColor(stored.accentColor, shopProfileDefaults.accentColor), themeMode, coupons: normalizedCoupons(stored.coupons), defaultVendor: String(stored.defaultVendor || ""), defaultVendorByKind: stored.defaultVendorByKind && typeof stored.defaultVendorByKind === "object" ? stored.defaultVendorByKind : {} };
+    return { ...shopProfileDefaults, ...stored, logoUrl: safeHttpUrl(stored.logoUrl) || shopProfileDefaults.logoUrl, brandColor: safeHexColor(stored.brandColor, shopProfileDefaults.brandColor), accentColor: safeHexColor(stored.accentColor, shopProfileDefaults.accentColor), themeMode, coupons: normalizedCoupons(stored.coupons), defaultVendor: String(stored.defaultVendor || ""), defaultVendorByKind: stored.defaultVendorByKind && typeof stored.defaultVendorByKind === "object" ? stored.defaultVendorByKind : {} };
   }
   function applyAppearance(mode = shopProfile().themeMode) {
     const selected = ["device", "light", "dark"].includes(mode) ? mode : "device", resolved = selected === "device" ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light" : selected;
@@ -3334,13 +3355,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, SENSITIVE_FIELD_PATTERN, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
       init_html();
       init_detect();
       init_utils();
+      init_prepare_entity_mutation();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -3452,10 +3474,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       desktopLoginMessage = "";
       cloudflareSignIn = cloudflareAccessSignIn;
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
-      OFFLINE_QUEUE_BLOCKED = /\/entities\/(employees|payrollentries|shopsettings|invoices|payments|expenses)(\/|$)/i;
       flushingMutationQueue = false;
       mutationQueueCache = null;
       mutationQueueRaw = null;
+      SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };

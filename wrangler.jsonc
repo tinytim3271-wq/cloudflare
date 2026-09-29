@@ -4,14 +4,8 @@
   "main": "worker/src/index.js",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
-  // Both hostnames are Workers custom domains. The Worker serves /api/*
-  // and proxies the shop app from Pages. This account token cannot edit DNS,
-  // and a Pages custom domain stays pending without a CNAME.
+  // The Worker serves /api/* and proxies the shop app from Pages.
   "workers_dev": false,
-  "routes": [
-    { "pattern": "yourcarguy806.com", "custom_domain": true },
-    { "pattern": "www.yourcarguy806.com", "custom_domain": true }
-  ],
   "vars": {
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",

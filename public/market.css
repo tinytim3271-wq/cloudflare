@@ -119,6 +119,7 @@ h1 { max-width: 16ch; font-size: clamp(42px, 6vw, 68px); line-height: 0.92; text
 .auth-card input:focus { outline: 3px solid rgba(31, 101, 75, 0.25); border-color: var(--green); }
 .auth-card button { width: 100%; border: 0; cursor: pointer; }
 .auth-card .error { margin: 0; color: #9d3028; }
+.auth-card .success { margin: 0; color: #087e6a; }
 .auth-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 16px; font-size: 14px; }
 @media (max-width: 720px) {
   .site-header { align-items: flex-start; }

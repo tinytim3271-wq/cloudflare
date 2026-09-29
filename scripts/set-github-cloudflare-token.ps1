@@ -19,7 +19,7 @@ if (-not $token) {
 $accountId = if ($env:CLOUDFLARE_ACCOUNT_ID) { $env:CLOUDFLARE_ACCOUNT_ID } else { '0c31efca6f8739ca301b222f3d68cff4' }
 
 try {
-  $verify = Invoke-RestMethod -Method Get -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId" -Headers @{ Authorization = "Bearer $token" }
+  $verify = Invoke-RestMethod -Method Get -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId" -Headers @{ Authorization = ('Bearer ' + $token) }
 } catch {
   Write-Error 'Cloudflare rejected that token for this account. Create a new API token and try again.'
   exit 1
@@ -31,6 +31,14 @@ if (-not $verify.success) {
 }
 
 $token | gh secret set CLOUDFLARE_API_TOKEN -R $Repo
+if ($LASTEXITCODE -ne 0) {
+  Write-Error 'Could not update CLOUDFLARE_API_TOKEN on GitHub.'
+  exit 1
+}
 $accountId | gh secret set CLOUDFLARE_ACCOUNT_ID -R $Repo
+if ($LASTEXITCODE -ne 0) {
+  Write-Error 'Could not update CLOUDFLARE_ACCOUNT_ID on GitHub.'
+  exit 1
+}
 Write-Host "Updated CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID on $Repo"
 Write-Host 'Local Wrangler deploy remains supported with: npm run deploy:pages && npm run deploy:worker'
