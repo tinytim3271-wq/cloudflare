@@ -17,8 +17,15 @@ are either:
   PRs merge hands-free once checks pass; or
 - labeled **`auto-merge`** (explicit opt-in for any other author).
 
-It uses the built-in `GITHUB_TOKEN` with least-privilege `contents: write` +
-`pull-requests: write`, and never checks out or runs PR code.
+It uses the built-in `GITHUB_TOKEN` with least-privilege `actions: write`,
+`contents: write`, and `pull-requests: write`, and never checks out or runs PR
+code.
+
+GitHub does not start `push` workflows for a merge made with `GITHUB_TOKEN`.
+When `gh pr merge` merges the PR at once (checks already passed), the workflow
+dispatches `Cloudflare deploy` on `main` itself. When GitHub completes the
+auto-merge later, no deploy starts: run **Actions → Cloudflare deploy → Run
+workflow** on `main` after the merge.
 
 ## Required repository settings (one-time, admin)
 

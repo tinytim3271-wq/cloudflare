@@ -2,7 +2,10 @@ name: Auto-merge
 
 # Enables GitHub's native squash auto-merge on eligible pull requests so that,
 # once required status checks (and any required reviews) pass, the PR merges
-# automatically — which in turn triggers the Cloudflare deploy on `main`.
+# automatically.
+#
+# A merge made with GITHUB_TOKEN does not fire `push` workflows, so when this
+# job merges the PR itself it dispatches the Cloudflare deploy on `main`.
 #
 # This does NOT bypass review rules: auto-merge only completes when branch
 # protection on the base branch is satisfied. See
@@ -16,9 +19,11 @@ on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, labeled, synchronize]
 
-# Least privilege: only what `gh pr merge --auto` needs. No code is checked out
-# or executed from the PR, so pull_request_target is safe here.
+# Least privilege: only what `gh pr merge --auto` and the deploy dispatch
+# need. No code is checked out or executed from the PR, so pull_request_target
+# is safe here.
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -42,12 +47,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Auto-merge requires the repo setting "Allow auto-merge" AND a branch
           # protection rule with a merge requirement on the base branch. If those
           # are not configured yet, warn instead of failing the workflow.
-          if gh pr merge "$PR_NUMBER" --squash --auto --repo "$GITHUB_REPOSITORY"; then
-            echo "Auto-merge enabled for PR #$PR_NUMBER; it will merge once required checks pass."
-          else
+          if ! gh pr merge "$PR_NUMBER" --squash --auto --repo "$GITHUB_REPOSITORY"; then
             echo "::warning title=Auto-merge not enabled::Could not enable auto-merge for PR #$PR_NUMBER. Confirm 'Allow auto-merge' is on and a branch protection rule with required checks/reviews exists on the default branch (see docs/auto-merge-and-branch-protection.md)."
+            exit 0
+          fi
+          state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+          if [ "$state" = "MERGED" ]; then
+            gh workflow run cloudflare-pages.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+            echo "PR #$PR_NUMBER merged; dispatched the Cloudflare deploy on $DEFAULT_BRANCH."
+          else
+            echo "Auto-merge enabled for PR #$PR_NUMBER; it will merge once required checks pass."
           fi
