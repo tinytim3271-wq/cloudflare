@@ -615,19 +615,40 @@
     return mutationQueueCache;
   }
   function writeMutationQueue(queue) {
-    const raw = JSON.stringify(queue);
+    const safeQueue = Array.isArray(queue) ? queue.map((item) => item && typeof item === "object" ? { ...item, body: sanitizeQueuedBody(item.body) } : item) : queue;
+    const raw = JSON.stringify(safeQueue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
-    mutationQueueCache = queue;
+    mutationQueueCache = safeQueue;
     localStorage.setItem(MUTATION_QUEUE_STORE, raw);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
+  const SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
+  function sanitizeSensitiveValue(value) {
+    if (!value || typeof value !== "object") return value;
+    if (Array.isArray(value)) return value.map(sanitizeSensitiveValue);
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]";
+      else out[key] = sanitizeSensitiveValue(item);
+    }
+    return out;
+  }
+  function sanitizeQueuedBody(rawBody) {
+    if (!rawBody) return rawBody;
+    try {
+      return JSON.stringify(sanitizeSensitiveValue(JSON.parse(rawBody)));
+    } catch {
+      return rawBody;
+    }
+  }
   function prepareEntityMutation(path, options) {
     const method = String(options.method || "GET").toUpperCase();
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
-    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path);
+    const containsSensitiveEndpoint = path === "/agentphone/configure";
+    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path) && !containsSensitiveEndpoint;
     if (!queueable) return { path, options, queueable: false };
     let body = null;
     if (options.body) {
@@ -648,7 +669,7 @@
       writeMutationQueue(queue);
       return;
     }
-    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
+    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: sanitizeQueuedBody(mutation.options.body), expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
     writeMutationQueue(queue);
