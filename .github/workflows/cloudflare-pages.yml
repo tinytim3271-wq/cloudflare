@@ -228,7 +228,23 @@ jobs:
         if: steps.verify-creds.outputs.valid == 'true'
         env:
           APP_ORIGIN: ${{ vars.CLOUDFLARE_APP_ORIGIN || 'https://main.mechpro-dispatch.pages.dev' }}
+          # Pages does not serve /api/*; it answers with the SPA shell. Only the
+          # mechpro-api Worker hostname serves the health endpoint.
+          API_ORIGIN: ${{ vars.CLOUDFLARE_API_ORIGIN || 'https://www.yourcarguy806.com' }}
         run: |
           set -euo pipefail
-          curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
-          curl -fsS "$APP_ORIGIN/" | grep -Eiq 'MechPro|Dispatch'
+          check() {
+            local url="$1" pattern="$2" body
+            if ! body="$(curl -fsS --retry 3 --retry-delay 5 --retry-all-errors --max-time 20 "$url")"; then
+              echo "::error title=Smoke check failed::GET $url did not return a 2xx response."
+              exit 1
+            fi
+            if ! grep -Eiq "$pattern" <<<"$body"; then
+              echo "::error title=Smoke check failed::GET $url did not match /$pattern/."
+              head -c 500 <<<"$body"
+              exit 1
+            fi
+            echo "OK: $url"
+          }
+          check "$API_ORIGIN/api/healthz" '"ok":[[:space:]]*true'
+          check "$APP_ORIGIN/" 'MechPro|Dispatch'
