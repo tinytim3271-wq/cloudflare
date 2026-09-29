@@ -18,8 +18,14 @@ if (-not $token) {
 
 $accountId = if ($env:CLOUDFLARE_ACCOUNT_ID) { $env:CLOUDFLARE_ACCOUNT_ID } else { '0c31efca6f8739ca301b222f3d68cff4' }
 
-$verify = curl.exe -sS -H "Authorization: Bearer $token" "https://api.cloudflare.com/client/v4/accounts/$accountId"
-if ($verify -notmatch '"success"\s*:\s*true') {
+try {
+  $verify = Invoke-RestMethod -Method Get -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId" -Headers @{ Authorization = "Bearer $token" }
+} catch {
+  Write-Error 'Cloudflare rejected that token for this account. Create a new API token and try again.'
+  exit 1
+}
+
+if (-not $verify.success) {
   Write-Error 'Cloudflare rejected that token for this account. Create a new API token and try again.'
   exit 1
 }
