@@ -27,6 +27,7 @@ import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
+import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -703,6 +704,16 @@ async function handleDiagnostics(request, env, context, segments, analytics) {
     // LIVE programming against real modules requires licensed OEM AutoAuth
     // credentials provisioned for the shop. SIMULATE always drives the bench
     // simulator only, so it is safe to authorize without OEM credentials.
+    if (mode === 'live') {
+      const subscription = await env.DB.prepare('SELECT plan_id FROM subscriptions WHERE shop_id = ?').bind(context.shopId).first();
+      const planId = String(subscription?.plan_id || '');
+      if (!LIVE_DIAGNOSTICS_PLANS.has(planId)) {
+        return json({
+          authorized: false,
+          message: 'Live OEM programming is included on Shop Pro and Enterprise. Use Simulate on Solo and Shop, or upgrade the shop plan.',
+        }, 402);
+      }
+    }
     if (mode === 'live' && spec.autoAuth) {
       const login = await readAutoAuthLogin(env, context.shopId);
       if (!login) {
@@ -1203,7 +1214,8 @@ async function handleAdmin(request, env, context, segments, analytics) {
     const ownerName = String(body.ownerName || '').trim();
     const shopName = String(body.shopName || '').trim();
     const shopId = String(body.shopId || '').trim().toLowerCase();
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
+    if (!isPublicPlan(planId) && !isFoundingPlan(planId)) throw new HttpError(400, 'Choose Solo, Shop, Shop Pro, Enterprise, or a Founding Member plan');
     const accountMode = String(body.accountMode || body.subscriptionStatus || 'trialing').trim().toLowerCase();
     const trialDaysRaw = body.trialDays;
     const trialDays = trialDaysRaw === '' || trialDaysRaw === null || trialDaysRaw === undefined
@@ -1316,7 +1328,8 @@ async function handleAdmin(request, env, context, segments, analytics) {
     if (!validShopId(target)) throw new HttpError(400, 'A valid shop ID is required');
     const body = await requestJson(request);
     const mode = String(body.mode || body.subscriptionStatus || '').trim().toLowerCase();
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
+    if (!isPublicPlan(planId) && !isFoundingPlan(planId)) throw new HttpError(400, 'Choose Solo, Shop, Shop Pro, Enterprise, or a Founding Member plan');
     const trialDays = body.trialDays === '' || body.trialDays === null || body.trialDays === undefined
       ? null
       : Math.max(0, Math.min(3650, Math.round(Number(body.trialDays))));
@@ -1735,14 +1748,15 @@ async function handleBilling(request, env, context, segments) {
   const action = segments[1] || '';
   if (action === 'checkout' && request.method === 'POST') {
     const body = await requestJson(request);
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
     if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
     if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
     const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
-    if (!plan) throw new HttpError(404, 'Billing plan not found');
+    if (!plan || Number(plan.active) === 0) throw new HttpError(404, 'Billing plan not found');
+    if (Number(plan.public) === 0 || Number(plan.founding) === 1) throw new HttpError(403, 'Founding Member plans are claimed from an invite link');
     const stripeKey = env.STRIPE_SECRET_KEY || '';
     const priceId = String(plan.stripe_price_id || '').trim();
-    if (stripeKey && priceId && !priceId.startsWith('price_placeholder') && !priceId.startsWith('price_starter') && !priceId.startsWith('price_growth')) {
+    if (stripeKey && !isPlaceholderPrice(priceId)) {
       const origin = new URL(request.url).origin;
       const successUrl = String(body.successUrl || `${origin}/?billing=success`);
       const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
@@ -1859,6 +1873,57 @@ async function handleBilling(request, env, context, segments) {
   throw new HttpError(404, 'Not found');
 }
 
+async function handleFounding(request, env) {
+  const url = new URL(request.url);
+  const action = url.pathname.split('/').filter(Boolean).pop();
+  if (action === 'status' && request.method === 'GET') {
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const claimed = Number(counter?.claimed || 0);
+    const cap = Number(counter?.cap || 50);
+    return json({ claimed, cap, remaining: Math.max(0, cap - claimed), open: claimed < cap });
+  }
+  if (action === 'validate' && request.method === 'GET') {
+    const token = String(url.searchParams.get('token') || '').trim();
+    const invite = token
+      ? await env.DB.prepare('SELECT token, used_at FROM founding_invites WHERE token = ?').bind(token).first()
+      : null;
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const decision = claimDecision({ invite, counter, planId: 'founding_shop' });
+    if (!decision.ok && decision.status === 400) return json({ valid: false, message: decision.message }, 400);
+    return json({
+      valid: decision.ok,
+      message: decision.ok ? 'Invite accepted.' : decision.message,
+      claimed: Number(counter?.claimed || 0),
+      cap: Number(counter?.cap || 50),
+      remaining: Math.max(0, Number(counter?.cap || 50) - Number(counter?.claimed || 0)),
+    }, decision.ok ? 200 : decision.status);
+  }
+  if (action === 'claim' && request.method === 'POST') {
+    const body = await requestJson(request);
+    const token = String(body.token || '').trim();
+    const planId = String(body.planId || 'founding_shop').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) throw new HttpError(400, 'A work email is required');
+    const invite = token
+      ? await env.DB.prepare('SELECT token, used_at FROM founding_invites WHERE token = ?').bind(token).first()
+      : null;
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const decision = claimDecision({ invite, counter, planId });
+    if (!decision.ok) throw new HttpError(decision.status, decision.message);
+    const nowIso = new Date().toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE founding_invites SET used_at = ?, used_by_shop_id = ?, plan_id = ? WHERE token = ? AND used_at IS NULL')
+        .bind(nowIso, email, planId, token),
+      env.DB.prepare('UPDATE founding_counter SET claimed = claimed + 1 WHERE id = 1 AND claimed < cap'),
+    ]);
+    const inviteUpdated = Number(results?.[0]?.meta?.changes || 0) > 0;
+    const counterUpdated = Number(results?.[1]?.meta?.changes || 0) > 0;
+    if (!inviteUpdated || !counterUpdated) throw new HttpError(409, 'This Founding Member spot was just claimed.');
+    return json({ claimed: true, planId, email, remaining: decision.remaining });
+  }
+  throw new HttpError(404, 'Not found');
+}
+
 async function route(request, env, analytics) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
@@ -1878,6 +1943,7 @@ async function route(request, env, analytics) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
+  if (segments[0] === 'founding') return handleFounding(request, env);
   if (segments[0] === 'auth') return handleAuth(request, env, segments, analytics);
   if (segments[0] === 'payments' && segments[1] === 'webhook') {
     return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
