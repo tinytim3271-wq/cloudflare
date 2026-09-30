@@ -238,7 +238,7 @@ jobs:
           API_ORIGIN: ${{ vars.CLOUDFLARE_API_ORIGIN || 'https://www.yourcarguy806.com' }}
         run: |
           set -euo pipefail
-          curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
+          curl -fsS "$API_ORIGIN/api/healthz" | grep -q '"ok":true'
           curl -fsS "$APP_ORIGIN/" | grep -Eiq 'MechPro|Dispatch'
       - name: Require Google sign-in secrets
         if: steps.verify-creds.outputs.valid == 'true' && steps.google-secrets.outputs.present != 'true'
