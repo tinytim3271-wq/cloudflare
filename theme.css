@@ -70,3 +70,21 @@ input,select,textarea{border-color:#cdd7cf;background:#fff}input:hover,select:ho
 [data-theme="dark"] .home-row,[data-theme="dark"] .home-job{background:#1b2629}
 @media(max-width:1100px){.home-grid{grid-template-columns:1fr}}
 @media(max-width:760px){.home-hero{align-items:flex-start;flex-direction:column}.home-hero h1{font-size:26px}.home-hero .head-actions{width:100%}.home-hero .head-actions .primary{width:100%}.home-actions{grid-template-columns:1fr 1fr}.home-start{align-items:flex-start;flex-direction:column}.home-start-actions,.home-start-actions .primary,.home-start-actions .secondary{width:100%}}
+.skip-link{position:absolute;left:12px;top:-40px;z-index:80;padding:8px 12px;border-radius:6px;color:#14201c;background:var(--lime);font-weight:700}
+.skip-link:focus{top:12px}
+.sidebar .nav-label{margin-top:18px}
+.sidebar .brand+.nav-label{margin-top:2px}
+.nav-button:focus-visible,.primary:focus-visible,.secondary:focus-visible,.icon-button:focus-visible,.home-action:focus-visible,.home-row:focus-visible,.home-job:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.attention-menu{position:relative}
+.attention-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;color:#14201c;background:var(--lime);font:700 9px/16px "JetBrains Mono",monospace}
+.attention-panel{position:absolute;top:44px;right:0;z-index:30;display:grid;gap:8px;width:min(320px,calc(100vw - 24px));padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--paper);box-shadow:var(--shadow)}
+.attention-panel[hidden]{display:none}
+.attention-panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.attention-panel-head strong{font-size:13px}
+.attention-panel-head span,.attention-empty{color:var(--muted);font-size:11px}
+.attention-item{display:grid;gap:3px;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;color:inherit;background:#f8faf7;text-align:left}
+.attention-item:hover{border-color:var(--green)}
+.attention-item strong{font-size:12px}
+.attention-item small{color:var(--muted);font-size:10px}
+.attention-home{justify-self:start}
+[data-theme="dark"] .attention-item{background:#1b2629}
