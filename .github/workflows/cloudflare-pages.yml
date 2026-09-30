@@ -156,6 +156,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 migrations apply DB --remote
       - name: Provision Google sign-in secrets
+        id: google-secrets
         if: steps.verify-creds.outputs.valid == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
@@ -164,12 +165,16 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          # Missing credentials must not block the Worker deploy: Google sign-in
+          # answers 503 until they exist. "Require Google sign-in secrets" turns
+          # the run red after deploy instead.
           if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
-            echo "::error title=Missing Google OAuth credentials::Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as production repository secrets before deploying."
-            exit 1
+            echo "::warning title=Google sign-in not provisioned::GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is missing; deploying without changing the Worker's Google credentials."
+            exit 0
           fi
           printf '%s' "$GOOGLE_CLIENT_ID" | ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_ID
           printf '%s' "$GOOGLE_CLIENT_SECRET" | ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_SECRET
+          echo "present=true" >> "$GITHUB_OUTPUT"
           echo "Provisioned Google OAuth credentials on the Worker."
       - name: Deploy API Worker
         if: steps.verify-creds.outputs.valid == 'true'
@@ -232,3 +237,8 @@ jobs:
           set -euo pipefail
           curl -fsS "$APP_ORIGIN/api/healthz" | grep -q '"ok":true'
           curl -fsS "$APP_ORIGIN/" | grep -Eiq 'MechPro|Dispatch'
+      - name: Require Google sign-in secrets
+        if: steps.verify-creds.outputs.valid == 'true' && steps.google-secrets.outputs.present != 'true'
+        run: |
+          echo "::error title=Missing Google OAuth credentials::The app deployed, but the Worker did not receive Google credentials. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as production repository secrets and re-run this workflow."
+          exit 1

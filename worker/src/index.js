@@ -26,6 +26,7 @@ import {
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
+import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -34,7 +35,6 @@ const GOOGLE_NONCE_COOKIE = '__Host-mechpro_google_nonce';
 const GOOGLE_VERIFIER_COOKIE = '__Host-mechpro_google_verifier';
 const GOOGLE_RETURN_COOKIE = '__Host-mechpro_google_return';
 const GOOGLE_DESKTOP_COOKIE = '__Host-mechpro_google_desktop';
-const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
 
 function createPostHog(env) {
   const apiKey = String(env.POSTHOG_API_KEY || '').trim();
@@ -377,45 +377,6 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
   return record;
 }
 
-async function revokeSessionsForUserIds(env, userIds, revokedAt = new Date().toISOString()) {
-  const ids = [...new Set((userIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
-  for (const userId of ids) {
-    await env.DB.prepare(
-      'UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL',
-    ).bind(revokedAt, userId).run();
-  }
-}
-
-async function syncAccessUser(env, context, employee) {
-  const email = String(employee.email || '').trim().toLowerCase();
-  const role = String(employee.role || 'technician');
-  if (!email || !SHOP_ROLES.has(role)) throw new HttpError(400, 'Employee email and a valid role are required');
-  const now = new Date().toISOString();
-  const enabled = employee.active === false ? 0 : 1;
-  await env.DB.prepare(`
-    INSERT INTO users (email, shop_id, role, name, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(email) DO UPDATE SET
-      shop_id = excluded.shop_id,
-      role = excluded.role,
-      name = excluded.name,
-      enabled = excluded.enabled,
-      updated_at = excluded.updated_at
-  `).bind(
-    email,
-    context.shopId,
-    role,
-    String(employee.name || email),
-    enabled,
-    now,
-    now,
-  ).run();
-  if (!enabled) {
-    const row = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(email).first();
-    await revokeSessionsForUserIds(env, [row?.id], now);
-  }
-}
-
 function members(record) {
   return [...new Set((Array.isArray(record?.memberEmails) ? record.memberEmails : [])
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
@@ -575,8 +536,10 @@ async function handleEntities(request, env, context, segments, analytics) {
       }
       body = { ...body, body: String(body.body).trim().slice(0, 4000), memberEmails: members(conversation), senderEmail: context.email };
     }
+    // Sync access before writing the entity so a cross-tenant email conflict
+    // cannot leave an orphan employee row behind.
+    if (type === 'employees') await syncAccessUser(env, context, body);
     const saved = await putEntity(env, context, type, newId, body);
-    if (type === 'employees') await syncAccessUser(env, context, saved);
     captureForContext(analytics, context, 'entity_created', { entity_type: type });
     capturePostHogEvent(env, context, 'entity_created', {
       entity_type: type,
@@ -595,8 +558,8 @@ async function handleEntities(request, env, context, segments, analytics) {
       if (!memberEmails.includes(context.email) || memberEmails.length < 2) throw new HttpError(400, 'Group requires the owner and at least one other member');
       body = { ...body, memberEmails, creatorEmail: existing.creatorEmail };
     }
+    if (type === 'employees') await syncAccessUser(env, context, body);
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
-    if (type === 'employees') await syncAccessUser(env, context, saved);
     captureForContext(analytics, context, 'entity_updated', { entity_type: type });
     capturePostHogEvent(env, context, 'entity_updated', {
       entity_type: type,

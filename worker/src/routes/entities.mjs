@@ -7,8 +7,7 @@ import {
   redactEmployee,
 } from '../domain.mjs';
 import { HttpError, json, requestJson } from '../http.mjs';
-
-const SHOP_ROLES = new Set(['admin', 'technician', 'office', 'service_writer']);
+import { syncAccessUser } from '../access-users.mjs';
 
 function entityRecord(row) {
   if (!row) return null;
@@ -76,31 +75,6 @@ export async function putEntity(env, context, type, id, body, expectedUpdatedAt 
       updated_at = excluded.updated_at
   `).bind(context.shopId, type, id, JSON.stringify(record), record.createdBy, record.createdAt, now).run();
   return record;
-}
-
-async function syncAccessUser(env, context, employee) {
-  const email = String(employee.email || '').trim().toLowerCase();
-  const role = String(employee.role || 'technician');
-  if (!email || !SHOP_ROLES.has(role)) throw new HttpError(400, 'Employee email and a valid role are required');
-  const now = new Date().toISOString();
-  await env.DB.prepare(`
-    INSERT INTO users (email, shop_id, role, name, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(email) DO UPDATE SET
-      shop_id = excluded.shop_id,
-      role = excluded.role,
-      name = excluded.name,
-      enabled = excluded.enabled,
-      updated_at = excluded.updated_at
-  `).bind(
-    email,
-    context.shopId,
-    role,
-    String(employee.name || email),
-    employee.active === false ? 0 : 1,
-    now,
-    now,
-  ).run();
 }
 
 function members(record) {
@@ -290,8 +264,8 @@ export async function handleEntities(request, env, context, segments) {
         senderEmail: context.email,
       };
     }
+    if (type === 'employees') await syncAccessUser(env, context, body);
     const saved = await putEntity(env, context, type, newId, body);
-    if (type === 'employees') await syncAccessUser(env, context, saved);
     return json(saved, 201);
   }
   if (request.method === 'PUT' && id) {
@@ -307,8 +281,8 @@ export async function handleEntities(request, env, context, segments) {
       }
       body = { ...body, memberEmails, creatorEmail: existing.creatorEmail };
     }
+    if (type === 'employees') await syncAccessUser(env, context, body);
     const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
-    if (type === 'employees') await syncAccessUser(env, context, saved);
     return json(saved);
   }
   if (request.method === 'DELETE' && id) {

@@ -4,10 +4,7 @@
   "main": "worker/src/index.js",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
-  // www.yourcarguy806.com is attached via Workers custom domain (mechpro-api).
-  // The Worker serves /api/* and proxies other paths to PAGES_ORIGIN.
-  // Avoid wrangler "routes" here — they require Zone Workers Routes token
-  // permission and fight the existing custom-domain attachment.
+  // The Worker serves /api/* and proxies the shop app from Pages.
   "workers_dev": false,
   "vars": {
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
