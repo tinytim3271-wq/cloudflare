@@ -614,8 +614,19 @@
     ;
     return mutationQueueCache;
   }
+  const SENSITIVE_MUTATION_KEYS = /* @__PURE__ */ new Set(["apikey", "api_key", "password", "passphrase", "token", "secret", "accountnumber", "account_number", "authorization"]);
+  function redactSensitiveValue(value, keyHint = "") {
+    const normalizedKey = String(keyHint || "").trim().toLowerCase();
+    if (normalizedKey && SENSITIVE_MUTATION_KEYS.has(normalizedKey)) return "[REDACTED]";
+    if (Array.isArray(value)) return value.map((item) => redactSensitiveValue(item));
+    if (!value || typeof value !== "object") return value;
+    const output = {};
+    for (const [key, nestedValue] of Object.entries(value)) output[key] = redactSensitiveValue(nestedValue, key);
+    return output;
+  }
   function writeMutationQueue(queue) {
-    const raw = JSON.stringify(queue);
+    const sanitizedQueue = redactSensitiveValue(queue);
+    const raw = JSON.stringify(sanitizedQueue);
     if (raw === mutationQueueRaw) return;
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
@@ -627,7 +638,8 @@
   function prepareEntityMutation(path, options) {
     const method = String(options.method || "GET").toUpperCase();
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
-    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path);
+    const isSensitiveEndpoint = path === "/agentphone/configure";
+    const queueable = isEntityMutation && !OFFLINE_QUEUE_BLOCKED.test(path) && !isSensitiveEndpoint;
     if (!queueable) return { path, options, queueable: false };
     let body = options.body ? JSON.parse(options.body) : null;
     if (method === "POST" && body && !body.id) body = { ...body, id: mutationId() };
