@@ -1,5 +1,10 @@
 # MechPro Dispatch
 
+This repository, [`tinytim3271-wq/cloudflare`](https://github.com/tinytim3271-wq/cloudflare),
+is the canonical home for MechPro. The source-repository audit, feature mapping,
+architecture decisions, and remaining migration work are tracked in
+[`docs/repository-consolidation.md`](docs/repository-consolidation.md).
+
 MechPro is a local-first shop dispatch and work-order PWA with optional cloud
 synchronization. The hosted application runs on Cloudflare today, and the target
 public SaaS architecture is documented in
