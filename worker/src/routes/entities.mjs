@@ -124,7 +124,7 @@ async function listConversationIdsForMember(env, shopId, email, { limit = 0, cur
   };
 }
 
-async function listChatMessagesForConversations(env, shopId, email, { limit = 0, cursor = '', conversationId = '' } = {}) {
+export async function listChatMessagesForConversations(env, shopId, email, { limit = 0, cursor = '', conversationId = '' } = {}) {
   const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
     ? Math.min(200, Math.floor(Number(limit)))
     : 0;
