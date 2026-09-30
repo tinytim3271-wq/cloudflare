@@ -132,6 +132,46 @@
     }
   });
 
+  // src/runtime/mutation-queue-store.js
+  function createMutationQueueStore({
+    storage,
+    storeKey = "mechpro-mutation-queue-v1"
+  } = {}) {
+    if (!storage || typeof storage.getItem !== "function" || typeof storage.setItem !== "function") {
+      throw new TypeError("createMutationQueueStore requires a Web Storage-compatible storage");
+    }
+    let cache = null;
+    let rawCache = null;
+    function read() {
+      const raw = storage.getItem(storeKey) || "[]";
+      if (rawCache === raw && Array.isArray(cache)) return cache;
+      rawCache = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        cache = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        cache = [];
+      }
+      return cache;
+    }
+    function write(queue) {
+      const next = Array.isArray(queue) ? queue : [];
+      const raw = JSON.stringify(next);
+      if (raw === rawCache) {
+        cache = next;
+        return;
+      }
+      rawCache = raw;
+      cache = next;
+      storage.setItem(storeKey, raw);
+    }
+    return { read, write };
+  }
+  var init_mutation_queue_store = __esm({
+    "src/runtime/mutation-queue-store.js"() {
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
@@ -640,62 +680,28 @@
     localStorage.removeItem(storageKeys.session);
   }
   function readMutationQueue() {
-    const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
-    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
-    mutationQueueRaw = raw;
-    try {
-      mutationQueueCache = (JSON.parse(raw) || []).filter((item) => item?.method === "DELETE" || item?.body);
-    } catch {
-      mutationQueueCache = [];
-    }
-    ;
-    return mutationQueueCache;
+    return mutationQueueStore.read();
   }
   function writeMutationQueue(queue) {
-    const raw = "[]";
-    if (raw === mutationQueueRaw) {
-      mutationQueueCache = queue;
-      return;
-    }
-    mutationQueueRaw = raw;
-    mutationQueueCache = queue;
-    localStorage.removeItem(MUTATION_QUEUE_STORE);
+    mutationQueueStore.write(queue);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
-  function sanitizeSensitiveValue(value2) {
-    if (!value2 || typeof value2 !== "object") return value2;
-    if (Array.isArray(value2)) return value2.map(sanitizeSensitiveValue);
-    const out = {};
-    for (const [key, item] of Object.entries(value2)) {
-      if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]";
-      else out[key] = sanitizeSensitiveValue(item);
-    }
-    return out;
-  }
-  function sanitizeQueuedBody(rawBody) {
-    if (!rawBody) return rawBody;
-    try {
-      return JSON.stringify(sanitizeSensitiveValue(JSON.parse(rawBody)));
-    } catch {
-      return rawBody;
-    }
-  }
   function prepareMutation(path, options) {
     return prepareEntityMutation(path, options, mutationId);
   }
-  async function queueEntityMutation(mutation, conflict = false) {
-    const queue = await readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
+  function queueEntityMutation(mutation, conflict = false) {
+    const queue = readMutationQueue(), existingIndex = queue.findIndex((item2) => item2.key === mutation.key);
     if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") {
       queue.splice(existingIndex, 1);
-      await writeMutationQueue(queue);
+      writeMutationQueue(queue);
       return;
     }
-    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: sanitizeQueuedBody(mutation.options.body), expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
+    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
-    await writeMutationQueue(queue);
+    writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
     if (!authSession()) throw new Error("Not signed in");
@@ -767,7 +773,7 @@
       return response.status === 204 ? null : response.json();
     } catch (error) {
       if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) {
-        await queueEntityMutation(mutation);
+        queueEntityMutation(mutation);
         toast("Saved offline. MechPro will sync when the connection returns.");
         return { queued: true };
       }
@@ -2285,27 +2291,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const id = event.currentTarget.dataset.workOrderId;
       openJobClock(id) ? stopJobClock(id) : startJobClock(id);
     });
-    document.querySelectorAll("[data-toggle-user]").forEach((button) => button.onclick = async () => {
+    document.querySelectorAll("[data-toggle-user]").forEach((button) => button.onclick = () => {
       const user = state.users.find((item) => item.id === button.dataset.toggleUser);
       if (!user) return;
-      const nextActive = !user.active;
-      button.disabled = true;
-      try {
-        const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, { method: "PUT", body: JSON.stringify({ ...user, active: nextActive }) });
-        if (saved?.queued) {
-          toast("Employee access changes require a live connection. Reconnect and try again.");
-          return;
-        }
-        const index = state.users.findIndex((item) => item.id === user.id);
-        if (index >= 0) state.users[index] = saved;
-        save();
-        toast(`${saved.name || user.name} account ${saved.active ? "activated" : "deactivated"}`);
-        render();
-      } catch (error) {
-        toast(error.message || "Could not update employee access");
-      } finally {
-        button.disabled = false;
-      }
+      user.active = !user.active;
+      save();
+      toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`);
+      render();
     });
     document.querySelector("#sync-payroll")?.addEventListener("click", () => {
       syncAllPayroll();
@@ -3385,7 +3377,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, SENSITIVE_FIELD_PATTERN, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueStore, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3393,6 +3385,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_detect();
       init_utils();
       init_prepare_entity_mutation();
+      init_mutation_queue_store();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -3505,9 +3498,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       cloudflareSignIn = cloudflareAccessSignIn;
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
       flushingMutationQueue = false;
-      mutationQueueCache = null;
-      mutationQueueRaw = null;
-      SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
+      mutationQueueStore = createMutationQueueStore({ storage: localStorage, storeKey: MUTATION_QUEUE_STORE });
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
