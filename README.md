@@ -79,7 +79,8 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 | `CLOUDFLARE_ACCOUNT_ID` | Selects target Cloudflare account in CI/deploy scripts | GitHub Actions + local deploy CLI |
 | `CLOUDFLARE_D1_DATABASE_ID` | Optional CI override for Worker D1 binding `database_id` | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_PAGES_PROJECT` | Optional Pages project name override | GitHub Actions variable (`cloudflare-pages.yml`) |
-| `CLOUDFLARE_APP_ORIGIN` | Optional smoke-check origin used by deploy verification (`/` + `/api/healthz`) | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_APP_ORIGIN` | Optional Pages origin used by the deploy smoke check (`/`) | GitHub Actions variable (`cloudflare-pages.yml`) |
+| `CLOUDFLARE_API_ORIGIN` | Optional Worker origin used by the deploy smoke check (`/api/healthz`) | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_ALLOWED_ORIGINS` | Optional Worker CORS origins override in CI deploy | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `false` to skip production Cloudflare publish | GitHub Actions variable (`cloudflare-pages.yml`) |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | S3-compatible credentials for `deploy-r2.yml` uploads | GitHub Actions secrets (`deploy-r2.yml`) |
