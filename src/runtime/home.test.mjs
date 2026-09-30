@@ -7,6 +7,8 @@ import {
   greetingForNow,
   localIsoDate,
   mergeRemoteCollection,
+  sidebarCatalog,
+  visibleSidebar,
 } from './home.js';
 
 const orders = [
@@ -67,6 +69,18 @@ test('greeting tracks morning, afternoon, and evening', () => {
 
 test('localIsoDate uses the calendar day, not UTC', () => {
   assert.equal(localIsoDate(new Date(2026, 8, 9, 15, 0, 0)), '2026-09-09');
+});
+
+test('sidebar groups the shop day in plain language and hides locked tools', () => {
+  const labels = sidebarCatalog.flatMap((section) => section.items.map((item) => item.label));
+  assert.equal(new Set(labels).size, labels.length);
+  assert.deepEqual(sidebarCatalog.map((section) => section.label), ['Today', 'Front counter', 'Shop floor', 'Back office']);
+  const admin = visibleSidebar(() => true, { oem: true });
+  assert.equal(admin[0].items[0].route, 'home');
+  assert.ok(admin[2].items.some((item) => item.route === 'oem-diagnostics'));
+  const writer = visibleSidebar((route) => ['home', 'dispatch', 'orders', 'customers'].includes(route), { oem: false });
+  assert.deepEqual(writer.flatMap((section) => section.items.map((item) => item.route)), ['home', 'dispatch', 'orders', 'customers']);
+  assert.equal(writer.some((section) => section.label === 'Back office'), false);
 });
 
 test('mergeRemoteCollection keeps local demo rows when the API is empty', () => {
