@@ -27,6 +27,7 @@ import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
+import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
@@ -1440,6 +1441,14 @@ async function ensureSaasUser(env, email, name) {
         .bind(userId, now, normalized).run();
       existing.id = userId;
     }
+    // Claim stores the owner email on the invite; attach the founding plan on first sign-in.
+    if (existing.shop_id) {
+      await applyPendingFoundingClaim(env, {
+        email: normalized,
+        shopId: existing.shop_id,
+        ownerName: existing.name || name,
+      });
+    }
     return existing;
   }
   const userId = crypto.randomUUID();
@@ -1460,6 +1469,12 @@ async function ensureSaasUser(env, email, name) {
       VALUES (?, ?, ?, 'admin', ?, 1, ?, ?)
     `).bind(userId, normalized, shopId, ownerName, now, now),
   ]);
+  await applyPendingFoundingClaim(env, {
+    email: normalized,
+    shopId,
+    ownerName,
+    shopName: `${ownerName}'s shop`,
+  });
   return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
 }
 
@@ -1982,15 +1997,38 @@ async function handleFounding(request, env) {
     const decision = claimDecision({ invite, counter, planId });
     if (!decision.ok) throw new HttpError(decision.status, decision.message);
     const nowIso = new Date().toISOString();
+    // Take the counter slot only while this invite is still free, then mark the
+    // invite. Compensate any partial outcome so spots/invites are not lost.
     const results = await env.DB.batch([
-      env.DB.prepare('UPDATE founding_invites SET used_at = ?, used_by_shop_id = ?, plan_id = ? WHERE token = ? AND used_at IS NULL')
-        .bind(nowIso, email, planId, token),
-      env.DB.prepare('UPDATE founding_counter SET claimed = claimed + 1 WHERE id = 1 AND claimed < cap'),
+      env.DB.prepare(`
+        UPDATE founding_counter
+        SET claimed = claimed + 1
+        WHERE id = 1 AND claimed < cap
+          AND EXISTS (SELECT 1 FROM founding_invites WHERE token = ? AND used_at IS NULL)
+      `).bind(token),
+      env.DB.prepare(`
+        UPDATE founding_invites
+        SET used_at = ?, used_by_shop_id = ?, plan_id = ?
+        WHERE token = ? AND used_at IS NULL
+      `).bind(nowIso, email, planId, token),
     ]);
-    const inviteUpdated = Number(results?.[0]?.meta?.changes || 0) > 0;
-    const counterUpdated = Number(results?.[1]?.meta?.changes || 0) > 0;
-    if (!inviteUpdated || !counterUpdated) throw new HttpError(409, 'This Founding Member spot was just claimed.');
-    return json({ claimed: true, planId, email, remaining: decision.remaining });
+    const counterUpdated = Number(results?.[0]?.meta?.changes || 0) > 0;
+    const inviteUpdated = Number(results?.[1]?.meta?.changes || 0) > 0;
+    const outcome = claimBatchOutcome(inviteUpdated, counterUpdated);
+    if (outcome.ok) return json({ claimed: true, planId, email, remaining: decision.remaining });
+    if (outcome.restoreInvite) {
+      await env.DB.prepare(`
+        UPDATE founding_invites
+        SET used_at = NULL, used_by_shop_id = NULL, plan_id = NULL
+        WHERE token = ? AND used_at = ?
+      `).bind(token, nowIso).run();
+    }
+    if (outcome.decrementCounter) {
+      await env.DB.prepare(`
+        UPDATE founding_counter SET claimed = claimed - 1 WHERE id = 1 AND claimed > 0
+      `).run();
+    }
+    throw new HttpError(409, 'This Founding Member spot was just claimed.');
   }
   throw new HttpError(404, 'Not found');
 }
