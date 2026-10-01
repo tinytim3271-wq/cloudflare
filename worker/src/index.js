@@ -37,6 +37,10 @@ const GOOGLE_VERIFIER_COOKIE = '__Host-mechpro_google_verifier';
 const GOOGLE_RETURN_COOKIE = '__Host-mechpro_google_return';
 const GOOGLE_DESKTOP_COOKIE = '__Host-mechpro_google_desktop';
 
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+const SESSION_TTL_MS = SESSION_MAX_AGE_SECONDS * 1000;
+const SESSION_REFRESH_THRESHOLD_MS = SESSION_TTL_MS / 2;
+
 function createPostHog(env) {
   const apiKey = String(env.POSTHOG_API_KEY || '').trim();
   const host = String(env.POSTHOG_HOST || '').trim();
@@ -181,7 +185,7 @@ function getCookieValue(request, name) {
   return cookieEntries(request)[name] || '';
 }
 
-function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
+function sessionCookieHeader(token, maxAgeSeconds = SESSION_MAX_AGE_SECONDS) {
   return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
 }
 
@@ -217,6 +221,14 @@ async function resolveAppSession(request, env) {
   `).bind(tokenHash, new Date().toISOString()).first();
   if (!row) return null;
   const now = new Date();
+  // Rolling session lifetime: an active session (or desktop app) keeps extending
+  // its window and stays signed in until an explicit logout or full inactivity.
+  const sessionRemaining = Date.parse(row.expires_at) - now.getTime();
+  if (Number.isFinite(sessionRemaining) && sessionRemaining < SESSION_REFRESH_THRESHOLD_MS) {
+    await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .bind(new Date(now.getTime() + SESSION_TTL_MS).toISOString(), row.session_id)
+      .run();
+  }
   const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
   await env.DB.prepare(
     'UPDATE sessions SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)',
@@ -609,8 +621,9 @@ async function handleEntities(request, env, context, segments, analytics) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleAuthSession(context, analytics) {
+async function handleAuthSession(request, context, analytics) {
   const expires = Math.floor(Date.now() / 1000) + 3600;
+  const sessionToken = getCookieValue(request, APP_SESSION_COOKIE);
   analytics.client?.identify({
     distinctId: context.userId,
     properties: {
@@ -621,17 +634,23 @@ async function handleAuthSession(context, analytics) {
     },
   });
   captureForContext(analytics, context, 'auth_session_started');
-  return json({
-    claims: {
-      sub: context.userId,
-      email: context.email,
-      name: context.name,
-      'custom:shopId': context.shopId,
-      'custom:role': context.role,
-      exp: expires,
+  // Re-issue the session cookie on every /auth/session probe so a rolled-forward
+  // D1 expiry is mirrored in the browser (and desktop) cookie lifetime.
+  return json(
+    {
+      claims: {
+        sub: context.userId,
+        email: context.email,
+        name: context.name,
+        'custom:shopId': context.shopId,
+        'custom:role': context.role,
+        exp: expires,
+      },
+      expiresAt: expires * 1000,
     },
-    expiresAt: expires * 1000,
-  });
+    200,
+    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken) } : {},
+  );
 }
 
 async function handleVin(request, env, context, vin) {
@@ -1614,7 +1633,7 @@ async function handleGoogleCallback(request, env) {
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   await env.DB.prepare(`
     INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
     VALUES (?, ?, ?, ?, ?)
@@ -1752,7 +1771,7 @@ async function handleAuthCallback(request, env) {
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   await env.DB.batch([
     env.DB.prepare(`
       INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
@@ -1786,17 +1805,24 @@ async function handleAuthCallback(request, env) {
 }
 
 async function handleLogout(request, env) {
-  const context = await resolveContext(request, env);
-  const sessionId = context.sessionId || '';
+  // Logout must be idempotent: it still clears the cookie even when the session
+  // is already expired or revoked (resolveContext throws for those cases).
+  let context = null;
+  try {
+    context = await resolveContext(request, env);
+  } catch {
+    context = null;
+  }
+  const sessionId = context?.sessionId || '';
   if (sessionId) {
     await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
   }
-  capturePostHogEvent(env, context, 'user_logged_out', {
-    actor_role: context.role,
+  capturePostHogEvent(env, context ?? { userId: undefined, shopId: undefined }, 'user_logged_out', {
+    actor_role: context?.role,
   });
   return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
     status: 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': clearCookieHeader(APP_SESSION_COOKIE) },
   });
 }
 
@@ -1810,7 +1836,7 @@ async function handleAuth(request, env, segments, analytics) {
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
     const context = await resolveContext(request, env);
-    return handleAuthSession(context, analytics || { client: null });
+    return handleAuthSession(request, context, analytics || { client: null });
   }
   throw new HttpError(404, 'Not found');
 }
@@ -2028,7 +2054,7 @@ async function route(request, env, analytics) {
   const context = await resolveContext(request, env);
   analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
-  if (path === '/auth/session') return handleAuthSession(context, analytics);
+  if (path === '/auth/session') return handleAuthSession(request, context, analytics);
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);

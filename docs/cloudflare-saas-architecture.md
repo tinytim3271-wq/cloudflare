@@ -161,6 +161,17 @@ Stored value: opaque random token
 Database value: SHA-256 hash of token, never the raw token
 ```
 
+Session lifetime:
+
+- Sign-in (magic link or Google) creates a 7-day session.
+- Sessions are **rolling**: any authenticated request extends the D1
+  `expires_at` back to the full TTL whenever less than half of it remains,
+  and `GET /api/auth/session` re-issues the cookie with a fresh `Max-Age`.
+  An actively used device (including the desktop app) therefore stays
+  signed in until an explicit `POST /api/auth/logout` or a 7-day idle gap.
+- `POST /api/auth/logout` revokes the D1 session immediately and is
+  idempotent: it clears the cookie even when no valid session remains.
+
 ## Tenant isolation
 
 Every customer-owned record must be scoped by `shop_id`.
