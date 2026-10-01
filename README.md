@@ -1,9 +1,7 @@
 # MechPro Dispatch
 
 This repository, [`tinytim3271-wq/cloudflare`](https://github.com/tinytim3271-wq/cloudflare),
-is the canonical home for MechPro. The source-repository audit, feature mapping,
-architecture decisions, and remaining migration work are tracked in
-[`docs/repository-consolidation.md`](docs/repository-consolidation.md).
+is the canonical home for MechPro.
 
 MechPro is a local-first shop dispatch and work-order PWA with optional cloud
 synchronization. The hosted application runs on Cloudflare today, and the target
@@ -33,8 +31,6 @@ queues non-sensitive entity mutations until connectivity returns.
 | Cloudflare R2 | Stores files/download artifacts | `.github/workflows/deploy-r2.yml` |
 | Android APK | Builds Android package from Capacitor wrapper | `.github/workflows/android-apk.yml`, `android/` |
 | Windows Desktop | Builds desktop installer and release artifacts | `.github/workflows/windows-desktop.yml`, `desktop/` |
-
-`amplify.yml` was removed as a legacy configuration to prevent deployment-source drift; active deployment paths are Cloudflare workflows and `wrangler.jsonc`.
 
 ## Local Development
 
