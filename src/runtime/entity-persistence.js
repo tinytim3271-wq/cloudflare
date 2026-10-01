@@ -17,12 +17,12 @@ export function applyQueuedEntityMutations(type, remoteRecords, queue) {
   const basePath = entityPath(type);
   const records = new Map(
     (Array.isArray(remoteRecords) ? remoteRecords : [])
-      .filter(record => record?.id)
-      .map(record => [String(record.id), record]),
+      .map((record, index) => [record?.id ? String(record.id) : `__local-${index}`, record]),
   );
 
   for (const mutation of Array.isArray(queue) ? queue : []) {
-    if (mutation?.conflict || !String(mutation?.path || '').startsWith(basePath)) continue;
+    const path = String(mutation?.path || '');
+    if (mutation?.conflict || (path !== basePath && !path.startsWith(`${basePath}/`))) continue;
     const method = String(mutation.method || '').toUpperCase();
     let body = null;
     try {
@@ -30,8 +30,8 @@ export function applyQueuedEntityMutations(type, remoteRecords, queue) {
     } catch {
       continue;
     }
-    const pathId = mutation.path.startsWith(`${basePath}/`)
-      ? decodeURIComponent(mutation.path.slice(basePath.length + 1))
+    const pathId = path.startsWith(`${basePath}/`)
+      ? decodeURIComponent(path.slice(basePath.length + 1))
       : '';
     const id = String(body?.id || pathId || '');
     if (!id) continue;

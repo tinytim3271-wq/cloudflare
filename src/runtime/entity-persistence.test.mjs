@@ -54,3 +54,8 @@ test('queued deletes hide records while waiting to sync', () => {
     [],
   );
 });
+
+test('id-less local sample rows survive an empty remote list', () => {
+  const samples = [{ name: 'Demo Customer' }];
+  assert.deepEqual(applyQueuedEntityMutations('customers', samples, []), samples);
+});

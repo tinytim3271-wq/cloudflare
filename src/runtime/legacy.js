@@ -678,7 +678,7 @@ async function saveEmployeeRecord(existing, data) {
     emergencyContact: data.emergencyContact.trim(),
     taxStatus: data.taxStatus,
     createdAt: existing?.createdAt || now(),
-    updatedAt: existing ? now() : undefined,
+    updatedAt: existing?.updatedAt,
   };
   let saved = record;
   if (!isOfflineDesktop()) {
@@ -728,7 +728,7 @@ openEmployee = function (existing = null) {
 };
 
 async function setEmployeeActive(user) {
-  const updated = { ...user, active: !user.active, updatedAt: now() };
+  const updated = { ...user, active: !user.active };
   if (!isOfflineDesktop()) {
     const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, {
       method: "PUT",
@@ -755,7 +755,7 @@ async function saveCustomerRecord(existing, data) {
     visits: Number(existing?.visits || 0),
     spend: Number(existing?.spend || 0),
     createdAt: existing?.createdAt || now(),
-    updatedAt: existing ? now() : undefined,
+    updatedAt: existing?.updatedAt,
   };
   let saved = record;
   if (!isOfflineDesktop()) {
@@ -917,7 +917,7 @@ openOrder = function (id) {
       promise: data.promise.trim(),
       laborHours: Math.max(0, Number(data.laborHours) || 0),
       notes: data.notes.trim(),
-      updatedAt: now(),
+      updatedAt: order.updatedAt,
     };
     const firstCompletion = ["completed", "invoiced"].includes(next.status) && !["completed", "invoiced"].includes(order.status);
     const button = form.querySelector("button[type=submit]");
