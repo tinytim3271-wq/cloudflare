@@ -10,6 +10,7 @@ import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
 import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMarkup, offlineSession, snapshotShop } from '../modules/offline-desktop.js';
 import { presentCatalogInspection, printCatalogInspection } from './catalog-inspection-ui.js';
+import { applyQueuedEntityMutations, persistMutationQueue } from './entity-persistence.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
@@ -201,13 +202,10 @@ async function signOutEverywhere() { state.currentUserId = null; desktopEntitlem
 const MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
 let flushingMutationQueue = false, mutationQueueCache = null, mutationQueueRaw = null;
 function readMutationQueue() { const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]"; if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache; mutationQueueRaw = raw; try { mutationQueueCache = (JSON.parse(raw) || []).filter(item => item?.method === "DELETE" || item?.body) } catch { mutationQueueCache = [] }; return mutationQueueCache }
-function writeMutationQueue(queue) { const raw = "[]"; if (raw === mutationQueueRaw) { mutationQueueCache = queue; return } mutationQueueRaw = raw; mutationQueueCache = queue; localStorage.removeItem(MUTATION_QUEUE_STORE) }
+function writeMutationQueue(queue) { const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue); mutationQueueRaw = raw; mutationQueueCache = queue }
 function mutationId() { return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}` }
-const SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
-function sanitizeSensitiveValue(value) { if (!value || typeof value !== "object") return value; if (Array.isArray(value)) return value.map(sanitizeSensitiveValue); const out = {}; for (const [key, item] of Object.entries(value)) { if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]"; else out[key] = sanitizeSensitiveValue(item) } return out }
-function sanitizeQueuedBody(rawBody) { if (!rawBody) return rawBody; try { return JSON.stringify(sanitizeSensitiveValue(JSON.parse(rawBody))) } catch { return rawBody } }
 function prepareMutation(path, options) { return prepareEntityMutation(path, options, mutationId) }
-function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: sanitizeQueuedBody(mutation.options.body), expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
+function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
 async function authorizedApiRequest(path, options = {}) { if (!authSession()) throw new Error("Not signed in"); return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } }) }
 async function verifyDesktopEntitlement() { if (!isDesktopApp || isOfflineDesktop() || (isLocalShell() && cloudflareConfig.apiUrl.startsWith("/"))) { desktopEntitlementVerified = true; return true } if (!navigator.onLine) throw new Error("MechPro Desktop requires an internet connection to verify your subscription."); let response; try { response = await authorizedApiRequest("/subscription/entitlement", { cache: "no-store" }) } catch { throw new Error("MechPro could not reach the subscription service. Check your internet connection and try again.") } const body = await response.json().catch(() => ({})); if (!response.ok || body.active !== true) throw new Error(body.status === "expired" ? "Your MechPro subscription has expired." : body.status === "suspended" ? "This MechPro subscription is suspended." : "An active MechPro subscription is required for the Windows app."); desktopEntitlementVerified = true; desktopLoginMessage = ""; return true }
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} }) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
@@ -633,7 +631,7 @@ function homeDashboard() {
 function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
 render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = homeDashboard(); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
-function applyRemoteList(key, records) { state[key] = mergeRemoteCollection(key, records, state[key], localSampleRecord); save() }
+function applyRemoteList(key, records) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(key, remote, readMutationQueue()); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
 loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
@@ -641,6 +639,351 @@ loadExpensesFromApi = async function () { try { applyRemoteList("expenses", awai
 loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])) } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
+
+async function loadEmployeesFromApi() {
+  if (isOfflineDesktop()) return;
+  try {
+    const employees = await apiFetch("/entities/employees");
+    if (Array.isArray(employees)) {
+      state.users = sanitizeUsers(employees);
+      save();
+    }
+  } catch (error) {
+    console.error("Failed to load employees from API; using local data", error);
+  }
+}
+
+function employeeFormValue(employee, field, fallback = "") {
+  return escapeAttr(employee?.[field] ?? fallback);
+}
+
+async function saveEmployeeRecord(existing, data) {
+  const record = {
+    ...(existing || {}),
+    id: existing?.id || `user-${Date.now()}`,
+    name: data.name.trim(),
+    email: String(existing?.email || data.email).trim().toLowerCase(),
+    role: data.role,
+    title: data.title.trim(),
+    techName: data.techName.trim(),
+    active: existing?.active !== false,
+    employeeId: data.employeeId.trim(),
+    phone: data.phone.trim(),
+    address: data.address.trim(),
+    startDate: data.startDate,
+    employmentType: data.employmentType,
+    payRate: Number(data.payRate),
+    payFrequency: data.payFrequency,
+    department: data.department.trim(),
+    emergencyContact: data.emergencyContact.trim(),
+    taxStatus: data.taxStatus,
+    createdAt: existing?.createdAt || now(),
+    updatedAt: existing?.updatedAt,
+  };
+  let saved = record;
+  if (!isOfflineDesktop()) {
+    const path = existing
+      ? `/entities/employees/${encodeURIComponent(record.id)}`
+      : "/entities/employees";
+    const response = await apiFetch(path, {
+      method: existing ? "PUT" : "POST",
+      body: JSON.stringify(record),
+    });
+    if (response?.queued) throw new Error("Employee profiles require a live connection.");
+    saved = response;
+  }
+  const index = state.users.findIndex(user => user.id === saved.id);
+  if (index >= 0) state.users[index] = saved;
+  else state.users.push(saved);
+  save();
+  return saved;
+}
+
+employees = function () {
+  const rows = state.users.map(user => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} · ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} · ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "—")}<small>${escapeHtml(user.payFrequency || "—")} · ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "—")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+  return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
+};
+
+openEmployee = function (existing = null) {
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label><label>Employee ID *<input name="employeeId" required value="${employeeFormValue(existing, "employeeId")}" placeholder="EMP-005"/></label><label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label><label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label><label class="full">Email address *<input type="email" name="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label><label>Role<select name="role">${["technician", "office", "service_writer", "admin"].map(role => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role]}</option>`).join("")}</select></label><label class="full">Technician dispatch name<input name="techName" value="${employeeFormValue(existing, "techName")}" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType">${["Hourly", "Salary", "Contractor"].map(value => `<option ${existing?.employmentType === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label><label>Pay frequency<select name="payFrequency">${["Weekly", "Biweekly", "Monthly"].map(value => `<option ${existing?.payFrequency === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", new Date().toISOString().slice(0, 10))}"/></label><label>Tax status<select name="taxStatus">${["W-2", "1099 Contractor"].map(value => `<option ${existing?.taxStatus === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label><label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label><label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+  document.querySelector("#employee-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const email = String(existing?.email || data.email).trim().toLowerCase();
+    if (!existing && state.users.some(user => user.email.toLowerCase() === email)) return toast("An employee profile already uses that email");
+    if (state.users.some(user => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) return toast("An employee already uses that employee ID");
+    if (data.role === "technician" && !data.techName.trim()) return toast("Add the technician dispatch name to save this profile");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const saved = await saveEmployeeRecord(existing, data);
+      closeModal();
+      toast(`${saved.name} profile saved`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Could not save employee profile");
+    }
+  };
+};
+
+async function setEmployeeActive(user) {
+  const updated = { ...user, active: !user.active };
+  if (!isOfflineDesktop()) {
+    const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    if (saved?.queued) throw new Error("Employee access changes require a live connection.");
+    Object.assign(updated, saved);
+  }
+  state.users[state.users.indexOf(user)] = updated;
+  save();
+  return updated;
+}
+
+async function saveCustomerRecord(existing, data) {
+  const record = {
+    ...(existing || {}),
+    id: existing?.id || mutationId(),
+    name: data.name.trim(),
+    phone: data.phone.trim(),
+    email: data.email.trim(),
+    billingAddress: data.billingAddress.trim(),
+    billingNotes: data.billingNotes.trim(),
+    vehicles: Number(existing?.vehicles || 0),
+    visits: Number(existing?.visits || 0),
+    spend: Number(existing?.spend || 0),
+    createdAt: existing?.createdAt || now(),
+    updatedAt: existing?.updatedAt,
+  };
+  let saved = record;
+  if (!isOfflineDesktop()) {
+    const response = await apiFetch(existing ? `/entities/customers/${encodeURIComponent(record.id)}` : "/entities/customers", {
+      method: existing ? "PUT" : "POST",
+      body: JSON.stringify(record),
+    });
+    saved = response?.queued ? record : response;
+  }
+  const index = existing ? state.customers.indexOf(existing) : -1;
+  if (index >= 0) state.customers[index] = saved;
+  else state.customers.unshift(saved);
+  save();
+  return saved;
+}
+
+function openCustomerForm(existing = null) {
+  showModal(`<form class="modal" id="customer-edit-form"><div class="modal-head"><h2>${existing ? "Edit customer" : "Add customer"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Name *<input name="name" value="${escapeAttr(existing?.name || "")}" required/></label><label>Phone<input name="phone" value="${escapeAttr(existing?.phone || "")}"/></label><label class="full">Email<input name="email" type="email" value="${escapeAttr(existing?.email === "Not provided" ? "" : existing?.email || "")}"/></label><label>Billing address<textarea name="billingAddress">${escapeHtml(existing?.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes">${escapeHtml(existing?.billingNotes || "")}</textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save customer</button></div></form>`);
+  document.querySelector("#customer-edit-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    if (state.customers.some(customer => customer !== existing && customer.name.toLowerCase() === data.name.trim().toLowerCase())) return toast("A customer already uses that name");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      await saveCustomerRecord(existing, data);
+      closeModal();
+      toast("Customer saved");
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Customer could not be saved");
+    }
+  };
+}
+
+openCustomerEditor = function (key) {
+  const customer = state.customers.find(item => customerRecordKey(item) === key);
+  if (customer) openCustomerForm(customer);
+};
+
+customers = function () {
+  const q = query.toLowerCase();
+  const cards = state.customers.filter(item => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map(item => {
+    const key = encodeURIComponent(customerRecordKey(item));
+    return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} · ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter(vehicle => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+  }).join("");
+  return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
+};
+
+const openNewCore = openNew;
+openNew = function () {
+  openNewCore();
+  const form = document.querySelector("#new-form");
+  if (!form) return;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+    if (!customerName) return toast("Select or enter a customer name");
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      let customer = state.customers.find(item => item.name.toLowerCase() === customerName.toLowerCase());
+      if (!customer) {
+        customer = await saveCustomerRecord(null, {
+          name: customerName,
+          phone: String(data.phone || ""),
+          email: "",
+          billingAddress: "",
+          billingNotes: "",
+        });
+      }
+      const estimate = readNewOrderEstimate();
+      const id = `RO-${Math.max(1040, ...state.orders.map(item => Number(item.id.split("-")[1]) || 0)) + 1}`;
+      const order = {
+        id,
+        customer: customer.name,
+        phone: data.phone,
+        vehicle: data.vehicle,
+        vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
+        complaint: data.complaint,
+        status: data.status,
+        priority: data.priority,
+        tech: data.tech,
+        bay: data.bay,
+        mobile: data.bay === "Mobile",
+        promise: data.promise,
+        total: estimate.total,
+        scheduled: "Unscheduled",
+        notes: "New intake. Diagnosis pending.",
+        labor: estimate.labor,
+        laborHours: estimate.laborHours,
+        parts: estimate.parts,
+        tax: estimate.tax,
+        estimate: {
+          ...estimate,
+          generatedAt: now(),
+          summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.`,
+        },
+      };
+      let saved = order;
+      if (!isOfflineDesktop()) {
+        const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(order) });
+        saved = response?.queued ? order : response;
+      }
+      state.orders.unshift(saved);
+      save();
+      closeModal();
+      toast(`${id} created successfully`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Work order could not be saved");
+    }
+  };
+};
+
+orders = function () {
+  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+  return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
+};
+
+updateOrderInApi = async function (record) {
+  if (["completed", "invoiced"].includes(record.status)) await ensureInvoiceForOrder(record);
+  if (isOfflineDesktop()) return record;
+  const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, {
+    method: "PUT",
+    body: JSON.stringify(record),
+  });
+  return saved?.queued ? record : saved;
+};
+
+openOrder = function (id) {
+  const order = state.orders.find(item => item.id === id);
+  if (!order) return;
+  const canManage = ["admin", "service_writer"].includes(currentUser().role);
+  if (!canManage) {
+    toast("Only an admin or service writer can edit this work order");
+    return;
+  }
+  showModal(`<form class="modal wide" id="work-order-edit-form"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Edit work order</h2></div><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input name="phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input name="vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input name="vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required>${escapeHtml(order.complaint || "")}</textarea></label><label>Status<select name="status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(status => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select name="priority">${["normal", "high", "low"].map(priority => `<option value="${priority}" ${order.priority === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select name="tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select name="bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map(bay => `<option ${order.bay === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input name="promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input name="laborHours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label><label class="full">Technician / service notes<textarea name="notes">${escapeHtml(order.notes || "")}</textarea></label></div></div><div class="modal-actions"><button class="secondary danger" type="button" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" type="submit">${icon("save", 14)} Save work order</button></div></form>`);
+  const form = document.querySelector("#work-order-edit-form");
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const next = {
+      ...order,
+      customer: data.customer,
+      phone: data.phone.trim(),
+      vehicle: data.vehicle.trim(),
+      vin: data.vin.trim().toUpperCase() || "VIN pending",
+      complaint: data.complaint.trim(),
+      status: data.status,
+      priority: data.priority,
+      tech: data.tech,
+      bay: data.bay,
+      mobile: data.bay === "Mobile",
+      promise: data.promise.trim(),
+      laborHours: Math.max(0, Number(data.laborHours) || 0),
+      notes: data.notes.trim(),
+      updatedAt: order.updatedAt,
+    };
+    const firstCompletion = ["completed", "invoiced"].includes(next.status) && !["completed", "invoiced"].includes(order.status);
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      if (firstCompletion && !await commitLinkedInventory(next)) return;
+      const saved = await updateOrderInApi(next);
+      state.orders[state.orders.indexOf(order)] = saved;
+      syncPayroll(saved);
+      save();
+      closeModal();
+      toast(`${saved.id} saved`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Work order could not be saved");
+    }
+  };
+  document.querySelector("#delete-order").onclick = async () => {
+    if (!confirm(`Delete ${order.id}?`)) return;
+    try {
+      if (!isOfflineDesktop()) await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+      state.orders = state.orders.filter(item => item !== order);
+      save();
+      closeModal();
+      toast(`${order.id} deleted`);
+      render();
+    } catch (error) {
+      toast(error.message || "Work order could not be deleted");
+    }
+  };
+};
+
+const bindDurableRecordsCore = bind;
+bind = function () {
+  bindDurableRecordsCore();
+  document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
+  document.querySelectorAll("[data-edit-order]").forEach(button => {
+    button.onclick = event => {
+      event.stopPropagation();
+      openOrder(button.dataset.editOrder);
+    };
+  });
+  document.querySelectorAll("[data-edit-employee]").forEach(button => {
+    button.onclick = () => openEmployee(state.users.find(user => user.id === button.dataset.editEmployee));
+  });
+  document.querySelectorAll("[data-toggle-user]").forEach(button => {
+    button.onclick = async () => {
+      const user = state.users.find(item => item.id === button.dataset.toggleUser);
+      if (!user) return;
+      button.disabled = true;
+      try {
+        const saved = await setEmployeeActive(user);
+        toast(`${saved.name} account ${saved.active ? "activated" : "deactivated"}`);
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "Employee access could not be changed");
+      }
+    };
+  });
+  document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
+    await loadEmployeesFromApi();
+    if (state.route === "employees") render();
+  });
+};
 
 async function startApp() {
   if (isOfflineDesktop()) {
@@ -665,6 +1008,7 @@ async function startApp() {
     if (user) {
       state.currentUserId = user.id;
       if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
+      if (user.role !== "super_admin") await reloadOperationalData();
     }
   } catch (error) {
     if (!authSession()) console.info("Cloudflare Access session not available", error.message);
