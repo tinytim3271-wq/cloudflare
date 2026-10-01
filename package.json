@@ -42,7 +42,7 @@
     "test:storage": "node --test src/modules/storage.test.mjs",
     "test:desktop": "node --test desktop/start-url.test.js desktop/auth-deep-link.test.js desktop/diagnostics-secrets.test.js desktop/local-vault.test.js",
     "test:offline": "node --test src/modules/offline-desktop.test.mjs",
-    "test:mutation": "node --test src/runtime/prepare-entity-mutation.test.mjs",
+    "test:mutation": "node --test src/runtime/prepare-entity-mutation.test.mjs src/runtime/entity-persistence.test.mjs",
     "test:imports": "node --test src/modules/imports.test.mjs",
     "test:canned": "node --test src/modules/canned-services.test.mjs",
     "test:guides": "node --test src/modules/repair-guide.test.mjs",
