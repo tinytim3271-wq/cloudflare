@@ -685,7 +685,7 @@ async function recordDiagnosticAudit(env, context, event) {
 async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
-  requireRole(context, ['admin', 'technician', 'service_writer']);
+  requireRole(context, ['owner', 'admin', 'technician', 'service_writer']);
   if (action === 'coverage') return handleCoverage(request, segments);
   if (action === 'autoauth') return handleAutoAuth(request, env, context);
   if (action === 'audit' && request.method === 'POST') {
@@ -941,7 +941,7 @@ async function handleAutoAuth(request, env, context) {
       connectedAt: login?.connectedAt || null,
     });
   }
-  requireRole(context, ['admin', 'super_admin']);
+  requireRole(context, ['owner', 'admin', 'super_admin']);
   if (request.method === 'POST') {
     const body = await requestJson(request);
     const provider = String(body.provider || 'autoauth_stellantis').trim();
@@ -956,6 +956,50 @@ async function handleAutoAuth(request, env, context) {
   if (request.method === 'DELETE') {
     await deleteIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME);
     await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.disconnect' });
+    return json({ connected: false });
+  }
+  throw new HttpError(405, 'Method not allowed');
+}
+
+const AUTOZONE_SECRET_NAME = 'autozone-pro-login';
+const ORDERING_ROLES = ['owner', 'admin', 'service_writer', 'technician'];
+
+async function readAutozoneLogin(env, shopId) {
+  const raw = await getIntegrationSecret(env, shopId, AUTOZONE_SECRET_NAME);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function handleOrdering(request, env, context, segments) {
+  if (segments[1] !== 'autozone') throw new HttpError(404, 'Not found');
+  requireRole(context, ORDERING_ROLES);
+  if (request.method === 'GET') {
+    const login = await readAutozoneLogin(env, context.shopId);
+    const reveal = new URL(request.url).searchParams.get('reveal') === '1';
+    if (reveal && login) {
+      await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.reveal', username: login.username });
+    }
+    return json({
+      connected: Boolean(login?.username && login?.password),
+      username: login?.username || null,
+      connectedAt: login?.connectedAt || null,
+      ...(reveal && login?.password ? { password: login.password } : {}),
+    });
+  }
+  requireRole(context, ['owner', 'admin']);
+  if (request.method === 'POST') {
+    const body = await requestJson(request);
+    const username = String(body.username || '').trim().slice(0, 120);
+    const password = String(body.password || '').trim().slice(0, 200);
+    if (!username || !password) throw new HttpError(400, 'Username and password are required');
+    const record = { username, password, connectedAt: new Date().toISOString(), connectedBy: context.userId };
+    await saveIntegrationSecret(env, context.shopId, AUTOZONE_SECRET_NAME, JSON.stringify(record));
+    await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.connect', username });
+    return json({ connected: true, username, connectedAt: record.connectedAt }, 201);
+  }
+  if (request.method === 'DELETE') {
+    await deleteIntegrationSecret(env, context.shopId, AUTOZONE_SECRET_NAME);
+    await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.disconnect' });
     return json({ connected: false });
   }
   throw new HttpError(405, 'Method not allowed');
@@ -1435,6 +1479,31 @@ async function pkceChallenge(verifier) {
   return base64UrlEncode(new Uint8Array(digest));
 }
 
+function desktopHandoffPage(token) {
+  const link = `mechpro://auth?token=${encodeURIComponent(token)}`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
+  <title>Return to MechPro</title>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; background: #18252b; color: #f4f7f8; margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { max-width: 28rem; padding: 2rem; }
+    a { display: inline-block; margin-top: 1rem; background: #e8a317; color: #18252b; text-decoration: none; font-weight: 700; padding: 0.8rem 1.1rem; border-radius: 0.4rem; }
+    p { line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Google sign-in succeeded</h1>
+    <p>Open MechPro to finish signing in. If Windows asks which app to use, choose MechPro.</p>
+    <a href="${link}">Open MechPro</a>
+  </main>
+</body>
+</html>`;
+}
+
 function googleRedirectUri(request) {
   return new URL('/api/auth/google/callback', new URL(request.url).origin).toString();
 }
@@ -1532,13 +1601,15 @@ async function handleGoogleCallback(request, env) {
       now,
     ).run();
     const headers = new Headers({
-      Location: `mechpro://auth?token=${encodeURIComponent(handoffToken)}`,
+      'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
     });
     for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE, GOOGLE_DESKTOP_COOKIE]) {
       headers.append('Set-Cookie', clearCookieHeader(name));
     }
-    return new Response(null, { status: 302, headers });
+    return new Response(desktopHandoffPage(handoffToken), { status: 200, headers });
   }
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
@@ -1961,6 +2032,7 @@ async function route(request, env, analytics) {
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
+  if (segments[0] === 'ordering') return handleOrdering(request, env, context, segments);
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);

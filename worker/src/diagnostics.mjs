@@ -16,6 +16,8 @@ export const DIAGNOSTIC_PROCEDURES = {
   program_remote: { klass: 'immobilizer', mutating: true, autoAuth: true, ttlMs: 10 * 60 * 1000 },
   erase_keys: { klass: 'immobilizer', mutating: true, autoAuth: true, ttlMs: 10 * 60 * 1000 },
   module_flash: { klass: 'flash', mutating: true, autoAuth: true, ttlMs: 30 * 60 * 1000 },
+  module_coding: { klass: 'coding', mutating: true, autoAuth: true, ttlMs: 15 * 60 * 1000 },
+  bidirectional_control: { klass: 'bidirectional', mutating: true, autoAuth: true, ttlMs: 10 * 60 * 1000 },
 };
 
 export const PROGRAMMING_MODES = new Set(['simulate', 'live']);

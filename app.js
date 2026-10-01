@@ -1605,6 +1605,143 @@
     }
   });
 
+  // src/modules/autozone-pro.js
+  function autozoneProLoginUrl(keyword = "") {
+    const term = String(keyword || "").trim().replace(/\s+/g, " ").slice(0, 120);
+    const destination = new URL("/ui/product-results", "https://www.autozonepro.com");
+    if (term) destination.searchParams.set("searchKeyword", term);
+    const url = new URL(AUTOZONE_PRO_LOGIN);
+    url.searchParams.set("originalURL", `${destination.pathname}${destination.search}`);
+    return url.toString();
+  }
+  function orderingPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2, icon: icon2 }) {
+    const connected = Boolean(account.connected && account.username);
+    const status = connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>AutoZone Pro login saved</strong><span>${escapeHtml2(account.username)}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>No AutoZone Pro login saved</strong><span>An owner or admin can store the shop username and password. MechPro encrypts them and does not put them on the work order.</span></div></div>`;
+    const form = canSave ? `<form id="autozone-login-form" class="form-grid">
+        <label>Username<input name="username" autocomplete="off" value="${escapeHtml2(account.username || "")}" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
+        <button class="primary" type="submit">${icon2("save", 14)} Save AutoZone Pro login</button>
+        ${connected ? `<button class="secondary danger" type="button" id="autozone-disconnect">${icon2("log-out", 14)} Remove saved login</button>` : ""}
+      </form>` : '<p class="ops-note">Ask an owner or admin to save the shop AutoZone Pro login.</p>';
+    const unavailable = account.unavailable ? '<p class="login-error">Sign in to the shop account to store or copy the AutoZone Pro login.</p>' : "";
+    return `<section class="settings-panel autozone-ordering">
+      <div class="statement-head"><div><div class="eyebrow">Parts ordering</div><h2>AutoZone Pro</h2><p>Open the shop's AutoZone Pro account from MechPro. After you open it, paste the saved password on AutoZone's sign-in page. Ordering, pricing, and checkout stay on AutoZone Pro.</p></div>${icon2("shopping-cart", 20)}</div>
+      ${status}
+      ${unavailable}
+      ${form}
+      <form id="autozone-search-form" class="form-grid">
+        <label class="full">Part search<input name="keyword" placeholder="canister purge valve pump" /></label>
+        <button class="primary" type="submit">${icon2("search", 14)} Search on AutoZone Pro</button>
+        <button class="secondary" type="button" id="autozone-open">${icon2("external-link", 14)} Open AutoZone Pro</button>
+      </form>
+    </section>`;
+  }
+  var AUTOZONE_PRO_LOGIN;
+  var init_autozone_pro = __esm({
+    "src/modules/autozone-pro.js"() {
+      AUTOZONE_PRO_LOGIN = "https://www.autozonepro.com/ui/login";
+    }
+  });
+
+  // src/modules/offline-desktop.js
+  function escapeText(value2) {
+    return String(value2 || "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
+  }
+  function isOfflineDesktop() {
+    return Boolean(globalThis.window?.mechproDesktop?.offline && globalThis.window.mechproDesktop.localAuth);
+  }
+  function offlineSession(account) {
+    const expires = Math.floor(Date.now() / 1e3) + 12 * 60 * 60;
+    const email = String(account?.email || "").trim().toLowerCase();
+    const name = String(account?.name || "").trim();
+    return {
+      claims: {
+        sub: "offline-pc",
+        email,
+        name,
+        "custom:shopId": "offline-pc",
+        "custom:role": "admin",
+        exp: expires
+      },
+      expiresAt: expires * 1e3,
+      offline: true
+    };
+  }
+  function offlineLoginMarkup({ hasAccount, email, icon: icon2 }) {
+    const mark = icon2("wrench");
+    const lock = icon2("lock-keyhole", 15);
+    const buttonIcon = icon2(hasAccount ? "log-in" : "save", 16);
+    const safeEmail = escapeText(email);
+    const nameField = hasAccount ? "" : `<label for="offline-name">Your name</label><input id="offline-name" name="name" autocomplete="name" required minlength="2" maxlength="80" placeholder="Shop owner"/>`;
+    const confirmField = hasAccount ? "" : `<label for="offline-confirm">Confirm password</label><input id="offline-confirm" name="confirm" type="password" autocomplete="new-password" required minlength="8"/>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${mark}</div><div><div class="brand-name">MechPro</div><small>Offline on this PC</small></div></div><div class="eyebrow">This computer</div><h1>${hasAccount ? "Sign in on this computer" : "Create this computer\u2019s sign-in"}</h1><p>${hasAccount ? "The password check stays on this PC. Work orders, customers, and invoices open from this computer when the internet is down." : "Choose a password for this PC. MechPro stores the sign-in check here and does not send the password to the cloud."}</p><form id="login-form">${nameField}<label for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" required ${hasAccount ? `value="${safeEmail}"` : "autofocus"} placeholder="you@yourshop.com"/><label for="offline-password">Password</label><input id="offline-password" name="password" type="password" autocomplete="${hasAccount ? "current-password" : "new-password"}" required minlength="8" ${hasAccount ? "autofocus" : ""}/>${confirmField}<p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${buttonIcon}${hasAccount ? "Sign in" : "Save sign-in on this PC"}</button></form><div class="login-security">${lock}<span>Shop records for this copy are saved in the MechPro Offline folder on this computer.</span></div></section></main>`;
+  }
+  function stripOfflineSecrets(value2) {
+    if (Array.isArray(value2)) return value2.map(stripOfflineSecrets);
+    if (!value2 || typeof value2 !== "object") return value2;
+    const out = {};
+    for (const [key, item] of Object.entries(value2)) {
+      if (SECRET_KEY.test(key)) continue;
+      out[key] = stripOfflineSecrets(item);
+    }
+    return out;
+  }
+  function snapshotShop(state2) {
+    return stripOfflineSecrets(structuredClone(state2));
+  }
+  function applyShopSnapshot(state2, snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return false;
+    const clean = stripOfflineSecrets(snapshot);
+    for (const [key, value2] of Object.entries(clean)) state2[key] = value2;
+    return true;
+  }
+  function ensureOfflineOwner(state2, account) {
+    const email = String(account?.email || "").trim().toLowerCase();
+    const name = String(account?.name || email).trim();
+    const users = Array.isArray(state2.users) ? state2.users : [];
+    let user = users.find((item) => String(item?.email || "").trim().toLowerCase() === email);
+    if (!user) {
+      user = {
+        id: "user-offline-owner",
+        name,
+        email,
+        role: "admin",
+        title: "Owner",
+        techName: "",
+        active: true,
+        employeeId: "EMP-LOCAL",
+        phone: "",
+        address: "",
+        startDate: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        employmentType: "Salary",
+        payRate: 0,
+        payFrequency: "Biweekly",
+        department: "Management",
+        emergencyContact: "",
+        taxStatus: "W-2"
+      };
+      state2.users = [user, ...users];
+    } else {
+      user.name = name || user.name;
+      user.active = true;
+      if (!user.role) user.role = "admin";
+    }
+    state2.currentUserId = user.id;
+    return user;
+  }
+  var SECRET_KEY;
+  var init_offline_desktop = __esm({
+    "src/modules/offline-desktop.js"() {
+      SECRET_KEY = /^(password|passphrase|secret|token|apikey|api_key)$/i;
+    }
+  });
+
   // src/runtime/catalog-inspection-ui.js
   function readItems(form, catalog, existing) {
     const source = existing?.items?.length ? existing.items : null;
@@ -2336,6 +2473,7 @@
     return location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
   }
   async function cloudflareAccessSignIn() {
+    if (isOfflineDesktop()) throw new Error("Sign in with the password saved on this computer.");
     if (isLocalShell()) return localAccessSession();
     const response = await fetch(`${cloudflareConfig2.apiUrl}/auth/session`, { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } });
     const session = await response.json().catch(() => ({}));
@@ -2448,7 +2586,7 @@
     return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } });
   }
   async function verifyDesktopEntitlement() {
-    if (!isDesktopApp || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
+    if (!isDesktopApp || isOfflineDesktop() || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
       desktopEntitlementVerified = true;
       return true;
     }
@@ -2501,6 +2639,15 @@
     }
   }
   async function apiFetch(path, options = {}) {
+    if (isOfflineDesktop()) {
+      const method = String(options.method || "GET").toUpperCase();
+      if (method === "GET" || method === "HEAD") {
+        const offlineError = new Error("This copy of MechPro keeps shop records on this computer.");
+        offlineError.retryable = false;
+        throw offlineError;
+      }
+      return { queued: true };
+    }
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareMutation(path, options);
     try {
@@ -2877,7 +3024,7 @@
   }
   function sidebarNavigation() {
     const counts = { active: visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, orders: visibleOrders().length, overdue: state.invoices.filter((x) => x.status === "overdue").length, unread: state.conversations.reduce((sum, item) => sum + chatUnread(item), 0) };
-    const oem = typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable();
+    const oem = true;
     return visibleSidebar2(canAccess, { oem }).map((section) => `<div class="nav-label">${escapeHtml(section.label)}</div><nav class="nav" aria-label="${escapeHtml(section.label)}">${section.items.map((item) => nav(item.route, item.icon, item.label, item.count ? String(counts[item.count] || "") : "")).join("")}</nav>`).join("");
   }
   function attentionMenu() {
@@ -3013,7 +3160,7 @@
     return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
   function operationsInventory() {
-    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button></td></tr>`).join("");
+    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
     return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>`;
   }
   function visibleCannedServices() {
@@ -3051,11 +3198,56 @@
     return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value2, text]) => `<button class="tab ${reminderFilter === value2 ? "active" : ""}" data-reminder-filter="${value2}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
   }
   function operationsDiagnostics() {
-    const output = state.elmOutput || "Connect an adapter to begin. Basic OBD-II data only; this does not provide OEM programming, coding, or bidirectional controls.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
-    return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop \xB7 compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>`;
+    const output = state.elmOutput || "Connect an ELM327 for generic OBD-II data. OEM programming, module coding, and bidirectional controls are in OEM diagnostics.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
+    return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop \xB7 compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button><button class="primary" id="open-oem-programming" type="button">${icon("radio-tower", 14)} OEM programming, coding, and bidirectional</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>`;
+  }
+  function operationsOrdering() {
+    const canSave = ["owner", "admin"].includes(currentUser()?.role);
+    return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon });
+  }
+  async function loadAutozoneAccount(force = false) {
+    if (autozoneAccount.loaded && !force) return;
+    autozoneAccount = { ...autozoneAccount, loaded: true };
+    try {
+      const account = await apiFetch("/ordering/autozone");
+      autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true };
+    } catch {
+      autozoneAccount = { connected: false, loaded: true, unavailable: true };
+    }
+    if (state.route === "shopops" && shopOpsTab === "ordering") render();
+  }
+  async function openAutozoneOrder(keyword) {
+    const url = autozoneProLoginUrl(keyword);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      toast("Allow pop-ups to open AutoZone Pro.");
+      return;
+    }
+    if (!autozoneAccount.connected) {
+      toast("AutoZone Pro opened. Save the shop login on Ordering to copy the password next time.");
+      return;
+    }
+    try {
+      const detail = await apiFetch("/ordering/autozone?reveal=1");
+      if (detail?.password && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(detail.password);
+        toast(`AutoZone Pro opened for ${detail.username}. Password copied \u2014 paste it on their sign-in page.`);
+        return;
+      }
+      toast(`AutoZone Pro opened. Sign in as ${detail?.username || "the saved user"}.`);
+    } catch (error) {
+      toast(error.message || "AutoZone Pro opened. The saved password could not be copied.");
+    }
+  }
+  async function saveAutozoneLogin(form) {
+    const data = Object.fromEntries(new FormData(form));
+    const account = await apiFetch("/ordering/autozone", { method: "POST", body: JSON.stringify({ username: data.username, password: data.password }) });
+    autozoneAccount = { connected: true, username: account.username, connectedAt: account.connectedAt, loaded: true };
+    toast("AutoZone Pro login saved");
+    render();
   }
   function shopOperations() {
-    const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab];
+    const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["ordering", "Ordering"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, ordering: operationsOrdering, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab];
     return shell(`${heading("Connected workflow", "Shop operations", "Linked vehicles, inspections, stock, service templates, reminders, vendors, and basic OBD-II tools.", false)}<div class="accounting-tabs ops-tabs">${tabs.map((tab) => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${view()}`);
   }
   function openVehicleForm(existing = null) {
@@ -3495,6 +3687,43 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     }
   }
   function bindShopOperations() {
+    document.querySelector("#open-oem-programming")?.addEventListener("click", () => {
+      state.route = "oem-diagnostics";
+      save();
+      render();
+    });
+    document.querySelectorAll("[data-order-autozone]").forEach((button) => {
+      button.onclick = () => {
+        const item = state.inventory.find((row) => row.id === button.dataset.orderAutozone);
+        void openAutozoneOrder(item?.name || "");
+      };
+    });
+    document.querySelector("#autozone-login-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await saveAutozoneLogin(event.target);
+      } catch (error) {
+        toast(error.message || "Could not save the AutoZone Pro login");
+      }
+    });
+    document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => {
+      try {
+        await apiFetch("/ordering/autozone", { method: "DELETE" });
+        autozoneAccount = { connected: false, loaded: true };
+        toast("AutoZone Pro login removed");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not remove the AutoZone Pro login");
+      }
+    });
+    document.querySelector("#autozone-search-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void openAutozoneOrder(new FormData(event.target).get("keyword"));
+    });
+    document.querySelector("#autozone-open")?.addEventListener("click", () => {
+      void openAutozoneOrder("");
+    });
+    if (shopOpsTab === "ordering") void loadAutozoneAccount();
     document.querySelectorAll("[data-ops-tab]").forEach((button) => button.onclick = () => {
       shopOpsTab = button.dataset.opsTab;
       render();
@@ -3702,8 +3931,9 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
+    if (isOfflineDesktop()) return offlineLoginMarkup({ hasAccount: offlineAccountReady, email: offlineAccountEmail, icon });
     const googleUrl = `${cloudflareConfig2.authEndpoints.google}?returnTo=%2F${isDesktopApp ? "&desktop=1" : ""}`, google = isLocalShell() ? "" : `<a class="google-login-button" href="${googleUrl}" ${isDesktopApp ? 'target="_blank" rel="noopener"' : ""}><span class="google-mark" aria-hidden="true">G</span><span>Continue with Google</span></a><div class="login-divider"><span>or use your email</span></div>`;
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>Use your verified Google account, or receive a one-time link at your work email. No password required.</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>${isDesktopApp ? "Google opens in your browser. After you choose an account, click Open MechPro to return to this app." : "Use your verified Google account, or receive a one-time link at your work email. No password required."}</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>`;
   }
   async function upgradeShopPlan() {
     const plans = [["shop", "Shop \xB7 $139/mo"], ["solo", "Solo \xB7 $69/mo"], ["shop_pro", "Shop Pro \xB7 $279/mo"], ["enterprise", "Enterprise \xB7 $559/mo"]];
@@ -5130,6 +5360,20 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     state.appointments = state.appointments.map((item) => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item);
   }
   async function startApp() {
+    if (isOfflineDesktop()) {
+      desktopEntitlementVerified = true;
+      try {
+        const status = await window.mechproDesktop.localAuth.status();
+        offlineAccountReady = Boolean(status?.exists);
+        offlineAccountEmail = status?.email || "";
+        const snapshot = await window.mechproDesktop.localShop.load();
+        if (snapshot) applyShopSnapshot(state, snapshot);
+      } catch (error) {
+        console.error("Offline shop could not be opened", error);
+      }
+      render();
+      return;
+    }
     try {
       const session = await cloudflareAccessSignIn();
       const user = await resolveAuthenticatedProfile(session);
@@ -5151,7 +5395,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, SENSITIVE_FIELD_PATTERN, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, SENSITIVE_FIELD_PATTERN, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -5163,6 +5407,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_canned_services();
       init_repair_guide();
       init_shop_inspections();
+      init_autozone_pro();
+      init_offline_desktop();
       init_catalog_inspection_ui();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
@@ -5273,6 +5519,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       cloudflareConfig2 = window.__MECHPRO_CONFIG__.cloudflare;
       desktopEntitlementVerified = !isDesktopApp;
       desktopLoginMessage = "";
+      offlineAccountReady = false;
+      offlineAccountEmail = "";
       cloudflareSignIn = cloudflareAccessSignIn;
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
       flushingMutationQueue = false;
@@ -5286,6 +5534,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       attentionDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
+      autozoneAccount = { connected: false, loaded: false };
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
       financeDerivedCache = null;
       baseShopOperations = shopOperations;
@@ -5390,6 +5639,24 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           submitButton.disabled = true;
           desktopEntitlementVerified = !isDesktopApp;
           try {
+            if (isOfflineDesktop()) {
+              const data = Object.fromEntries(new FormData(form));
+              if (!offlineAccountReady && data.password !== data.confirm) throw new Error("Those passwords do not match.");
+              const account = offlineAccountReady ? await window.mechproDesktop.localAuth.signIn({ email: data.email, password: data.password }) : await window.mechproDesktop.localAuth.create({ name: data.name, email: data.email, password: data.password });
+              const session = offlineSession(account);
+              sessionStorage.setItem(storageKeys.session, JSON.stringify(session));
+              const user = ensureOfflineOwner(state, account);
+              pendingAuthProfile = null;
+              state.currentUserId = user.id;
+              desktopEntitlementVerified = true;
+              offlineAccountReady = true;
+              offlineAccountEmail = account.email;
+              state.route = roleRoutes[user.role]?.[0] || "home";
+              query = "";
+              save();
+              render();
+              return;
+            }
             if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in.");
             if (isLocalShell()) {
               const session = await cloudflareSignIn();
@@ -5804,7 +6071,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         await ensureCannedMenu();
       };
       stampDemoAppointments();
-      if (isDesktopApp) setInterval(async () => {
+      if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {
         if (!authSession()) return;
         try {
           await verifyDesktopEntitlement();
@@ -5815,6 +6082,28 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           render();
         }
       }, DESKTOP_ENTITLEMENT_INTERVAL);
+      saveCloudPreferences = save;
+      offlineSaveTimer = 0;
+      save = function() {
+        saveCloudPreferences();
+        if (!isOfflineDesktop() || !window.mechproDesktop?.localShop) return;
+        clearTimeout(offlineSaveTimer);
+        offlineSaveTimer = setTimeout(() => {
+          void window.mechproDesktop.localShop.save(snapshotShop(state)).catch((error) => console.error("Offline save failed", error));
+        }, 200);
+      };
+      window.addEventListener("pagehide", () => {
+        if (isOfflineDesktop() && window.mechproDesktop?.localShop) void window.mechproDesktop.localShop.save(snapshotShop(state));
+      });
+      window.icon = icon;
+      window.escapeHtml = escapeHtml;
+      window.shell = shell;
+      window.heading = heading;
+      window.toast = toast;
+      window.apiFetch = apiFetch;
+      window.save = save;
+      Object.defineProperty(window, "state", { get: () => state });
+      Object.defineProperty(window, "render", { get: () => render });
       void startApp();
     }
   });

@@ -266,6 +266,29 @@ async function programKey(params = {}) {
   return rpcCall(method, { authorizationToken });
 }
 
+/** Module coding (WriteDataByIdentifier) — requires a module_coding token and programming security. */
+async function codeModule(params = {}) {
+  const authorizationToken = preflightAuthorization('module_coding', params);
+  await ensureHost();
+  return rpcCall('codeModule', {
+    authorizationToken,
+    target: params.target,
+    did: params.did,
+    data: params.data,
+  });
+}
+
+/** Named actuator test (InputOutputControl) — requires a bidirectional_control token. */
+async function bidirectionalControl(params = {}) {
+  const authorizationToken = preflightAuthorization('bidirectional_control', params);
+  await ensureHost();
+  return rpcCall('bidirectionalControl', {
+    authorizationToken,
+    control: params.control,
+    state: params.state,
+  });
+}
+
 /** ECU reflash via the UDS programming sequence — requires a module_flash token. */
 async function flashModule(params = {}) {
   const authorizationToken = preflightAuthorization('module_flash', params);
@@ -323,6 +346,8 @@ module.exports = {
   clearDtcs,
   securityAccess,
   programKey,
+  codeModule,
+  bidirectionalControl,
   flashModule,
   startLiveLog,
   stopLiveLog,

@@ -40,6 +40,8 @@ function procedureLabel(key) {
     program_remote: 'Program remote',
     erase_keys: 'Erase / relearn keys',
     module_flash: 'Flash / reprogram module',
+    module_coding: 'Module coding',
+    bidirectional_control: 'Bidirectional control',
   })[key] || key;
 }
 
@@ -140,6 +142,13 @@ function friendlyOemError(error) {
 }
 
 const KEY_PROCEDURES = ['add_key', 'all_keys_lost', 'program_remote', 'erase_keys'];
+const BIDIRECTIONAL_CONTROLS = [
+  ['cooling_fan', 'Cooling fan'],
+  ['fuel_pump', 'Fuel pump'],
+  ['ac_clutch', 'A/C clutch'],
+  ['evap_purge', 'EVAP purge'],
+  ['return_control', 'Return control to ECU'],
+];
 
 function oemSecurityLoginCard(diag) {
   const auth = diag.autoAuth || {};
@@ -197,6 +206,18 @@ function oemProgrammingPanel(diag, coverage, vehicle, status) {
         <button class="primary danger" id="oem-flash-run" ${status.connected ? '' : 'disabled'}>${icon('cpu', 14)} Flash module</button>
         ${progress > 0 ? `<div class="oem-progress"><div class="oem-progress-bar" style="width:${progress}%"></div><span>${progress}%</span></div>` : ''}
       </div>
+      <div class="oem-coding">
+        <h4>Module coding</h4>
+        <label>Identifier (DID)<input id="oem-code-did" placeholder="F190" maxlength="6" /></label>
+        <label>Data (hex)<input id="oem-code-data" placeholder="01 02" /></label>
+        <button class="secondary" id="oem-code-run" ${status.connected ? '' : 'disabled'}>${icon('pencil', 14)} Write coding</button>
+      </div>
+      <div class="oem-bidirectional">
+        <h4>Bidirectional controls</h4>
+        <div class="ops-actions">
+          ${BIDIRECTIONAL_CONTROLS.map(([id, label]) => `<button class="secondary" data-bidi="${id}" ${status.connected ? '' : 'disabled'}>${icon('activity', 14)} ${escapeHtml(label)}</button>`).join('')}
+        </div>
+      </div>
       ${result ? `<div class="messaging-status ready">${icon('circle-check', 15)}<div><strong>${escapeHtml(result.title)}</strong><span>${escapeHtml(result.detail)}</span></div></div>` : ''}
     </section>`;
 }
@@ -209,12 +230,7 @@ function oemDiagnosticsView() {
   const log = (diag.commLog || []).slice(-100).map(formatCommEntry).join('\n') || 'No communication yet.';
   const dtcs = (diag.dtcs || []).map((d) => `${d.code} (${d.status}) — ${d.description}`).join('\n') || 'No DTCs read yet.';
 
-  if (!isOemDiagnosticsAvailable()) {
-    return shell(`${heading('OEM diagnostics', 'Dodge / Ram diagnostics', 'J2534 Pass-Thru diagnostics require the MechPro Windows desktop application.', false)}
-      <section class="diagnostics-console oem-diagnostics">
-        <div class="messaging-status idle">${icon('monitor', 17)}<div><strong>Windows desktop required</strong><span>OEM diagnostics with J2534 adapter support is available in the MechPro Windows app only.</span></div></div>
-      </section>`);
-  }
+  const desktop = isOemDiagnosticsAvailable();
 
   const adaptersList = (diag.adapters || []).map(normalizeOemAdapter).filter(Boolean);
   const hardwareAdapters = adaptersList.filter((a) => a.id !== 'simulator');
@@ -223,7 +239,11 @@ function oemDiagnosticsView() {
     ? ''
     : `<div class="ledger-note">${icon('info', 15)} No J2534 hardware detected. Install your adapter vendor software (for TOPDON RLink X7: RLink Platform → Drivers → download the J2534 driver), plug in USB, then click Refresh. MechPro scans both 64-bit and 32-bit Windows J2534 registry entries.</div>`;
 
-  return shell(`${heading('Stellantis OEM', 'Dodge / Ram diagnostics', 'Phase 1: J2534 identification, DTC read/clear, and coverage eligibility. Key programming is not enabled in this release.', false)}
+  const desktopNote = desktop
+    ? ''
+    : `<div class="ledger-note">${icon('monitor', 15)} The vehicle bus runs in the MechPro Windows app with a J2534 pass-thru. Connect the shop AutoAuth account here, then open OEM diagnostics on that PC and choose Live.</div>`;
+  return shell(`${heading('Stellantis OEM', 'Dodge / Ram diagnostics', 'Live OEM programming, module coding, and bidirectional controls on Shop Pro with AutoAuth and a J2534 pass-thru.', false)}
+    ${desktopNote}
     <section class="oem-phase-notice">${icon('shield-alert', 16)}<span><strong>Authorized shop use only.</strong> Diagnostics and any programming-class work require a signed repair order, a licensed J2534 interface, and shop AutoAuth credentials for live mode. MechPro does not provide immobilizer bypass, key cloning, rolling-code attacks, or theft-unlock tools.</span></section>
     <section class="diagnostics-console oem-diagnostics">
       <div class="oem-preflight">
@@ -440,6 +460,36 @@ async function oemProgram(procedure) {
   toast('Programming procedure complete');
 }
 
+async function oemCodeModule() {
+  const target = document.querySelector('#oem-flash-target')?.value || '0x7E0';
+  const did = document.querySelector('#oem-code-did')?.value || '';
+  const data = document.querySelector('#oem-code-data')?.value || '';
+  const mode = loadOemDiagState().programmingMode === 'live' ? 'live' : 'simulate';
+  if (!confirm(`Write coding ${did} on ${target} (${mode} mode)? Confirm the VIN before continuing.`)) return;
+  const { token, vin } = await oemAuthorize('module_coding');
+  const result = await oemDiagApi().codeModule({ target, did, data, authorizationToken: token });
+  await oemAudit({ kind: 'diagnostics.coding', target, did, vin, mode, bytes: result.bytes });
+  saveOemDiagState({
+    programmingResult: { title: 'Module coding complete', detail: `${target} · DID ${result.did} · ${result.bytes} bytes` },
+    lastError: null,
+  });
+  toast('Module coding complete');
+}
+
+async function oemBidirectional(control) {
+  const label = BIDIRECTIONAL_CONTROLS.find(([id]) => id === control)?.[1] || control;
+  const mode = loadOemDiagState().programmingMode === 'live' ? 'live' : 'simulate';
+  if (!confirm(`${label} (${mode} mode)? Stay with the vehicle until control returns to the module.`)) return;
+  const { token, vin } = await oemAuthorize('bidirectional_control');
+  const result = await oemDiagApi().bidirectionalControl({ control, authorizationToken: token });
+  await oemAudit({ kind: 'diagnostics.bidirectional', control, vin, mode, state: result.state });
+  saveOemDiagState({
+    programmingResult: { title: `${label} ${result.state}`, detail: `${control} · ${mode}` },
+    lastError: null,
+  });
+  toast(`${label} ${result.state}`);
+}
+
 async function oemFlashModule() {
   const diag = loadOemDiagState();
   const mode = diag.programmingMode === 'live' ? 'live' : 'simulate';
@@ -466,7 +516,6 @@ async function oemFlashModule() {
 }
 
 function bindOemDiagnostics() {
-  if (!isOemDiagnosticsAvailable()) return;
   document.querySelector('#oem-autoauth-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     try { await oemConnectAutoAuth(event.target); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
@@ -481,6 +530,7 @@ function bindOemDiagnostics() {
     saveOemDiagState({ programmingMode: button.dataset.progMode, programmingResult: null, flashProgress: 0 });
     render();
   }));
+  if (!isOemDiagnosticsAvailable()) return;
   document.querySelector('#oem-sec-immo')?.addEventListener('click', async () => {
     try { await oemUnlockSecurity('immobilizer'); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   });
@@ -489,6 +539,12 @@ function bindOemDiagnostics() {
   });
   document.querySelectorAll('[data-prog-key]').forEach((button) => button.addEventListener('click', async () => {
     try { await oemProgram(button.dataset.progKey); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  }));
+  document.querySelector('#oem-code-run')?.addEventListener('click', async () => {
+    try { await oemCodeModule(); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
+  });
+  document.querySelectorAll('[data-bidi]').forEach((button) => button.addEventListener('click', async () => {
+    try { await oemBidirectional(button.dataset.bidi); render(); } catch (e) { saveOemDiagState({ lastError: friendlyOemError(e) }); render(); }
   }));
   document.querySelector('#oem-flash-run')?.addEventListener('click', async () => {
     try { await oemFlashModule(); render(); } catch (e) { saveOemDiagState({ flashProgress: 0, lastError: friendlyOemError(e) }); render(); }
