@@ -36,11 +36,14 @@ Request:
   "message": "Explain the next tests for this intermittent CAN fault and check the open job.",
   "history": [],
   "model": "sonnet",
-  "autoEscalate": true
+  "autoEscalate": true,
+  "sessionId": "optional-session-id"
 }
 ```
 
-`model` accepts `sonnet` (default) or `opus`. With `autoEscalate: true`, the routing helper selects Opus only when multiple hard-diagnostic signals are present. The JSON response includes `model`, `modelFamily`, `routingReason`, and token usage.
+`model` accepts `sonnet` (default) or `opus`. With `autoEscalate: true`, the routing helper selects Opus only when multiple hard-diagnostic signals are present. The JSON response includes `model`, `modelFamily`, `routingReason`, `sessionId`, and token usage.
+
+Each chat is assigned to a tenant-namespaced Durable Object. Send the returned `sessionId` on the next turn to continue server-owned history. Existing clients that send `history` remain compatible: it seeds a new session's history, after which the Durable Object retains the last 20 user/assistant messages.
 
 For local testing with the development auth bypass:
 

@@ -9,6 +9,7 @@ import {
   selectAnthropicModel,
   shouldEscalateToOpus,
 } from '../src/ai.mjs';
+import { AiChatSession } from '../src/chat-session.mjs';
 import { buildDeepgramSettings } from '../src/voice-session.mjs';
 
 function secret() {
@@ -174,6 +175,28 @@ function assistantDb() {
   };
 }
 
+function chatNamespace(env) {
+  const sessions = new Map();
+  return {
+    idFromName(name) {
+      return name;
+    },
+    get(id) {
+      if (!sessions.has(id)) {
+        const values = new Map();
+        const state = {
+          storage: {
+            async get(key) { return values.get(key); },
+            async put(key, value) { values.set(key, value); },
+          },
+        };
+        sessions.set(id, new AiChatSession(state, env));
+      }
+      return sessions.get(id);
+    },
+  };
+}
+
 function assistantRequest() {
   return new Request('https://app.example.test/api/ai/assistant', {
     method: 'POST',
@@ -196,15 +219,18 @@ test('authenticated assistant route calls Anthropic and records per-shop usage',
       usage: { input_tokens: 12, output_tokens: 14 },
     });
   });
-  const response = await worker.fetch(assistantRequest(), {
+  const env = {
     DB,
     DEV_AUTH_BYPASS: '1',
     AI_ENABLED: '1',
     ANTHROPIC_API_KEY: apiKey,
-  });
+  };
+  env.AI_CHAT_SESSIONS = chatNamespace(env);
+  const response = await worker.fetch(assistantRequest(), env);
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.equal(payload.modelFamily, 'sonnet');
+  assert.match(payload.sessionId, /^[a-f0-9-]{36}$/);
   assert.equal(payload.usage.inputTokens, 12);
   assert.equal(provider.mock.callCount(), 1);
   const usageInsert = DB.calls.find(call => /INSERT INTO ai_usage_events/.test(call.sql));

@@ -41,6 +41,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "AI_CHAT_SESSIONS",
+        "class_name": "AiChatSession"
+      },
+      {
         "name": "AI_VOICE_SESSIONS",
         "class_name": "AiVoiceSession"
       }
@@ -50,6 +54,10 @@
     {
       "tag": "v1-ai-voice-sessions",
       "new_sqlite_classes": ["AiVoiceSession"]
+    },
+    {
+      "tag": "v2-ai-chat-sessions",
+      "new_sqlite_classes": ["AiChatSession"]
     }
   ],
   "observability": {

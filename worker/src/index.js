@@ -34,9 +34,10 @@ import {
   recordAiUsage,
   runAnthropicTurn,
 } from './ai.mjs';
+import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 
-export { AiVoiceSession };
+export { AiChatSession, AiVoiceSession };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -912,20 +913,34 @@ async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
   if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_CHAT_SESSIONS) throw new HttpError(503, 'MechPro AI chat sessions are not configured');
   await enforceAiRateLimit(env, context);
   const body = await requestJson(request);
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
-  const result = await aiAnswer(env, context.shopId, message, body.history, {
-    requestedModel: body.model,
-    autoEscalate: body.autoEscalate === true,
-    userId: context.userId,
-  });
+  const requestedSessionId = String(body.sessionId || '').trim();
+  if (requestedSessionId && !/^[A-Za-z0-9_-]{8,100}$/.test(requestedSessionId)) {
+    throw new HttpError(400, 'sessionId is invalid');
+  }
+  const sessionId = requestedSessionId || crypto.randomUUID();
+  const id = env.AI_CHAT_SESSIONS.idFromName(`${context.shopId}:${sessionId}`);
+  const stub = env.AI_CHAT_SESSIONS.get(id);
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.set('X-MechPro-Ai-Session-Id', sessionId);
+  const sessionResponse = await stub.fetch(new Request('https://ai-session.internal/turn', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...body, message }),
+  }));
+  const result = await sessionResponse.json();
+  if (!sessionResponse.ok) return json(result, sessionResponse.status);
   captureForContext(analytics, context, 'ai_assistant_queried', {
     model: result.model,
     routing_reason: result.routingReason,
   });
-  return json({ message: result.text, ...result, text: undefined });
+  return json(result);
 }
 
 async function handleVoiceSession(request, env, context) {
