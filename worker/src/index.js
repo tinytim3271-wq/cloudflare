@@ -28,6 +28,15 @@ import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnos
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
+import {
+  calculateTextCost,
+  isAiEnabled,
+  recordAiUsage,
+  runAnthropicTurn,
+} from './ai.mjs';
+import { AiVoiceSession } from './voice-session.mjs';
+
+export { AiVoiceSession };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -870,50 +879,70 @@ async function enforceAiRateLimit(env, context) {
   if (Number(row?.request_count || 0) > 30) throw new HttpError(429, 'Assistant rate limit exceeded. Try again in a minute.');
 }
 
-async function shopContext(env, shopId) {
-  const compact = value => {
-    const text = String(value || '');
-    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
-  };
-  const result = await env.DB.prepare(
-    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type IN ('orders','invoices','payments','customers','appointments','vehicles','conversations') ORDER BY updated_at DESC LIMIT 60",
-  ).bind(shopId).all();
-  return result.results.map(row => {
-    const item = entityRecord(row);
-    return {
-      type: row.entity_type, id: compact(item.id), name: compact(item.name), status: compact(item.status), customer: compact(item.customer),
-      vehicle: compact(item.vehicle), amount: Number(item.amount || 0), due: compact(item.due), technician: compact(item.tech),
-      promise: compact(item.promise), concern: compact(item.complaint),
-    };
+async function aiAnswer(env, shopId, message, history = [], options = {}) {
+  const result = await runAnthropicTurn(env, {
+    shopId,
+    message,
+    history,
+    requestedModel: options.requestedModel,
+    autoEscalate: options.autoEscalate,
   });
-}
-
-async function aiAnswer(env, shopId, message, history = []) {
-  const context = await shopContext(env, shopId);
-  const system = `You are MechPro Assistant for an automotive repair shop. Be concise and conversational. Never invent customer records, prices, availability, payment status, or repair certainty. Treat shop data as private. For safety-critical automotive questions, recommend current manufacturer service information and qualified technician verification. Shop data: ${JSON.stringify(context)}`;
-  const messages = [
-    { role: 'system', content: system },
-    ...history.slice(-10).map(entry => ({
-      role: entry.role === 'assistant' || entry.direction === 'outbound' ? 'assistant' : 'user',
-      content: typeof entry.content === 'string' ? entry.content : String(entry.content?.[0]?.text || ''),
-    })).filter(entry => entry.content),
-    { role: 'user', content: message },
-  ];
-  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-  const result = await env.AI.run(model, { messages, max_tokens: 700, temperature: 0.3 });
-  return { text: result.response || 'I could not produce an answer right now.', model };
+  const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
+  await recordAiUsage(env, {
+    shopId,
+    userId: options.userId || null,
+    channel: options.channel || 'text',
+    provider: 'anthropic',
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    ...costs,
+    metadata: { routingReason: result.routingReason, source: options.source || 'assistant' },
+  });
+  return {
+    text: result.text,
+    model: result.model,
+    modelFamily: result.family,
+    routingReason: result.routingReason,
+    usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+  };
 }
 
 async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
   await enforceAiRateLimit(env, context);
   const body = await requestJson(request);
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
-  const result = await aiAnswer(env, context.shopId, message, Array.isArray(body.history) ? body.history : []);
-  captureForContext(analytics, context, 'ai_assistant_queried', { model: result.model });
-  return json({ message: result.text, model: result.model });
+  const result = await aiAnswer(env, context.shopId, message, body.history, {
+    requestedModel: body.model,
+    autoEscalate: body.autoEscalate === true,
+    userId: context.userId,
+  });
+  captureForContext(analytics, context, 'ai_assistant_queried', {
+    model: result.model,
+    routing_reason: result.routingReason,
+  });
+  return json({ message: result.text, ...result, text: undefined });
+}
+
+async function handleVoiceSession(request, env, context) {
+  if (request.method !== 'GET' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    throw new HttpError(426, 'A WebSocket upgrade is required');
+  }
+  requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_VOICE_SESSIONS) throw new HttpError(503, 'Voice AI is not configured');
+  const id = env.AI_VOICE_SESSIONS.newUniqueId();
+  const stub = env.AI_VOICE_SESSIONS.get(id);
+  const headers = new Headers(request.headers);
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.delete('Cookie');
+  headers.delete('Cf-Access-Jwt-Assertion');
+  return stub.fetch(new Request(request, { headers }));
 }
 
 async function saveIntegrationSecret(env, shopId, name, value) {
@@ -1075,7 +1104,11 @@ async function handleAgentPhoneWebhook(request, env, shopId) {
   if (body.event !== 'agent.message' || !['voice', 'sms', 'mms', 'imessage'].includes(String(body.channel))) return json({ received: true });
   const transcript = String(body.data?.transcript || body.data?.message || '').trim().slice(0, 4000);
   if (!transcript) return json({ text: 'How can I help you today?' });
-  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || []));
+  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || [], {
+    userId: 'agentphone',
+    channel: body.channel === 'voice' ? 'voice' : 'text',
+    source: 'agentphone',
+  }));
 }
 
 async function handleFiles(request, env, context, segments, analytics) {
@@ -2063,6 +2096,7 @@ async function route(request, env, analytics) {
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
@@ -2129,7 +2163,8 @@ export default {
         if (download) return download;
         return proxyPagesRequest(request, env);
       }
-      return withCors(await route(request, env, analytics), request, env);
+      const response = await route(request, env, analytics);
+      return response.status === 101 ? response : withCors(response, request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       posthog?.captureException(error, analytics.distinctId, {
