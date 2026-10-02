@@ -1088,6 +1088,8 @@ readNewOrderEstimate = function () {
 bindNewOrderEstimator = function () {
   const form = document.querySelector("#new-form"), root = document.querySelector("#new-estimate-lines");
   if (!form || !root) return;
+  form.elements.status.innerHTML = '<option value="estimate">Estimate · approval required before work</option>';
+  form.elements.status.value = "estimate";
   const toolbar = root.previousElementSibling;
   if (toolbar && !document.querySelector("#add-part-line")) {
     toolbar.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
