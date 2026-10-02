@@ -2,6 +2,7 @@ import { storageKeys } from '../shared/config.js';
 import { escapeAttr, escapeHtml } from '../shared/html.js';
 import { DESKTOP_ENTITLEMENT_INTERVAL, isDesktopApp } from '../modules/platform/detect.js';
 import { chatTime, cleanEmail } from '../modules/chat/utils.js';
+import { KEY_OPERATIONS, assertKeyJobAllowed, isRoAuthorizedForKeys, simulateKeyJob, simulateObdScan } from '../modules/shop-os/bay.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
@@ -588,6 +589,103 @@ loadExpensesFromApi = async function () { try { applyRemoteList("expenses", awai
 loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])) } catch (error) { console.error("Failed to load shop operations; using local data", error) } };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
+
+["admin", "technician", "service_writer"].forEach(role => {
+  for (const route of ["obd", "keys"]) {
+    if (roleRoutes[role] && !roleRoutes[role].includes(route)) roleRoutes[role].push(route);
+  }
+});
+state.diagnosticSessions = state.diagnosticSessions || [];
+state.keyJobs = state.keyJobs || [];
+shopEntityCollections.diagnosticsessions = "diagnosticSessions";
+shopEntityCollections.keyprogrammingjobs = "keyJobs";
+
+const shellShopOs = shell;
+shell = function (content) {
+  const html = shellShopOs(content);
+  const extra = `${nav("obd", "activity", "OBD bay")}${nav("keys", "key", "Key programming")}`;
+  if (!extra) return html;
+  return html.replace('<div class="nav-label shop-label">Shop</div><nav class="nav">', `<div class="nav-label shop-label">Shop</div><nav class="nav">${extra}`);
+};
+
+function orderChoices() {
+  return state.orders.map(order => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.id)} · ${escapeHtml(order.vehicle)} · ${escapeHtml(order.customer)}</option>`).join("");
+}
+
+function obdBay() {
+  const latest = [...state.diagnosticSessions].reverse()[0];
+  const result = latest ? `<section class="data-panel"><h3>Latest simulated scan</h3><p>${escapeHtml(latest.label)}</p><p class="mono">${escapeHtml(latest.vin)} · ${escapeHtml(latest.vehicle || "")}</p><ul>${(latest.dtcs || []).map(dtc => `<li><b>${escapeHtml(dtc.code)}</b> ${escapeHtml(dtc.description)}</li>`).join("")}</ul><p>Readiness: ${escapeHtml(Object.entries(latest.readiness || {}).map(([name, value]) => `${name} ${value}`).join(" · "))}</p></section>` : `<div class="home-empty"><p>No scans yet. Run the bench simulator against a repair order.</p></div>`;
+  return shell(`${heading("Diagnostics", "OBD bay", "Basic OBD-II from the bench simulator. Live ELM327 and OEM tools stay in Shop operations and OEM Diagnostics.", false)}<div class="messaging-status idle">${icon("info", 17)}<div><strong>Simulator</strong><span>These readings are sample data, not a connected adapter.</span></div></div><form class="form-grid" id="obd-scan-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><div class="full"><button class="primary" type="submit">${icon("activity", 14)} Run simulated scan</button></div></form>${result}`);
+}
+
+function keyProgrammingBay() {
+  const rows = [...state.keyJobs].reverse().map(job => `<tr><td>${escapeHtml(job.operation)}</td><td class="mono">${escapeHtml(job.roNumber || "")}</td><td>${escapeHtml(job.vehicle || "")}</td><td>${job.simulated ? "Simulator" : "Live"}</td><td>${escapeHtml(job.message || "")}</td></tr>`).join("");
+  return shell(`${heading("Authorized keys", "Key programming", "Identify, add, program, or test a key only when this vehicle has a signed repair order.", false)}<div class="messaging-status idle">${icon("shield", 17)}<div><strong>Signed repair order required</strong><span>Immobilizer bypass, cloning, and rolling-code requests are refused. Live tools need a shop-licensed programmer.</span></div></div><form class="form-grid" id="key-job-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><label>Operation<select name="operation">${KEY_OPERATIONS.map(item => `<option value="${item.id}">${item.label}</option>`).join("")}</select></label><label>Mode<select name="mode"><option value="simulator">Simulator</option><option value="live">Licensed programmer</option></select></label><label class="full">Notes<textarea name="notes" rows="3" placeholder="Customer authorization notes"></textarea></label><div class="full"><button class="primary" type="submit">${icon("key", 14)} Record key job</button></div></form><div class="data-panel"><table><thead><tr><th>Operation</th><th>RO</th><th>Vehicle</th><th>Mode</th><th>Result</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No key jobs recorded.</td></tr>`}</tbody></table></div>`);
+}
+
+async function rememberBayRecord(type, collection, record) {
+  const list = state[collection];
+  const index = list.findIndex(item => item.id === record.id);
+  if (index >= 0) list[index] = record;
+  else list.push(record);
+  save();
+  try { await saveShopEntity(type, record); } catch (error) { console.error(`Could not sync ${type}`, error); }
+}
+
+function bindShopOs() {
+  document.querySelector("#obd-scan-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const order = state.orders.find(item => item.id === new FormData(event.target).get("orderId"));
+    if (!order) { toast("Select a repair order"); return; }
+    const scan = simulateObdScan(order);
+    await rememberBayRecord("diagnosticsessions", "diagnosticSessions", { id: `scan-${Date.now()}`, orderId: order.id, customer: order.customer, ...scan });
+    toast("Simulated scan saved");
+    render();
+  });
+  document.querySelector("#key-job-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const order = state.orders.find(item => item.id === data.orderId);
+    try {
+      assertKeyJobAllowed({ order, estimates: state.estimates, operation: data.operation, notes: data.notes, liveProgrammer: data.mode === "live" });
+      const result = simulateKeyJob({ operation: data.operation, vin: order.vin });
+      const authorization = state.estimates.find(estimate => isRoAuthorizedForKeys(order, [estimate]));
+      await rememberBayRecord("keyprogrammingjobs", "keyJobs", {
+        id: `key-${Date.now()}`,
+        orderId: order.id,
+        roNumber: order.id,
+        customer: order.customer,
+        vehicle: order.vehicle,
+        vin: order.vin,
+        operation: data.operation,
+        notes: String(data.notes || "").trim(),
+        simulated: true,
+        authorizationName: authorization?.authorizationName || "",
+        message: result.message,
+        createdAt: now(),
+      });
+      toast("Key job recorded on the simulator");
+      render();
+    } catch (error) {
+      toast(error.message || "Key job blocked");
+    }
+  });
+}
+
+const renderShopOsCore = render;
+render = function () {
+  if (currentUser() && (state.route === "obd" || state.route === "keys")) {
+    const root = document.querySelector("#root");
+    root.innerHTML = state.route === "obd" ? obdBay() : keyProgrammingBay();
+    lucide.createIcons();
+    bind();
+    bindExpandedFeatures();
+    attachShopOperationsRoute();
+    bindShopOs();
+    return;
+  }
+  renderShopOsCore();
+};
 
 async function startApp() {
   // Always refresh /auth/session when possible so ACCESS_ADMIN_EMAILS promotions
