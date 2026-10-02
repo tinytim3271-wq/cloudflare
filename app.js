@@ -5802,8 +5802,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const button = event.target.querySelector("button[type=submit]");
       button.disabled = true;
       try {
-        const key = await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
-        const signature = { authorizationName: new FormData(event.target).get("authorizationName").trim(), signatureKey: key, signedAt: now(), source: "on-site" };
+        const signatureDataUrl = canvas.toDataURL("image/png");
+        const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
+        const signature = {
+          authorizationName: new FormData(event.target).get("authorizationName").trim(),
+          signatureKey: key,
+          signatureDataUrl: isLocalShell() ? signatureDataUrl : void 0,
+          signedAt: now(),
+          source: "on-site"
+        };
         if (kind === "estimate") {
           const decisions = Object.fromEntries(estimate.lines.map((line) => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
           const approved = approvedEstimate(estimate, decisions);
@@ -6658,7 +6665,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
               }
             };
             let saved = order;
-            if (!isOfflineDesktop()) {
+            if (!isOfflineDesktop() && !isLocalShell()) {
               const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(order) });
               saved = response?.queued ? order : response;
             }
