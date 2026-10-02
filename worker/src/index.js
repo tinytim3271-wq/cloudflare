@@ -36,6 +36,7 @@ import {
 } from './ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
+import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -2090,6 +2091,9 @@ async function route(request, env, analytics) {
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
   if (segments[0] === 'founding') return handleFounding(request, env);
   if (segments[0] === 'auth') return handleAuth(request, env, segments, analytics);
+  if (segments[0] === 'customer-documents') {
+    return handleCustomerDocument(request, env, decodeURIComponent(segments[1] || ''));
+  }
   if (segments[0] === 'payments' && segments[1] === 'webhook') {
     return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
   }
@@ -2114,6 +2118,7 @@ async function route(request, env, analytics) {
   if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
+  if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
