@@ -223,10 +223,12 @@ async function resolveAppSession(request, env) {
   const now = new Date();
   // Rolling session lifetime: an active session (or desktop app) keeps extending
   // its window and stays signed in until an explicit logout or full inactivity.
-  const sessionRemaining = Date.parse(row.expires_at) - now.getTime();
+  let expiresAt = String(row.expires_at || '');
+  const sessionRemaining = Date.parse(expiresAt) - now.getTime();
   if (Number.isFinite(sessionRemaining) && sessionRemaining < SESSION_REFRESH_THRESHOLD_MS) {
+    expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
     await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE id = ? AND revoked_at IS NULL')
-      .bind(new Date(now.getTime() + SESSION_TTL_MS).toISOString(), row.session_id)
+      .bind(expiresAt, row.session_id)
       .run();
   }
   const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
@@ -240,6 +242,7 @@ async function resolveAppSession(request, env) {
     email: String(row.email || '').trim().toLowerCase(),
     name: String(row.name || row.email || 'Customer'),
     sessionId: String(row.session_id),
+    expiresAt,
   };
 }
 
@@ -267,6 +270,7 @@ async function resolveContext(request, env) {
         name: appSession.name || 'Platform Administrator',
         claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
         sessionId: appSession.sessionId,
+        expiresAt: appSession.expiresAt,
       };
     }
     return {
@@ -277,6 +281,7 @@ async function resolveContext(request, env) {
       name: appSession.name,
       claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
       sessionId: appSession.sessionId,
+      expiresAt: appSession.expiresAt,
     };
   }
   let claims;
@@ -622,7 +627,15 @@ async function handleEntities(request, env, context, segments, analytics) {
 }
 
 async function handleAuthSession(request, context, analytics) {
-  const expires = Math.floor(Date.now() / 1000) + 3600;
+  // Browser sessionStorage treats expiresAt as a hard logout. It must mirror the
+  // rolling D1/cookie TTL (7 days), not a 1-hour claim window — otherwise an
+  // open dispatch tab self-signs-out after an hour despite a valid cookie.
+  const parsedExpiry = context.expiresAt ? Date.parse(context.expiresAt) : Number.NaN;
+  const expiresMs = Number.isFinite(parsedExpiry)
+    ? parsedExpiry
+    : Date.now() + SESSION_TTL_MS;
+  const expires = Math.max(Math.floor(Date.now() / 1000) + 1, Math.floor(expiresMs / 1000));
+  const cookieMaxAge = Math.max(1, expires - Math.floor(Date.now() / 1000));
   const sessionToken = getCookieValue(request, APP_SESSION_COOKIE);
   analytics.client?.identify({
     distinctId: context.userId,
@@ -649,7 +662,7 @@ async function handleAuthSession(request, context, analytics) {
       expiresAt: expires * 1000,
     },
     200,
-    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken) } : {},
+    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken, cookieMaxAge) } : {},
   );
 }
 
