@@ -631,12 +631,12 @@ function homeDashboard() {
 function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
 render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = homeDashboard(); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
-function applyRemoteList(key, records) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(key, remote, readMutationQueue()); save() }
+function applyRemoteList(key, records, entityType = key) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
 loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
 loadExpensesFromApi = async function () { try { applyRemoteList("expenses", await apiFetch("/entities/expenses")) } catch (error) { console.error("Failed to load expenses from API; using local data", error) } };
-loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])) } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
+loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type)) } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
 
@@ -1021,6 +1021,14 @@ async function startApp() {
   render();
 }
 if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => { if (!authSession()) return; try { await verifyDesktopEntitlement() } catch (error) { desktopLoginMessage = error.message; desktopEntitlementVerified = false; clearAuthSession(); render() } }, DESKTOP_ENTITLEMENT_INTERVAL);
+// Keep the HttpOnly cookie + sessionStorage expiresAt rolling for always-open
+// dispatch tabs. Without this, Max-Age from the last /auth/session would expire
+// even though D1 may still be extended by other API traffic.
+const SESSION_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
+if (!isOfflineDesktop()) setInterval(async () => {
+  if (isLocalShell() || !authSession()) return;
+  try { await cloudflareAccessSignIn() } catch { /* leave authSession() to clear on the next probe */ }
+}, SESSION_KEEPALIVE_MS);
 const saveCloudPreferences = save;
 let offlineSaveTimer = 0;
 save = function () { saveCloudPreferences(); if (!isOfflineDesktop() || !window.mechproDesktop?.localShop) return; clearTimeout(offlineSaveTimer); offlineSaveTimer = setTimeout(() => { void window.mechproDesktop.localShop.save(snapshotShop(state)).catch(error => console.error("Offline save failed", error)) }, 200) };
