@@ -153,6 +153,43 @@ test('remote estimate signature approves selected lines, locks them, and stores 
   assert.equal(fixture.links[0].result, 'approved');
 });
 
+test('remote estimate signature requires a decision for every line', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+        decisions: { labor: 'approved' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 400 && /every estimate line/i.test(error.message),
+  );
+});
+
+test('public response rejects oversized bodies before decoding a signature', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(2 * 1024 * 1024) },
+      body: '{}',
+    }), fixture.env, token),
+    error => error.status === 413,
+  );
+});
+
 test('invoice uses the same one-time mobile signature route', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'invoices', 'INV-1100'), {

@@ -3,6 +3,7 @@ import { HttpError, json, requestJson } from './http.mjs';
 
 const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SIGNATURE_LIMIT = 1024 * 1024;
+const RESPONSE_BODY_LIMIT = 1536 * 1024;
 
 const escapeHtml = value => String(value ?? '')
   .replaceAll('&', '&amp;')
@@ -198,6 +199,18 @@ async function storeSignature(env, link, dataUrl) {
   return key;
 }
 
+async function limitedResponseJson(request) {
+  const declaredLength = Number(request.headers.get('Content-Length') || 0);
+  if (declaredLength > RESPONSE_BODY_LIMIT) throw new HttpError(413, 'Customer response is too large');
+  const text = await request.text();
+  if (text.length > RESPONSE_BODY_LIMIT) throw new HttpError(413, 'Customer response is too large');
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON');
+  }
+}
+
 async function saveEntity(env, link, row, document) {
   const updatedAt = new Date().toISOString();
   document.updatedAt = updatedAt;
@@ -216,7 +229,7 @@ async function saveEntity(env, link, row, document) {
 async function recordResponse(request, env, link, row, document) {
   if (link.consumed_at) throw new HttpError(409, 'This link has already been used');
   if (new Date(link.expires_at).getTime() <= Date.now()) throw new HttpError(410, 'This link has expired');
-  const body = await requestJson(request);
+  const body = await limitedResponseJson(request);
   const action = String(body.action || '');
   if (action === 'decline' && link.document_type === 'estimate') {
     const timestamp = new Date().toISOString();
@@ -229,6 +242,13 @@ async function recordResponse(request, env, link, row, document) {
   if (action !== 'sign') throw new HttpError(400, 'Choose sign or decline');
   const authorizationName = String(body.authorizationName || '').trim().slice(0, 100);
   if (!authorizationName) throw new HttpError(400, 'Full name is required');
+  const decisions = body.decisions && typeof body.decisions === 'object' ? body.decisions : {};
+  if (link.document_type === 'estimate') {
+    const missingDecision = (document.estimate?.lines || [])
+      .map((line, index) => normalizeEstimateLine(line, index))
+      .some(line => !['approved', 'declined'].includes(decisions[line.id]));
+    if (missingDecision) throw new HttpError(400, 'Approve or decline every estimate line');
+  }
   const signatureKey = await storeSignature(env, link, body.signatureDataUrl);
   const timestamp = new Date().toISOString();
   const signature = {
@@ -238,7 +258,7 @@ async function recordResponse(request, env, link, row, document) {
     source: 'remote',
   };
   if (link.document_type === 'estimate') {
-    const next = approvedEstimate(document.estimate || {}, body.decisions || {});
+    const next = approvedEstimate(document.estimate || {}, decisions);
     if (!next.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
     document.estimate = next;
     document.total = next.total;
@@ -248,7 +268,7 @@ async function recordResponse(request, env, link, row, document) {
     document.tax = next.tax;
     document.status = 'approved';
     document.linesLockedAt = timestamp;
-    document.estimateApproval = { status: 'approved', ...signature, decisions: body.decisions || {} };
+    document.estimateApproval = { status: 'approved', ...signature, decisions };
   } else {
     document.signature = signature;
   }
