@@ -6623,7 +6623,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           const data = Object.fromEntries(new FormData(form));
           const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
           if (!customerName) return toast("Select or enter a customer name");
-          const button = form.querySelector("button[type=submit]");
+          const button = form.querySelector("button[type=submit], button:not([type])");
           button.disabled = true;
           try {
             let customer = state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
