@@ -93,6 +93,10 @@ function dispatch(method, params) {
       return programKey('erase_keys', params);
     case 'flashModule':
       return flashModule(params);
+    case 'codeModule':
+      return codeModule(params);
+    case 'bidirectionalControl':
+      return bidirectionalControl(params);
     case 'startLiveLog':
       if (!sim?.connected) throw new Error('Not connected to vehicle bus');
       sim.liveLogActive = true;
@@ -409,6 +413,56 @@ function flashModule(params = {}) {
     softwareVersion: version,
     progress,
     completedAt: sim.modules[target].flashedAt,
+  };
+}
+
+const BIDIRECTIONAL_CONTROLS = {
+  cooling_fan: { did: 'D100', option: '03', label: 'Cooling fan' },
+  fuel_pump: { did: 'D101', option: '03', label: 'Fuel pump' },
+  ac_clutch: { did: 'D102', option: '03', label: 'A/C clutch' },
+  evap_purge: { did: 'D103', option: '03', label: 'EVAP purge' },
+  return_control: { did: 'D100', option: '00', label: 'Return control to ECU' },
+};
+
+function bidirectionalControl(params = {}) {
+  const payload = verifyProcedureToken('bidirectional_control', params);
+  requireConnection();
+  const control = BIDIRECTIONAL_CONTROLS[String(params.control || '')];
+  if (!control) throw new Error('Unsupported bidirectional control');
+  const option = params.state === 'off' || params.control === 'return_control' ? '00' : control.option;
+  logEntry('tx', '0x7E0', '1003', 'Extended diagnostic session (0x10 0x03)');
+  logEntry('rx', '0x7E8', '5003', 'Extended session active');
+  logEntry('tx', '0x7E0', `2F${control.did}${option}`, `InputOutputControl: ${control.label}`);
+  logEntry('rx', '0x7E8', `6F${control.did}${option}`, 'Control accepted');
+  return {
+    procedure: 'bidirectional_control',
+    completed: true,
+    vin: payload.vin,
+    control: params.control,
+    state: option === '00' ? 'released' : 'active',
+  };
+}
+
+function codeModule(params = {}) {
+  const payload = verifyProcedureToken('module_coding', params);
+  requireConnection();
+  requireSecurity('flash');
+  const did = String(params.did || '').replace(/^0x/i, '').replace(/\s+/g, '').toUpperCase();
+  if (!/^[0-9A-F]{4}$/.test(did)) throw new Error('Coding identifier must be a 4-digit hex DID');
+  const data = String(params.data || '').replace(/\s+/g, '').toUpperCase();
+  if (!/^[0-9A-F]{2,128}$/.test(data) || data.length % 2) throw new Error('Coding data must be even-length hex, up to 64 bytes');
+  const target = String(params.target || '0x7E0');
+  logEntry('tx', target, `2E${did}${data}`, 'WriteDataByIdentifier');
+  logEntry('rx', target, `6E${did}`, 'Coding accepted');
+  if (!sim.coding) sim.coding = {};
+  sim.coding[`${target}:${did}`] = data;
+  return {
+    procedure: 'module_coding',
+    completed: true,
+    vin: payload.vin,
+    target,
+    did: `0x${did}`,
+    bytes: data.length / 2,
   };
 }
 

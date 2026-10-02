@@ -1,0 +1,51 @@
+{
+  "appId": "com.mechpro.dispatch.offline",
+  "productName": "MechPro Offline",
+  "artifactName": "MechPro-Offline-Setup-${version}.${ext}",
+  "publish": null,
+  "directories": {
+    "output": "dist/windows-offline"
+  },
+  "files": [
+    "app.js",
+    "diagnostics-ui.js",
+    "index.html",
+    "styles.css",
+    "theme.css",
+    "manifest.webmanifest",
+    "service-worker.js",
+    "mechpro-icon.svg",
+    "assets/**/*",
+    "desktop/**/*",
+    "diagnostics/j2534-host-node/**/*",
+    "diagnostics/coverage/**/*",
+    "downloads/**"
+  ],
+  "extraResources": [
+    {
+      "from": "diagnostics/j2534-host-node",
+      "to": "j2534-host-node",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "diagnostics/j2534-service/publish/win-x64",
+      "to": "j2534-host",
+      "filter": ["J2534.Host.exe"]
+    },
+    {
+      "from": "desktop/packaged-secrets",
+      "to": "diagnostics-secrets",
+      "filter": ["capability-secret.txt"]
+    }
+  ],
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "MechPro Offline"
+  }
+}

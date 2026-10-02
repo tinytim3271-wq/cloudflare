@@ -99,6 +99,13 @@ public sealed class UdsClient
         return response;
     }
 
+    /// <summary>InputOutputControlByIdentifier (0x2F) for a named actuator test.</summary>
+    public void InputOutputControl(ushort did, byte option, string txId, string rxId)
+    {
+        var response = _channel.SendRequest([0x2F, (byte)(did >> 8), (byte)(did & 0xFF), option], txId, rxId);
+        ValidatePositive(response, 0x6F);
+    }
+
     /// <summary>WriteDataByIdentifier (0x2E).</summary>
     public void WriteDataByIdentifier(ushort did, byte[] data, string txId, string rxId)
     {

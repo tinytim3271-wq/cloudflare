@@ -12,14 +12,71 @@
     <main class="auth-card">
       <a class="brand" href="/features"><span class="brand-mark">M</span><span><strong>MECHPRO</strong><small>Shop operating system</small></span></a>
       <h1>Create your shop</h1>
-      <p>Start a 14-day trial. You will sign in with a one-time link sent to the owner email. Add employees after the shop exists.</p>
-      <form method="post" action="/api/auth/magic-link">
+      <p id="trial-copy">Start a 14-day trial on the Shop plan ($139/month after the trial). You will sign in with a one-time link sent to the owner email. Unlimited users. No card on this step.</p>
+      <form id="signup-form" method="post" action="/api/auth/magic-link">
+        <label for="plan">Plan
+          <select id="plan" name="plan">
+            <option value="solo">Solo · $69/month</option>
+            <option value="shop" selected>Shop · $139/month</option>
+            <option value="shop_pro">Shop Pro · $279/month</option>
+            <option value="enterprise">Enterprise · $559/month</option>
+          </select>
+        </label>
         <label for="shopName">Shop name<input id="shopName" type="text" name="shopName" placeholder="Your Car Guy" required /></label>
         <label for="ownerName">Owner name<input id="ownerName" type="text" name="ownerName" autocomplete="name" required /></label>
         <label for="email">Owner email<input id="email" type="email" name="email" autocomplete="email" placeholder="owner@yourshop.com" required /></label>
         <input type="hidden" name="returnTo" value="/app" />
+        <p id="signup-error" class="error" hidden></p>
         <button class="btn primary" type="submit">Start trial</button>
       </form>
+      <script>
+        const params = new URLSearchParams(location.search);
+        const plan = params.get("plan") || "shop";
+        const invite = params.get("invite") || "";
+        const select = document.querySelector("#plan");
+        const foundingNames = { founding_solo: "Founding Solo · $49/month", founding_shop: "Founding Shop · $99/month", founding_pro: "Founding Pro · $199/month" };
+        const trialCopy = document.querySelector("#trial-copy");
+        const publicCopy = {
+          solo: "Start a 14-day trial on Solo ($69/month after the trial).",
+          shop: "Start a 14-day trial on Shop ($139/month after the trial).",
+          shop_pro: "Start a 14-day trial on Shop Pro ($279/month after the trial). Live OEM programming is included on this plan.",
+          enterprise: "Start a 14-day trial on Enterprise ($559/month after the trial).",
+        };
+        const rest = " You will sign in with a one-time link sent to the owner email. Unlimited users. No card on this step.";
+        function showPublicCopy() {
+          trialCopy.textContent = `${publicCopy[select.value] || publicCopy.shop}${rest}`;
+        }
+        if (foundingNames[plan] && invite) {
+          select.innerHTML = `<option value="${plan}" selected>${foundingNames[plan]}</option>`;
+          trialCopy.textContent = "This invite locks the founding rate for as long as the subscription stays active. The 14-day trial still starts with a one-time email link. No card on this step.";
+        } else if ([...select.options].some((option) => option.value === plan)) {
+          select.value = plan;
+          showPublicCopy();
+          select.addEventListener("change", showPublicCopy);
+        }
+        document.querySelector("#signup-form").addEventListener("submit", async (event) => {
+          if (!invite || !foundingNames[select.value]) return;
+          event.preventDefault();
+          const errorEl = document.querySelector("#signup-error");
+          const button = event.currentTarget.querySelector("button");
+          errorEl.hidden = true;
+          button.disabled = true;
+          try {
+            const response = await fetch("/api/founding/claim", {
+              method: "POST",
+              headers: { Accept: "application/json", "Content-Type": "application/json" },
+              body: JSON.stringify({ token: invite, planId: select.value, email: document.querySelector("#email").value }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.message || "This Founding Member spot could not be claimed.");
+            event.currentTarget.submit();
+          } catch (error) {
+            button.disabled = false;
+            errorEl.hidden = false;
+            errorEl.textContent = error.message;
+          }
+        });
+      </script>
       <div class="auth-links">
         <a href="/login">I already have an account</a>
         <a href="/pricing">Compare plans</a>
