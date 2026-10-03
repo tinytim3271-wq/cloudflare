@@ -7,8 +7,8 @@ export function normalizeEnvValue(value) {
 }
 
 export function resolveR2UploadEnv(env = process.env) {
-  const accessKeyId = normalizeEnvValue(env.AWS_ACCESS_KEY_ID) || normalizeEnvValue(env.R2_ACCESS_KEY_ID);
-  const secretAccessKey = normalizeEnvValue(env.AWS_SECRET_ACCESS_KEY) || normalizeEnvValue(env.R2_SECRET_ACCESS_KEY);
+  const accessKeyId = normalizeEnvValue(env.R2_ACCESS_KEY_ID);
+  const secretAccessKey = normalizeEnvValue(env.R2_SECRET_ACCESS_KEY);
   const accountId = normalizeEnvValue(env.CLOUDFLARE_ACCOUNT_ID) || normalizeEnvValue(env.CF_ACCOUNT_ID);
   const bucket = normalizeEnvValue(env.CLOUDFLARE_R2_BUCKET) || normalizeEnvValue(env.R2_BUCKET);
   const missing = [];
