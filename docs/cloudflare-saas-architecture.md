@@ -166,7 +166,10 @@ Session lifetime:
 - Sign-in (magic link or Google) creates a 7-day session.
 - Sessions are **rolling**: any authenticated request extends the D1
   `expires_at` back to the full TTL whenever less than half of it remains,
-  and `GET /api/auth/session` re-issues the cookie with a fresh `Max-Age`.
+  and `GET /api/auth/session` re-issues the cookie with a fresh `Max-Age`
+  and returns `expiresAt` / `claims.exp` aligned to that same D1 expiry
+  (not a shorter 1-hour window). The PWA treats `expiresAt` as a hard
+  logout, so the values must stay in sync.
   An actively used device (including the desktop app) therefore stays
   signed in until an explicit `POST /api/auth/logout` or a 7-day idle gap.
 - `POST /api/auth/logout` revokes the D1 session immediately and is

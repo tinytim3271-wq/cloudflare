@@ -73,16 +73,23 @@ test('auth/session extends a near-expiry session and re-issues the rolling cooki
   assert.equal(DB.calls.revokedAt, null);
   const payload = await response.json();
   assert.equal(payload.claims['custom:shopId'], 'shop-a');
+  assert.ok(Math.abs(payload.expiresAt - (now + WEEK_MS)) < 60 * 1000, 'client expiresAt must match the rolled D1 TTL');
+  assert.ok(Math.abs(payload.claims.exp * 1000 - (now + WEEK_MS)) < 60 * 1000);
 });
 
 test('auth/session leaves a fresh session expiry untouched but still re-issues the cookie', async () => {
-  const DB = mockSessionsDb({ expiresAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString() });
+  const now = Date.now();
+  const remainingMs = 6 * 24 * 60 * 60 * 1000;
+  const DB = mockSessionsDb({ expiresAt: new Date(now + remainingMs).toISOString() });
   const response = await worker.fetch(sessionGetRequest('tok-123'), { DB });
   assert.equal(response.status, 200);
   assert.equal(DB.calls.expiresUpdates.length, 0);
   const setCookie = response.headers.get('Set-Cookie') || '';
   assert.match(setCookie, /^mechpro_session=tok-123;/);
-  assert.match(setCookie, /Max-Age=604800/);
+  assert.match(setCookie, /Max-Age=518400/);
+  const payload = await response.json();
+  assert.ok(Math.abs(payload.expiresAt - (now + remainingMs)) < 60 * 1000, 'client expiresAt must mirror remaining D1 lifetime');
+  assert.ok(payload.expiresAt - Date.now() > 24 * 60 * 60 * 1000, 'must not collapse to a 1-hour client logout window');
 });
 
 test('auth/logout revokes the active session and clears the cookie', async () => {

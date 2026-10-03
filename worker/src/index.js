@@ -28,6 +28,17 @@ import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnos
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
+import {
+  calculateTextCost,
+  isAiEnabled,
+  recordAiUsage,
+  runAnthropicTurn,
+} from './ai.mjs';
+import { AiChatSession } from './chat-session.mjs';
+import { AiVoiceSession } from './voice-session.mjs';
+import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
+
+export { AiChatSession, AiVoiceSession };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -223,10 +234,12 @@ async function resolveAppSession(request, env) {
   const now = new Date();
   // Rolling session lifetime: an active session (or desktop app) keeps extending
   // its window and stays signed in until an explicit logout or full inactivity.
-  const sessionRemaining = Date.parse(row.expires_at) - now.getTime();
+  let expiresAt = String(row.expires_at || '');
+  const sessionRemaining = Date.parse(expiresAt) - now.getTime();
   if (Number.isFinite(sessionRemaining) && sessionRemaining < SESSION_REFRESH_THRESHOLD_MS) {
+    expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
     await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE id = ? AND revoked_at IS NULL')
-      .bind(new Date(now.getTime() + SESSION_TTL_MS).toISOString(), row.session_id)
+      .bind(expiresAt, row.session_id)
       .run();
   }
   const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
@@ -240,6 +253,7 @@ async function resolveAppSession(request, env) {
     email: String(row.email || '').trim().toLowerCase(),
     name: String(row.name || row.email || 'Customer'),
     sessionId: String(row.session_id),
+    expiresAt,
   };
 }
 
@@ -267,6 +281,7 @@ async function resolveContext(request, env) {
         name: appSession.name || 'Platform Administrator',
         claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
         sessionId: appSession.sessionId,
+        expiresAt: appSession.expiresAt,
       };
     }
     return {
@@ -277,6 +292,7 @@ async function resolveContext(request, env) {
       name: appSession.name,
       claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
       sessionId: appSession.sessionId,
+      expiresAt: appSession.expiresAt,
     };
   }
   let claims;
@@ -622,7 +638,15 @@ async function handleEntities(request, env, context, segments, analytics) {
 }
 
 async function handleAuthSession(request, context, analytics) {
-  const expires = Math.floor(Date.now() / 1000) + 3600;
+  // Browser sessionStorage treats expiresAt as a hard logout. It must mirror the
+  // rolling D1/cookie TTL (7 days), not a 1-hour claim window — otherwise an
+  // open dispatch tab self-signs-out after an hour despite a valid cookie.
+  const parsedExpiry = context.expiresAt ? Date.parse(context.expiresAt) : Number.NaN;
+  const expiresMs = Number.isFinite(parsedExpiry)
+    ? parsedExpiry
+    : Date.now() + SESSION_TTL_MS;
+  const expires = Math.max(Math.floor(Date.now() / 1000) + 1, Math.floor(expiresMs / 1000));
+  const cookieMaxAge = Math.max(1, expires - Math.floor(Date.now() / 1000));
   const sessionToken = getCookieValue(request, APP_SESSION_COOKIE);
   analytics.client?.identify({
     distinctId: context.userId,
@@ -649,7 +673,7 @@ async function handleAuthSession(request, context, analytics) {
       expiresAt: expires * 1000,
     },
     200,
-    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken) } : {},
+    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken, cookieMaxAge) } : {},
   );
 }
 
@@ -870,50 +894,84 @@ async function enforceAiRateLimit(env, context) {
   if (Number(row?.request_count || 0) > 30) throw new HttpError(429, 'Assistant rate limit exceeded. Try again in a minute.');
 }
 
-async function shopContext(env, shopId) {
-  const compact = value => {
-    const text = String(value || '');
-    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
-  };
-  const result = await env.DB.prepare(
-    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type IN ('orders','invoices','payments','customers','appointments','vehicles','conversations') ORDER BY updated_at DESC LIMIT 60",
-  ).bind(shopId).all();
-  return result.results.map(row => {
-    const item = entityRecord(row);
-    return {
-      type: row.entity_type, id: compact(item.id), name: compact(item.name), status: compact(item.status), customer: compact(item.customer),
-      vehicle: compact(item.vehicle), amount: Number(item.amount || 0), due: compact(item.due), technician: compact(item.tech),
-      promise: compact(item.promise), concern: compact(item.complaint),
-    };
+async function aiAnswer(env, shopId, message, history = [], options = {}) {
+  const result = await runAnthropicTurn(env, {
+    shopId,
+    message,
+    history,
+    requestedModel: options.requestedModel,
+    autoEscalate: options.autoEscalate,
   });
-}
-
-async function aiAnswer(env, shopId, message, history = []) {
-  const context = await shopContext(env, shopId);
-  const system = `You are MechPro Assistant for an automotive repair shop. Be concise and conversational. Never invent customer records, prices, availability, payment status, or repair certainty. Treat shop data as private. For safety-critical automotive questions, recommend current manufacturer service information and qualified technician verification. Shop data: ${JSON.stringify(context)}`;
-  const messages = [
-    { role: 'system', content: system },
-    ...history.slice(-10).map(entry => ({
-      role: entry.role === 'assistant' || entry.direction === 'outbound' ? 'assistant' : 'user',
-      content: typeof entry.content === 'string' ? entry.content : String(entry.content?.[0]?.text || ''),
-    })).filter(entry => entry.content),
-    { role: 'user', content: message },
-  ];
-  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-  const result = await env.AI.run(model, { messages, max_tokens: 700, temperature: 0.3 });
-  return { text: result.response || 'I could not produce an answer right now.', model };
+  const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
+  await recordAiUsage(env, {
+    shopId,
+    userId: options.userId || null,
+    channel: options.channel || 'text',
+    provider: 'anthropic',
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    ...costs,
+    metadata: { routingReason: result.routingReason, source: options.source || 'assistant' },
+  });
+  return {
+    text: result.text,
+    model: result.model,
+    modelFamily: result.family,
+    routingReason: result.routingReason,
+    usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+  };
 }
 
 async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_CHAT_SESSIONS) throw new HttpError(503, 'MechPro AI chat sessions are not configured');
   await enforceAiRateLimit(env, context);
   const body = await requestJson(request);
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
-  const result = await aiAnswer(env, context.shopId, message, Array.isArray(body.history) ? body.history : []);
-  captureForContext(analytics, context, 'ai_assistant_queried', { model: result.model });
-  return json({ message: result.text, model: result.model });
+  const requestedSessionId = String(body.sessionId || '').trim();
+  if (requestedSessionId && !/^[A-Za-z0-9_-]{8,100}$/.test(requestedSessionId)) {
+    throw new HttpError(400, 'sessionId is invalid');
+  }
+  const sessionId = requestedSessionId || crypto.randomUUID();
+  const id = env.AI_CHAT_SESSIONS.idFromName(`${context.shopId}:${sessionId}`);
+  const stub = env.AI_CHAT_SESSIONS.get(id);
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.set('X-MechPro-Ai-Session-Id', sessionId);
+  const sessionResponse = await stub.fetch(new Request('https://ai-session.internal/turn', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...body, message }),
+  }));
+  const result = await sessionResponse.json();
+  if (!sessionResponse.ok) return json(result, sessionResponse.status);
+  captureForContext(analytics, context, 'ai_assistant_queried', {
+    model: result.model,
+    routing_reason: result.routingReason,
+  });
+  return json(result);
+}
+
+async function handleVoiceSession(request, env, context) {
+  if (request.method !== 'GET' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    throw new HttpError(426, 'A WebSocket upgrade is required');
+  }
+  requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_VOICE_SESSIONS) throw new HttpError(503, 'Voice AI is not configured');
+  const id = env.AI_VOICE_SESSIONS.newUniqueId();
+  const stub = env.AI_VOICE_SESSIONS.get(id);
+  const headers = new Headers(request.headers);
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.delete('Cookie');
+  headers.delete('Cf-Access-Jwt-Assertion');
+  return stub.fetch(new Request(request, { headers }));
 }
 
 async function saveIntegrationSecret(env, shopId, name, value) {
@@ -1075,7 +1133,11 @@ async function handleAgentPhoneWebhook(request, env, shopId) {
   if (body.event !== 'agent.message' || !['voice', 'sms', 'mms', 'imessage'].includes(String(body.channel))) return json({ received: true });
   const transcript = String(body.data?.transcript || body.data?.message || '').trim().slice(0, 4000);
   if (!transcript) return json({ text: 'How can I help you today?' });
-  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || []));
+  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || [], {
+    userId: 'agentphone',
+    channel: body.channel === 'voice' ? 'voice' : 'text',
+    source: 'agentphone',
+  }));
 }
 
 async function handleFiles(request, env, context, segments, analytics) {
@@ -2042,6 +2104,9 @@ async function route(request, env, analytics) {
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
   if (segments[0] === 'founding') return handleFounding(request, env);
   if (segments[0] === 'auth') return handleAuth(request, env, segments, analytics);
+  if (segments[0] === 'customer-documents') {
+    return handleCustomerDocument(request, env, decodeURIComponent(segments[1] || ''));
+  }
   if (segments[0] === 'payments' && segments[1] === 'webhook') {
     return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
   }
@@ -2063,8 +2128,10 @@ async function route(request, env, analytics) {
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
+  if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
@@ -2129,7 +2196,8 @@ export default {
         if (download) return download;
         return proxyPagesRequest(request, env);
       }
-      return withCors(await route(request, env, analytics), request, env);
+      const response = await route(request, env, analytics);
+      return response.status === 101 ? response : withCors(response, request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       posthog?.captureException(error, analytics.distinctId, {

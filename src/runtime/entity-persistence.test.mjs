@@ -55,6 +55,26 @@ test('queued deletes hide records while waiting to sync', () => {
   );
 });
 
+test('API entity types overlay even when UI state keys differ', () => {
+  const queue = [{
+    path: '/entities/inspectiontemplates/tpl-1',
+    method: 'PUT',
+    body: JSON.stringify({ id: 'tpl-1', name: 'Updated PPI' }),
+  }, {
+    path: '/entities/shopsettings/profile',
+    method: 'PUT',
+    body: JSON.stringify({ id: 'profile', shopName: 'Lee Auto' }),
+  }];
+  assert.deepEqual(
+    applyQueuedEntityMutations('inspectiontemplates', [{ id: 'tpl-1', name: 'Old' }], queue),
+    [{ id: 'tpl-1', name: 'Updated PPI' }],
+  );
+  assert.deepEqual(
+    applyQueuedEntityMutations('shopsettings', [{ id: 'profile', shopName: 'Old' }], queue),
+    [{ id: 'profile', shopName: 'Lee Auto' }],
+  );
+});
+
 test('id-less local sample rows survive an empty remote list', () => {
   const samples = [{ name: 'Demo Customer' }];
   assert.deepEqual(applyQueuedEntityMutations('customers', samples, []), samples);
