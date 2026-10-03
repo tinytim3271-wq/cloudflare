@@ -294,7 +294,7 @@ test('Google sign-in validates the ID token and creates a one-time desktop hando
           bind(...args) {
             return {
               async first() {
-                if (/FROM founding_invites/.test(sql)) return null;
+                if (/FROM founding_invites/i.test(sql)) return null;
                 assert.match(sql, /FROM users WHERE email/);
                 assert.equal(args[0], 'owner@example.test');
                 return {
