@@ -2685,16 +2685,7 @@
     toast("Signed out of MechPro");
   }
   function readMutationQueue() {
-    const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
-    if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
-    mutationQueueRaw = raw;
-    try {
-      mutationQueueCache = (JSON.parse(raw) || []).filter((item) => item?.method === "DELETE" || item?.body);
-    } catch {
-      mutationQueueCache = [];
-    }
-    ;
-    return mutationQueueCache;
+    return mutationQueueStore.read();
   }
   function writeMutationQueue(queue) {
     const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue);
