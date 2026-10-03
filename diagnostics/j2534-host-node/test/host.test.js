@@ -119,6 +119,10 @@ async function run() {
     () => rpc('flashModule', { authorizationToken: mint('module_flash'), target: '0x7E1', firmware: { size: 4096 } }),
     /SecurityAccess \(flash\) required/i,
   );
+  await assert.rejects(
+    () => rpc('codeModule', { authorizationToken: mint('module_coding'), did: 'F190', data: '01' }),
+    /SecurityAccess \(flash\) required/i,
+  );
   const secFlash = await rpc('securityAccess', { scope: 'flash' });
   assert.equal(secFlash.scope, 'flash');
   const flashed = await rpc('flashModule', {
@@ -131,6 +135,26 @@ async function run() {
   assert.ok(flashed.blocks >= 4);
   assert.equal(flashed.progress[flashed.progress.length - 1].percent, 100);
   assert.equal(flashed.softwareVersion, 'DT_ECM_5.7L_v2');
+
+  const coded = await rpc('codeModule', {
+    authorizationToken: mint('module_coding'),
+    target: '0x7E0',
+    did: 'F190',
+    data: '0102',
+  });
+  assert.equal(coded.completed, true);
+  assert.equal(coded.bytes, 2);
+  const fan = await rpc('bidirectionalControl', {
+    authorizationToken: mint('bidirectional_control'),
+    control: 'cooling_fan',
+  });
+  assert.equal(fan.completed, true);
+  assert.equal(fan.state, 'active');
+  const released = await rpc('bidirectionalControl', {
+    authorizationToken: mint('bidirectional_control'),
+    control: 'return_control',
+  });
+  assert.equal(released.state, 'released');
 
   // Communication log captured the UDS programming frames.
   const log = await rpc('pollLiveLog', { since: 0 });

@@ -365,8 +365,8 @@ test('Google sign-in validates the ID token and creates a one-time desktop hando
     `https://app.example.test/api/auth/google/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
     { headers: { Cookie: cookies } },
   ), env);
-  assert.equal(callback.status, 302);
-  assert.match(callback.headers.get('location'), /^mechpro:\/\/auth\?token=[a-f0-9]{32}$/);
+  assert.equal(callback.status, 200);
+  assert.match(await callback.text(), /href="mechpro:\/\/auth\?token=[a-f0-9]{32}"/);
   assert.doesNotMatch(callback.headers.getSetCookie().join('\n'), /mechpro_session=/);
   assert.equal(requests.length, 2);
 });

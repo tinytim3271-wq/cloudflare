@@ -21,6 +21,12 @@ describe('resolveDesktopStart', () => {
     assert.equal(result.useLocalAssets, true);
   });
 
+  it('loads local files for the offline edition', () => {
+    const result = resolveDesktopStart({ argv: ['electron', '.'], env: {}, offline: true });
+    assert.equal(result.offline, true);
+    assert.equal(result.useLocalAssets, true);
+  });
+
   it('honors MECHPRO_DESKTOP_URL overrides', () => {
     const result = resolveDesktopStart({
       argv: ['electron', '.'],

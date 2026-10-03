@@ -27,6 +27,19 @@ import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
+import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
+import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
+import {
+  calculateTextCost,
+  isAiEnabled,
+  recordAiUsage,
+  runAnthropicTurn,
+} from './ai.mjs';
+import { AiChatSession } from './chat-session.mjs';
+import { AiVoiceSession } from './voice-session.mjs';
+import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
+
+export { AiChatSession, AiVoiceSession };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 const APP_SESSION_COOKIE = 'mechpro_session';
@@ -35,6 +48,10 @@ const GOOGLE_NONCE_COOKIE = '__Host-mechpro_google_nonce';
 const GOOGLE_VERIFIER_COOKIE = '__Host-mechpro_google_verifier';
 const GOOGLE_RETURN_COOKIE = '__Host-mechpro_google_return';
 const GOOGLE_DESKTOP_COOKIE = '__Host-mechpro_google_desktop';
+
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+const SESSION_TTL_MS = SESSION_MAX_AGE_SECONDS * 1000;
+const SESSION_REFRESH_THRESHOLD_MS = SESSION_TTL_MS / 2;
 
 function createPostHog(env) {
   const apiKey = String(env.POSTHOG_API_KEY || '').trim();
@@ -180,7 +197,7 @@ function getCookieValue(request, name) {
   return cookieEntries(request)[name] || '';
 }
 
-function sessionCookieHeader(token, maxAgeSeconds = 60 * 60 * 24 * 7) {
+function sessionCookieHeader(token, maxAgeSeconds = SESSION_MAX_AGE_SECONDS) {
   return `${APP_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
 }
 
@@ -216,6 +233,16 @@ async function resolveAppSession(request, env) {
   `).bind(tokenHash, new Date().toISOString()).first();
   if (!row) return null;
   const now = new Date();
+  // Rolling session lifetime: an active session (or desktop app) keeps extending
+  // its window and stays signed in until an explicit logout or full inactivity.
+  let expiresAt = String(row.expires_at || '');
+  const sessionRemaining = Date.parse(expiresAt) - now.getTime();
+  if (Number.isFinite(sessionRemaining) && sessionRemaining < SESSION_REFRESH_THRESHOLD_MS) {
+    expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+    await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .bind(expiresAt, row.session_id)
+      .run();
+  }
   const lastSeenCutoff = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
   await env.DB.prepare(
     'UPDATE sessions SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)',
@@ -227,6 +254,7 @@ async function resolveAppSession(request, env) {
     email: String(row.email || '').trim().toLowerCase(),
     name: String(row.name || row.email || 'Customer'),
     sessionId: String(row.session_id),
+    expiresAt,
   };
 }
 
@@ -254,6 +282,7 @@ async function resolveContext(request, env) {
         name: appSession.name || 'Platform Administrator',
         claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
         sessionId: appSession.sessionId,
+        expiresAt: appSession.expiresAt,
       };
     }
     return {
@@ -264,6 +293,7 @@ async function resolveContext(request, env) {
       name: appSession.name,
       claims: { sub: appSession.userId, email: appSession.email, name: appSession.name },
       sessionId: appSession.sessionId,
+      expiresAt: appSession.expiresAt,
     };
   }
   let claims;
@@ -608,8 +638,17 @@ async function handleEntities(request, env, context, segments, analytics) {
   throw new HttpError(405, 'Method not allowed');
 }
 
-async function handleAuthSession(context, analytics) {
-  const expires = Math.floor(Date.now() / 1000) + 3600;
+async function handleAuthSession(request, context, analytics) {
+  // Browser sessionStorage treats expiresAt as a hard logout. It must mirror the
+  // rolling D1/cookie TTL (7 days), not a 1-hour claim window — otherwise an
+  // open dispatch tab self-signs-out after an hour despite a valid cookie.
+  const parsedExpiry = context.expiresAt ? Date.parse(context.expiresAt) : Number.NaN;
+  const expiresMs = Number.isFinite(parsedExpiry)
+    ? parsedExpiry
+    : Date.now() + SESSION_TTL_MS;
+  const expires = Math.max(Math.floor(Date.now() / 1000) + 1, Math.floor(expiresMs / 1000));
+  const cookieMaxAge = Math.max(1, expires - Math.floor(Date.now() / 1000));
+  const sessionToken = getCookieValue(request, APP_SESSION_COOKIE);
   analytics.client?.identify({
     distinctId: context.userId,
     properties: {
@@ -620,17 +659,23 @@ async function handleAuthSession(context, analytics) {
     },
   });
   captureForContext(analytics, context, 'auth_session_started');
-  return json({
-    claims: {
-      sub: context.userId,
-      email: context.email,
-      name: context.name,
-      'custom:shopId': context.shopId,
-      'custom:role': context.role,
-      exp: expires,
+  // Re-issue the session cookie on every /auth/session probe so a rolled-forward
+  // D1 expiry is mirrored in the browser (and desktop) cookie lifetime.
+  return json(
+    {
+      claims: {
+        sub: context.userId,
+        email: context.email,
+        name: context.name,
+        'custom:shopId': context.shopId,
+        'custom:role': context.role,
+        exp: expires,
+      },
+      expiresAt: expires * 1000,
     },
-    expiresAt: expires * 1000,
-  });
+    200,
+    sessionToken ? { 'Set-Cookie': sessionCookieHeader(sessionToken, cookieMaxAge) } : {},
+  );
 }
 
 async function handleVin(request, env, context, vin) {
@@ -684,7 +729,7 @@ async function recordDiagnosticAudit(env, context, event) {
 async function handleDiagnostics(request, env, context, segments, analytics) {
   const action = segments[1];
   // Diagnostics (including coverage lookups) are limited to shop-floor roles.
-  requireRole(context, ['admin', 'technician', 'service_writer']);
+  requireRole(context, ['owner', 'admin', 'technician', 'service_writer']);
   if (action === 'coverage') return handleCoverage(request, segments);
   if (action === 'autoauth') return handleAutoAuth(request, env, context);
   if (action === 'audit' && request.method === 'POST') {
@@ -703,6 +748,16 @@ async function handleDiagnostics(request, env, context, segments, analytics) {
     // LIVE programming against real modules requires licensed OEM AutoAuth
     // credentials provisioned for the shop. SIMULATE always drives the bench
     // simulator only, so it is safe to authorize without OEM credentials.
+    if (mode === 'live') {
+      const subscription = await env.DB.prepare('SELECT plan_id FROM subscriptions WHERE shop_id = ?').bind(context.shopId).first();
+      const planId = String(subscription?.plan_id || '');
+      if (!LIVE_DIAGNOSTICS_PLANS.has(planId)) {
+        return json({
+          authorized: false,
+          message: 'Live OEM programming is included on Shop Pro and Enterprise. Use Simulate on Solo and Shop, or upgrade the shop plan.',
+        }, 402);
+      }
+    }
     if (mode === 'live' && spec.autoAuth) {
       const login = await readAutoAuthLogin(env, context.shopId);
       if (!login) {
@@ -840,50 +895,84 @@ async function enforceAiRateLimit(env, context) {
   if (Number(row?.request_count || 0) > 30) throw new HttpError(429, 'Assistant rate limit exceeded. Try again in a minute.');
 }
 
-async function shopContext(env, shopId) {
-  const compact = value => {
-    const text = String(value || '');
-    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
-  };
-  const result = await env.DB.prepare(
-    "SELECT entity_type, data_json FROM entities WHERE shop_id = ? AND entity_type IN ('orders','invoices','payments','customers','appointments','vehicles','conversations') ORDER BY updated_at DESC LIMIT 60",
-  ).bind(shopId).all();
-  return result.results.map(row => {
-    const item = entityRecord(row);
-    return {
-      type: row.entity_type, id: compact(item.id), name: compact(item.name), status: compact(item.status), customer: compact(item.customer),
-      vehicle: compact(item.vehicle), amount: Number(item.amount || 0), due: compact(item.due), technician: compact(item.tech),
-      promise: compact(item.promise), concern: compact(item.complaint),
-    };
+async function aiAnswer(env, shopId, message, history = [], options = {}) {
+  const result = await runAnthropicTurn(env, {
+    shopId,
+    message,
+    history,
+    requestedModel: options.requestedModel,
+    autoEscalate: options.autoEscalate,
   });
-}
-
-async function aiAnswer(env, shopId, message, history = []) {
-  const context = await shopContext(env, shopId);
-  const system = `You are MechPro Assistant for an automotive repair shop. Be concise and conversational. Never invent customer records, prices, availability, payment status, or repair certainty. Treat shop data as private. For safety-critical automotive questions, recommend current manufacturer service information and qualified technician verification. Shop data: ${JSON.stringify(context)}`;
-  const messages = [
-    { role: 'system', content: system },
-    ...history.slice(-10).map(entry => ({
-      role: entry.role === 'assistant' || entry.direction === 'outbound' ? 'assistant' : 'user',
-      content: typeof entry.content === 'string' ? entry.content : String(entry.content?.[0]?.text || ''),
-    })).filter(entry => entry.content),
-    { role: 'user', content: message },
-  ];
-  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-  const result = await env.AI.run(model, { messages, max_tokens: 700, temperature: 0.3 });
-  return { text: result.response || 'I could not produce an answer right now.', model };
+  const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
+  await recordAiUsage(env, {
+    shopId,
+    userId: options.userId || null,
+    channel: options.channel || 'text',
+    provider: 'anthropic',
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    ...costs,
+    metadata: { routingReason: result.routingReason, source: options.source || 'assistant' },
+  });
+  return {
+    text: result.text,
+    model: result.model,
+    modelFamily: result.family,
+    routingReason: result.routingReason,
+    usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+  };
 }
 
 async function handleAssistant(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_CHAT_SESSIONS) throw new HttpError(503, 'MechPro AI chat sessions are not configured');
   await enforceAiRateLimit(env, context);
   const body = await requestJson(request);
   const message = String(body.message || '').trim().slice(0, 4000);
   if (!message) throw new HttpError(400, 'A message is required');
-  const result = await aiAnswer(env, context.shopId, message, Array.isArray(body.history) ? body.history : []);
-  captureForContext(analytics, context, 'ai_assistant_queried', { model: result.model });
-  return json({ message: result.text, model: result.model });
+  const requestedSessionId = String(body.sessionId || '').trim();
+  if (requestedSessionId && !/^[A-Za-z0-9_-]{8,100}$/.test(requestedSessionId)) {
+    throw new HttpError(400, 'sessionId is invalid');
+  }
+  const sessionId = requestedSessionId || crypto.randomUUID();
+  const id = env.AI_CHAT_SESSIONS.idFromName(`${context.shopId}:${sessionId}`);
+  const stub = env.AI_CHAT_SESSIONS.get(id);
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.set('X-MechPro-Ai-Session-Id', sessionId);
+  const sessionResponse = await stub.fetch(new Request('https://ai-session.internal/turn', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...body, message }),
+  }));
+  const result = await sessionResponse.json();
+  if (!sessionResponse.ok) return json(result, sessionResponse.status);
+  captureForContext(analytics, context, 'ai_assistant_queried', {
+    model: result.model,
+    routing_reason: result.routingReason,
+  });
+  return json(result);
+}
+
+async function handleVoiceSession(request, env, context) {
+  if (request.method !== 'GET' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    throw new HttpError(426, 'A WebSocket upgrade is required');
+  }
+  requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
+  if (!env.AI_VOICE_SESSIONS) throw new HttpError(503, 'Voice AI is not configured');
+  const id = env.AI_VOICE_SESSIONS.newUniqueId();
+  const stub = env.AI_VOICE_SESSIONS.get(id);
+  const headers = new Headers(request.headers);
+  headers.set('X-MechPro-Shop-Id', context.shopId);
+  headers.set('X-MechPro-User-Id', context.userId);
+  headers.delete('Cookie');
+  headers.delete('Cf-Access-Jwt-Assertion');
+  return stub.fetch(new Request(request, { headers }));
 }
 
 async function saveIntegrationSecret(env, shopId, name, value) {
@@ -930,7 +1019,7 @@ async function handleAutoAuth(request, env, context) {
       connectedAt: login?.connectedAt || null,
     });
   }
-  requireRole(context, ['admin', 'super_admin']);
+  requireRole(context, ['owner', 'admin', 'super_admin']);
   if (request.method === 'POST') {
     const body = await requestJson(request);
     const provider = String(body.provider || 'autoauth_stellantis').trim();
@@ -945,6 +1034,50 @@ async function handleAutoAuth(request, env, context) {
   if (request.method === 'DELETE') {
     await deleteIntegrationSecret(env, context.shopId, AUTOAUTH_SECRET_NAME);
     await recordDiagnosticAudit(env, context, { kind: 'diagnostics.autoauth.disconnect' });
+    return json({ connected: false });
+  }
+  throw new HttpError(405, 'Method not allowed');
+}
+
+const AUTOZONE_SECRET_NAME = 'autozone-pro-login';
+const ORDERING_ROLES = ['owner', 'admin', 'service_writer', 'technician'];
+
+async function readAutozoneLogin(env, shopId) {
+  const raw = await getIntegrationSecret(env, shopId, AUTOZONE_SECRET_NAME);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function handleOrdering(request, env, context, segments) {
+  if (segments[1] !== 'autozone') throw new HttpError(404, 'Not found');
+  requireRole(context, ORDERING_ROLES);
+  if (request.method === 'GET') {
+    const login = await readAutozoneLogin(env, context.shopId);
+    const reveal = new URL(request.url).searchParams.get('reveal') === '1';
+    if (reveal && login) {
+      await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.reveal', username: login.username });
+    }
+    return json({
+      connected: Boolean(login?.username && login?.password),
+      username: login?.username || null,
+      connectedAt: login?.connectedAt || null,
+      ...(reveal && login?.password ? { password: login.password } : {}),
+    });
+  }
+  requireRole(context, ['owner', 'admin']);
+  if (request.method === 'POST') {
+    const body = await requestJson(request);
+    const username = String(body.username || '').trim().slice(0, 120);
+    const password = String(body.password || '').trim().slice(0, 200);
+    if (!username || !password) throw new HttpError(400, 'Username and password are required');
+    const record = { username, password, connectedAt: new Date().toISOString(), connectedBy: context.userId };
+    await saveIntegrationSecret(env, context.shopId, AUTOZONE_SECRET_NAME, JSON.stringify(record));
+    await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.connect', username });
+    return json({ connected: true, username, connectedAt: record.connectedAt }, 201);
+  }
+  if (request.method === 'DELETE') {
+    await deleteIntegrationSecret(env, context.shopId, AUTOZONE_SECRET_NAME);
+    await recordDiagnosticAudit(env, context, { kind: 'ordering.autozone.disconnect' });
     return json({ connected: false });
   }
   throw new HttpError(405, 'Method not allowed');
@@ -1001,7 +1134,11 @@ async function handleAgentPhoneWebhook(request, env, shopId) {
   if (body.event !== 'agent.message' || !['voice', 'sms', 'mms', 'imessage'].includes(String(body.channel))) return json({ received: true });
   const transcript = String(body.data?.transcript || body.data?.message || '').trim().slice(0, 4000);
   if (!transcript) return json({ text: 'How can I help you today?' });
-  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || []));
+  return json(await aiAnswer(env, shopId, transcript, body.recentHistory || [], {
+    userId: 'agentphone',
+    channel: body.channel === 'voice' ? 'voice' : 'text',
+    source: 'agentphone',
+  }));
 }
 
 async function handleFiles(request, env, context, segments, analytics) {
@@ -1203,7 +1340,8 @@ async function handleAdmin(request, env, context, segments, analytics) {
     const ownerName = String(body.ownerName || '').trim();
     const shopName = String(body.shopName || '').trim();
     const shopId = String(body.shopId || '').trim().toLowerCase();
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
+    if (!isPublicPlan(planId) && !isFoundingPlan(planId)) throw new HttpError(400, 'Choose Solo, Shop, Shop Pro, Enterprise, or a Founding Member plan');
     const accountMode = String(body.accountMode || body.subscriptionStatus || 'trialing').trim().toLowerCase();
     const trialDaysRaw = body.trialDays;
     const trialDays = trialDaysRaw === '' || trialDaysRaw === null || trialDaysRaw === undefined
@@ -1316,7 +1454,8 @@ async function handleAdmin(request, env, context, segments, analytics) {
     if (!validShopId(target)) throw new HttpError(400, 'A valid shop ID is required');
     const body = await requestJson(request);
     const mode = String(body.mode || body.subscriptionStatus || '').trim().toLowerCase();
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
+    if (!isPublicPlan(planId) && !isFoundingPlan(planId)) throw new HttpError(400, 'Choose Solo, Shop, Shop Pro, Enterprise, or a Founding Member plan');
     const trialDays = body.trialDays === '' || body.trialDays === null || body.trialDays === undefined
       ? null
       : Math.max(0, Math.min(3650, Math.round(Number(body.trialDays))));
@@ -1383,6 +1522,14 @@ async function ensureSaasUser(env, email, name) {
         .bind(userId, now, normalized).run();
       existing.id = userId;
     }
+    // Claim stores the owner email on the invite; attach the founding plan on first sign-in.
+    if (existing.shop_id) {
+      await applyPendingFoundingClaim(env, {
+        email: normalized,
+        shopId: existing.shop_id,
+        ownerName: existing.name || name,
+      });
+    }
     return existing;
   }
   const userId = crypto.randomUUID();
@@ -1403,6 +1550,12 @@ async function ensureSaasUser(env, email, name) {
       VALUES (?, ?, ?, 'admin', ?, 1, ?, ?)
     `).bind(userId, normalized, shopId, ownerName, now, now),
   ]);
+  await applyPendingFoundingClaim(env, {
+    email: normalized,
+    shopId,
+    ownerName,
+    shopName: `${ownerName}'s shop`,
+  });
   return { id: userId, email: normalized, shop_id: shopId, role: 'admin', name: ownerName, enabled: 1 };
 }
 
@@ -1420,6 +1573,31 @@ function randomBase64Url(byteLength = 32) {
 async function pkceChallenge(verifier) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   return base64UrlEncode(new Uint8Array(digest));
+}
+
+function desktopHandoffPage(token) {
+  const link = `mechpro://auth?token=${encodeURIComponent(token)}`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
+  <title>Return to MechPro</title>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; background: #18252b; color: #f4f7f8; margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { max-width: 28rem; padding: 2rem; }
+    a { display: inline-block; margin-top: 1rem; background: #e8a317; color: #18252b; text-decoration: none; font-weight: 700; padding: 0.8rem 1.1rem; border-radius: 0.4rem; }
+    p { line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Google sign-in succeeded</h1>
+    <p>Open MechPro to finish signing in. If Windows asks which app to use, choose MechPro.</p>
+    <a href="${link}">Open MechPro</a>
+  </main>
+</body>
+</html>`;
 }
 
 function googleRedirectUri(request) {
@@ -1519,18 +1697,20 @@ async function handleGoogleCallback(request, env) {
       now,
     ).run();
     const headers = new Headers({
-      Location: `mechpro://auth?token=${encodeURIComponent(handoffToken)}`,
+      'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
     });
     for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE, GOOGLE_RETURN_COOKIE, GOOGLE_DESKTOP_COOKIE]) {
       headers.append('Set-Cookie', clearCookieHeader(name));
     }
-    return new Response(null, { status: 302, headers });
+    return new Response(desktopHandoffPage(handoffToken), { status: 200, headers });
   }
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   await env.DB.prepare(`
     INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
     VALUES (?, ?, ?, ?, ?)
@@ -1668,7 +1848,7 @@ async function handleAuthCallback(request, env) {
   const sessionToken = crypto.randomUUID().replaceAll('-', '');
   const sessionId = crypto.randomUUID();
   const sessionHash = await hashValue(sessionToken);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   await env.DB.batch([
     env.DB.prepare(`
       INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
@@ -1702,17 +1882,24 @@ async function handleAuthCallback(request, env) {
 }
 
 async function handleLogout(request, env) {
-  const context = await resolveContext(request, env);
-  const sessionId = context.sessionId || '';
+  // Logout must be idempotent: it still clears the cookie even when the session
+  // is already expired or revoked (resolveContext throws for those cases).
+  let context = null;
+  try {
+    context = await resolveContext(request, env);
+  } catch {
+    context = null;
+  }
+  const sessionId = context?.sessionId || '';
   if (sessionId) {
     await env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), sessionId).run();
   }
-  capturePostHogEvent(env, context, 'user_logged_out', {
-    actor_role: context.role,
+  capturePostHogEvent(env, context ?? { userId: undefined, shopId: undefined }, 'user_logged_out', {
+    actor_role: context?.role,
   });
   return new Response(JSON.stringify({ ok: true, loggedOut: true }), {
     status: 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `${APP_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT` },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': clearCookieHeader(APP_SESSION_COOKIE) },
   });
 }
 
@@ -1726,7 +1913,7 @@ async function handleAuth(request, env, segments, analytics) {
   if (action === 'logout') return handleLogout(request, env);
   if (action === 'session') {
     const context = await resolveContext(request, env);
-    return handleAuthSession(context, analytics || { client: null });
+    return handleAuthSession(request, context, analytics || { client: null });
   }
   throw new HttpError(404, 'Not found');
 }
@@ -1735,14 +1922,15 @@ async function handleBilling(request, env, context, segments) {
   const action = segments[1] || '';
   if (action === 'checkout' && request.method === 'POST') {
     const body = await requestJson(request);
-    const planId = String(body.planId || 'starter').trim() || 'starter';
+    const planId = String(body.planId || 'shop').trim() || 'shop';
     if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
     if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
     const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
-    if (!plan) throw new HttpError(404, 'Billing plan not found');
+    if (!plan || Number(plan.active) === 0) throw new HttpError(404, 'Billing plan not found');
+    if (Number(plan.public) === 0 || Number(plan.founding) === 1) throw new HttpError(403, 'Founding Member plans are claimed from an invite link');
     const stripeKey = env.STRIPE_SECRET_KEY || '';
     const priceId = String(plan.stripe_price_id || '').trim();
-    if (stripeKey && priceId && !priceId.startsWith('price_placeholder') && !priceId.startsWith('price_starter') && !priceId.startsWith('price_growth')) {
+    if (stripeKey && !isPlaceholderPrice(priceId)) {
       const origin = new URL(request.url).origin;
       const successUrl = String(body.successUrl || `${origin}/?billing=success`);
       const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
@@ -1859,6 +2047,80 @@ async function handleBilling(request, env, context, segments) {
   throw new HttpError(404, 'Not found');
 }
 
+async function handleFounding(request, env) {
+  const url = new URL(request.url);
+  const action = url.pathname.split('/').filter(Boolean).pop();
+  if (action === 'status' && request.method === 'GET') {
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const claimed = Number(counter?.claimed || 0);
+    const cap = Number(counter?.cap || 50);
+    return json({ claimed, cap, remaining: Math.max(0, cap - claimed), open: claimed < cap });
+  }
+  if (action === 'validate' && request.method === 'GET') {
+    const token = String(url.searchParams.get('token') || '').trim();
+    const invite = token
+      ? await env.DB.prepare('SELECT token, used_at FROM founding_invites WHERE token = ?').bind(token).first()
+      : null;
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const decision = claimDecision({ invite, counter, planId: 'founding_shop' });
+    if (!decision.ok && decision.status === 400) return json({ valid: false, message: decision.message }, 400);
+    return json({
+      valid: decision.ok,
+      message: decision.ok ? 'Invite accepted.' : decision.message,
+      claimed: Number(counter?.claimed || 0),
+      cap: Number(counter?.cap || 50),
+      remaining: Math.max(0, Number(counter?.cap || 50) - Number(counter?.claimed || 0)),
+    }, decision.ok ? 200 : decision.status);
+  }
+  if (action === 'claim' && request.method === 'POST') {
+    const body = await requestJson(request);
+    const token = String(body.token || '').trim();
+    const planId = String(body.planId || 'founding_shop').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) throw new HttpError(400, 'A work email is required');
+    const invite = token
+      ? await env.DB.prepare('SELECT token, used_at FROM founding_invites WHERE token = ?').bind(token).first()
+      : null;
+    const counter = await env.DB.prepare('SELECT claimed, cap FROM founding_counter WHERE id = 1').first();
+    const decision = claimDecision({ invite, counter, planId });
+    if (!decision.ok) throw new HttpError(decision.status, decision.message);
+    const nowIso = new Date().toISOString();
+    // Take the counter slot only while this invite is still free, then mark the
+    // invite. Compensate any partial outcome so spots/invites are not lost.
+    const results = await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE founding_counter
+        SET claimed = claimed + 1
+        WHERE id = 1 AND claimed < cap
+          AND EXISTS (SELECT 1 FROM founding_invites WHERE token = ? AND used_at IS NULL)
+      `).bind(token),
+      env.DB.prepare(`
+        UPDATE founding_invites
+        SET used_at = ?, used_by_shop_id = ?, plan_id = ?
+        WHERE token = ? AND used_at IS NULL
+      `).bind(nowIso, email, planId, token),
+    ]);
+    const counterUpdated = Number(results?.[0]?.meta?.changes || 0) > 0;
+    const inviteUpdated = Number(results?.[1]?.meta?.changes || 0) > 0;
+    const outcome = claimBatchOutcome(inviteUpdated, counterUpdated);
+    if (outcome.ok) return json({ claimed: true, planId, email, remaining: decision.remaining });
+    if (outcome.restoreInvite) {
+      await env.DB.prepare(`
+        UPDATE founding_invites
+        SET used_at = NULL, used_by_shop_id = NULL, plan_id = NULL
+        WHERE token = ? AND used_at = ?
+      `).bind(token, nowIso).run();
+    }
+    if (outcome.decrementCounter) {
+      await env.DB.prepare(`
+        UPDATE founding_counter SET claimed = claimed - 1 WHERE id = 1 AND claimed > 0
+      `).run();
+    }
+    throw new HttpError(409, 'This Founding Member spot was just claimed.');
+  }
+  throw new HttpError(404, 'Not found');
+}
+
 async function route(request, env, analytics) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api(?=\/|$)/, '') || '/';
@@ -1878,7 +2140,11 @@ async function route(request, env, analytics) {
     });
   }
   if (path === '/healthz') return json({ ok: true, service: 'mechpro-cloudflare-api' });
+  if (segments[0] === 'founding') return handleFounding(request, env);
   if (segments[0] === 'auth') return handleAuth(request, env, segments, analytics);
+  if (segments[0] === 'customer-documents') {
+    return handleCustomerDocument(request, env, decodeURIComponent(segments[1] || ''));
+  }
   if (segments[0] === 'payments' && segments[1] === 'webhook') {
     return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
   }
@@ -1891,16 +2157,19 @@ async function route(request, env, analytics) {
   const context = await resolveContext(request, env);
   analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
-  if (path === '/auth/session') return handleAuthSession(context, analytics);
+  if (path === '/auth/session') return handleAuthSession(request, context, analytics);
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
+  if (segments[0] === 'ordering') return handleOrdering(request, env, context, segments);
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
+  if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
@@ -1965,7 +2234,8 @@ export default {
         if (download) return download;
         return proxyPagesRequest(request, env);
       }
-      return withCors(await route(request, env, analytics), request, env);
+      const response = await route(request, env, analytics);
+      return response.status === 101 ? response : withCors(response, request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       posthog?.captureException(error, analytics.distinctId, {

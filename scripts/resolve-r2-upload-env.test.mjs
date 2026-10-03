@@ -5,8 +5,8 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
 {
   const resolved = resolveR2UploadEnv({
-    AWS_ACCESS_KEY_ID: ' access-key ',
-    AWS_SECRET_ACCESS_KEY: '\nsecret-key\t',
+    R2_ACCESS_KEY_ID: ' access-key ',
+    R2_SECRET_ACCESS_KEY: '\nsecret-key\t',
     CLOUDFLARE_ACCOUNT_ID: '\n account-id \r\n',
     CLOUDFLARE_R2_BUCKET: ' bucket-name ',
   });
@@ -54,8 +54,8 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
 {
   const resolved = resolveR2UploadEnv({
-    AWS_ACCESS_KEY_ID: 'key',
-    AWS_SECRET_ACCESS_KEY: 'secret',
+    R2_ACCESS_KEY_ID: 'key',
+    R2_SECRET_ACCESS_KEY: 'secret',
     CLOUDFLARE_ACCOUNT_ID: '\n',
     CLOUDFLARE_R2_BUCKET: ' ',
   });
@@ -76,8 +76,8 @@ import { formatResolvedR2UploadEnv, resolveR2UploadEnv } from './resolve-r2-uplo
 
 {
   const resolved = resolveR2UploadEnv({
-    AWS_ACCESS_KEY_ID: ' key$(printf hacked) ',
-    AWS_SECRET_ACCESS_KEY: " secret`printf hacked` ${USER}'s ",
+    R2_ACCESS_KEY_ID: ' key$(printf hacked) ',
+    R2_SECRET_ACCESS_KEY: " secret`printf hacked` ${USER}'s ",
     CLOUDFLARE_ACCOUNT_ID: 'account-id',
     CLOUDFLARE_R2_BUCKET: 'bucket-name',
   });

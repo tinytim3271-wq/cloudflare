@@ -25,6 +25,7 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        structuredClone: 'readonly',
       },
     },
     rules: {
@@ -40,6 +41,8 @@ export default [
       globals: {
         console: 'readonly',
         setTimeout: 'readonly',
+        URL: 'readonly',
+        structuredClone: 'readonly',
       },
     },
     rules: {

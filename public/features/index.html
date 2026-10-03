@@ -3,8 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MechPro features</title>
-    <meta name="description" content="Dispatch, work orders, scheduling, invoicing, inspections, and shop tools in one MechPro workspace." />
+    <title>MechPro | Shop operating system</title>
+    <meta name="description" content="MechPro answers shop calls through an AI phone connection, writes estimates, runs dispatch, and authorizes live OEM programming on Shop Pro." />
+    <meta property="og:title" content="MechPro" />
+    <meta property="og:description" content="AI phone, estimates, dispatch, invoices, and live OEM programming on Shop Pro. From $69 a month. Unlimited users." />
+    <meta property="og:image" content="/graphics/og-card.svg" />
     <link rel="icon" href="/mechpro-icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/fonts/fonts.css" />
     <link rel="stylesheet" href="/market.css" />
@@ -14,54 +17,57 @@
       <header class="site-header">
         <a class="brand" href="/features"><span class="brand-mark">M</span><span><strong>MECHPRO</strong><small>Shop operating system</small></span></a>
         <nav class="nav" aria-label="Product">
-          <a href="/features" aria-current="page">Features</a>
+          <a href="/features" aria-current="page">Product</a>
           <a href="/pricing">Pricing</a>
           <a href="/downloads">Downloads</a>
           <a href="/login">Sign in</a>
-          <a class="btn primary" href="/signup">Create shop</a>
+          <a class="btn primary" href="/signup">Start 14-day trial</a>
         </nav>
       </header>
-      <section class="hero">
-        <p class="eyebrow">One workspace for the shop day</p>
-        <h1>Run the counter, the bays, and the books together.</h1>
-        <p class="lede">MechPro is the operating system for an auto repair shop: who is in which bay, what was promised, what the customer approved, and what still needs to be collected.</p>
-        <div class="hero-actions">
-          <a class="btn primary" href="/signup">Start a shop</a>
-          <a class="btn secondary" href="/login">Open the app</a>
+      <section class="hero hero-split">
+        <div>
+          <p class="eyebrow">Dispatch, estimates, and the bay</p>
+          <h1>The phone, the estimate, and the key. One login.</h1>
+          <p class="lede">MechPro is the shop workspace: the assistant answers connected calls and texts, the workbench writes the estimate, dispatch runs the day, and Shop Pro authorizes live OEM programming on your own hardware.</p>
+          <div class="hero-actions">
+            <a class="btn primary" href="/signup?plan=shop">Start Shop at $139</a>
+            <a class="btn secondary" href="/pricing">See all four plans</a>
+          </div>
         </div>
+        <img class="hero-shot" src="/graphics/dispatch-board.svg" width="640" height="420" alt="MechPro board with estimate, approved, in-bay, and invoice columns." />
       </section>
-      <section class="grid" aria-label="Product capabilities">
+      <section class="grid" aria-label="What is included">
         <article class="card">
-          <h2>Today</h2>
-          <p>Home opens on what needs a decision: unassigned jobs, parts holds, overdue invoices, and the work promised for today.</p>
+          <h2>AI phone</h2>
+          <p>Connect the shop's AgentPhone agent in settings. Voice and text hit the MechPro assistant. Solo includes 200 minutes, Shop 800, Shop Pro 2,500, Enterprise 10,000.</p>
+        </article>
+        <article class="card">
+          <h2>AI estimating</h2>
+          <p>Speak or type the complaint in the workbench. MechPro drafts the estimate. A person still confirms parts, labor, and the customer's yes.</p>
         </article>
         <article class="card">
           <h2>Dispatch</h2>
-          <p>Move estimates, approved work, jobs in progress, and parts holds across the board. Assign a technician and a promise time in the same place.</p>
+          <p>Estimates, approved work, bays, and promise times stay on one board. Technicians, the counter, and the office each open the routes their role allows.</p>
         </article>
         <article class="card">
-          <h2>Front counter</h2>
-          <p>Work orders, customers, vehicles, and invoices stay linked. Search by RO, name, or VIN without leaving the shop.</p>
+          <h2>Invoices</h2>
+          <p>Balances, payments, and CSV import for old invoices and estimates. Card checkout is a Stripe-hosted page. MechPro does not store card numbers.</p>
         </article>
         <article class="card">
-          <h2>Shop floor</h2>
-          <p>Inspections, inventory, canned services, reminders, and basic OBD-II live beside the repair order. OEM diagnostics stays on licensed Windows hardware.</p>
+          <h2>OEM programming</h2>
+          <p>Solo and Shop use the diagnostics simulator. Shop Pro and Enterprise authorize live key, immobilizer, and module procedures after the shop connects AutoAuth and a J2534 pass-thru. Every live procedure needs a signed capability token.</p>
         </article>
         <article class="card">
-          <h2>AI workbench</h2>
-          <p>Symptom notes, estimates, and technician worksheets are advisory. Technicians still confirm specs, torque, and authorization before parts are sold.</p>
-        </article>
-        <article class="card">
-          <h2>Back office</h2>
-          <p>Employees, time clock, payroll stubs, accounting, reports, and imports. Payroll tax figures are a small-shop estimate, not a payroll-processor filing.</p>
+          <h2>Offline and people</h2>
+          <p>The shop app is an offline-capable PWA, with Windows and Android installs. Unlimited users on every plan. No per-seat fee. Sign-in is a one-time link to a work email. Shop passwords are not stored.</p>
         </article>
       </section>
       <aside class="note">
-        <strong>Same shop on every screen.</strong> Use the browser, install the Windows app for bay computers, or install the Android package for the floor. Sign-in is a one-time link to a work email. MechPro does not store shop passwords.
+        <strong>Shop is $139 a month.</strong> Shop Pro is $279 when the bay actually programs modules. <a href="/pricing">Compare Solo, Shop, Shop Pro, and Enterprise.</a> A 14-day trial starts before a card is required.
       </aside>
       <footer class="site-footer">
         <span>MechPro</span>
-        <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+        <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/login">Sign in</a></span>
       </footer>
     </div>
   </body>

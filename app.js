@@ -132,43 +132,2016 @@
     }
   });
 
-  // src/runtime/mutation-queue-store.js
-  function createMutationQueueStore({
-    storage,
-    storeKey = "mechpro-mutation-queue-v1"
-  } = {}) {
-    if (!storage || typeof storage.getItem !== "function" || typeof storage.setItem !== "function") {
-      throw new TypeError("createMutationQueueStore requires a Web Storage-compatible storage");
-    }
-    let cache = null;
-    let rawCache = null;
-    function read() {
-      const raw = storage.getItem(storeKey) || "[]";
-      if (rawCache === raw && Array.isArray(cache)) return cache;
-      rawCache = raw;
-      try {
-        const parsed = JSON.parse(raw);
-        cache = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        cache = [];
+  // src/modules/imports.js
+  function parseCsv(text) {
+    const source = String(text || "").replace(/^\uFEFF/, "");
+    const rows = [];
+    const current = [];
+    let cell = "";
+    let quoted = false;
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i];
+      const next = source[i + 1];
+      if (char === '"' && quoted && next === '"') {
+        cell += '"';
+        i += 1;
+      } else if (char === '"') {
+        quoted = !quoted;
+      } else if (char === "," && !quoted) {
+        current.push(cell.trim());
+        cell = "";
+      } else if ((char === "\n" || char === "\r") && !quoted) {
+        if (char === "\r" && next === "\n") i += 1;
+        current.push(cell.trim());
+        if (current.some(Boolean)) rows.push(current.slice());
+        current.length = 0;
+        cell = "";
+      } else {
+        cell += char;
       }
-      return cache;
     }
-    function write(queue) {
-      const next = Array.isArray(queue) ? queue : [];
-      const raw = JSON.stringify(next);
-      if (raw === rawCache) {
-        cache = next;
-        return;
-      }
-      rawCache = raw;
-      cache = next;
-      storage.setItem(storeKey, raw);
-    }
-    return { read, write };
+    current.push(cell.trim());
+    if (current.some(Boolean)) rows.push(current.slice());
+    return rows;
   }
-  var init_mutation_queue_store = __esm({
-    "src/runtime/mutation-queue-store.js"() {
+  function rowData(text) {
+    const rows = parseCsv(text);
+    if (rows.length < 2) return [];
+    const headers = rows.shift().map((header) => header.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
+    return rows.map((row) => Object.fromEntries(headers.map((key, index) => [key, row[index] || ""])));
+  }
+  function value(row, ...keys) {
+    return keys.map((key) => row[key]).find((item) => item !== void 0 && item !== "") || "";
+  }
+  function cleanText(raw, max = 240) {
+    let text = String(raw || "").replace(/\s+/g, " ").trim();
+    if (/^[=@]/.test(text) || /^[+-](?!\d)/.test(text)) text = text.replace(/^[=+@-]+/, "");
+    return text.slice(0, max);
+  }
+  function moneyAmount(raw) {
+    if (raw === void 0 || raw === null || String(raw).trim() === "") return null;
+    const amount = Number(String(raw).replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(amount) || Math.abs(amount) > 1e7) return Number.NaN;
+    return Math.round(amount * 100) / 100;
+  }
+  function isoDate(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      const parsed2 = /* @__PURE__ */ new Date(`${text}T00:00:00Z`);
+      return Number.isNaN(parsed2.valueOf()) || parsed2.toISOString().slice(0, 10) !== text ? "" : text;
+    }
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.valueOf())) return "";
+    return parsed.toISOString().slice(0, 10);
+  }
+  function addDays(iso, days) {
+    const date = /* @__PURE__ */ new Date(`${iso}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+  function normalizeStatus(raw) {
+    return cleanText(raw, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  }
+  function orderSerial(id) {
+    return Number(String(id || "").split("-")[1]) || 0;
+  }
+  function nextOrderId(taken) {
+    const max = Math.max(1e3, ...[...taken].map(orderSerial));
+    let serial = max + 1;
+    let id = `RO-${serial}`;
+    while (taken.has(id.toLowerCase())) {
+      serial += 1;
+      id = `RO-${serial}`;
+    }
+    taken.add(id.toLowerCase());
+    return id;
+  }
+  function nextPrefixed(prefix, taken, floor) {
+    let max = floor;
+    for (const value2 of taken) {
+      const match = String(value2).match(/(\d+)\s*$/);
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+    let serial = max + 1;
+    let id = `${prefix}-${serial}`;
+    while (taken.has(id.toLowerCase())) {
+      serial += 1;
+      id = `${prefix}-${serial}`;
+    }
+    taken.add(id.toLowerCase());
+    return id;
+  }
+  function emptyResult(type, errors = [], skipped = 0) {
+    return { type, records: [], errors, skipped };
+  }
+  function prepareImportRecords(type, text, existing = {}) {
+    if (!IMPORT_TYPES[type]) return emptyResult(type, ["Choose a supported import type."]);
+    const rows = rowData(text);
+    if (!rows.length) return emptyResult(type, ["The file needs a header row and at least one data row."]);
+    const customers2 = existing.customers || [];
+    const vehicles = existing.vehicles || [];
+    const orders2 = existing.orders || [];
+    const invoices2 = existing.invoices || [];
+    const estimates = existing.estimates || [];
+    const taxRateDefault = Number(existing.taxRate);
+    const shopTaxRate = Number.isFinite(taxRateDefault) ? taxRateDefault : 0;
+    const today = isoDate(existing.today) || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const createdAt = existing.createdAt || (/* @__PURE__ */ new Date()).toISOString();
+    const seenCustomers = new Set(customers2.map((item) => String(item.name || "").toLowerCase()).filter(Boolean));
+    const seenVins = new Set(vehicles.map((item) => String(item.vin || "").toLowerCase()).filter(Boolean));
+    const seenOrders = new Set(orders2.map((item) => String(item.id || "").toLowerCase()).filter(Boolean));
+    const seenInvoices = new Set(invoices2.map((item) => String(item.number || item.id || "").toLowerCase()).filter(Boolean));
+    const seenEstimates = new Set(estimates.map((item) => String(item.number || "").toLowerCase()).filter(Boolean));
+    const errors = [];
+    const records = [];
+    let skipped = 0;
+    rows.forEach((row, index) => {
+      const line = index + 2;
+      const customer = cleanText(value(row, "customer", "customer_name", "name"));
+      const amountRaw = value(row, "amount", "total");
+      const amount = moneyAmount(amountRaw);
+      let record = null;
+      let error = "";
+      if (type === "customers") {
+        const name = cleanText(value(row, "name", "customer", "customer_name"));
+        if (!name) error = "Customer name is required";
+        else if (seenCustomers.has(name.toLowerCase())) skipped += 1;
+        else {
+          seenCustomers.add(name.toLowerCase());
+          record = { name, phone: cleanText(value(row, "phone", "mobile"), 40), email: cleanText(value(row, "email"), 120), vehicles: 0, visits: 0, spend: 0 };
+        }
+      } else if (type === "vehicles") {
+        const year = cleanText(value(row, "year"), 8);
+        const make = cleanText(value(row, "make"), 40);
+        const model = cleanText(value(row, "model"), 40);
+        const vin = cleanText(value(row, "vin"), 17).toUpperCase();
+        if (!customer || !year || !make || !model) error = "Customer, year, make, and model are required";
+        else if (vin && seenVins.has(vin.toLowerCase())) skipped += 1;
+        else {
+          if (vin) seenVins.add(vin.toLowerCase());
+          record = { customer, year, make, model, vin, plate: cleanText(value(row, "plate", "license_plate"), 16) };
+        }
+      } else if (type === "orders") {
+        const providedId = cleanText(value(row, "ro_number", "ro", "work_order"), 40);
+        const vehicle = cleanText(value(row, "vehicle", "vehicle_description"), 120);
+        const complaint = cleanText(value(row, "complaint", "description", "concern"), 500);
+        const status = normalizeStatus(value(row, "status")) || "estimate";
+        if (!customer || !vehicle || !complaint) error = "Customer, vehicle, and complaint are required";
+        else if (providedId && seenOrders.has(providedId.toLowerCase())) skipped += 1;
+        else if (amountRaw && !Number.isFinite(amount)) error = "Total must be a number";
+        else {
+          const id = providedId || nextOrderId(seenOrders);
+          if (providedId) seenOrders.add(id.toLowerCase());
+          record = {
+            id,
+            customer,
+            phone: cleanText(value(row, "phone"), 40),
+            vehicle,
+            vin: cleanText(value(row, "vin"), 17).toUpperCase() || "VIN pending",
+            complaint,
+            status: ORDER_STATUSES.includes(status) ? status : "estimate",
+            priority: "normal",
+            tech: cleanText(value(row, "tech", "technician"), 80) || "Unassigned",
+            bay: cleanText(value(row, "bay"), 40) || "Unassigned",
+            mobile: value(row, "mobile").toLowerCase() === "true",
+            promise: cleanText(value(row, "promise"), 40) || "Unscheduled",
+            total: Number.isFinite(amount) ? amount : 0,
+            scheduled: cleanText(value(row, "scheduled"), 40) || "Unscheduled",
+            notes: cleanText(value(row, "notes"), 500),
+            labor: 0,
+            parts: 0,
+            tax: 0
+          };
+        }
+      } else if (type === "invoices") {
+        const providedNumber = cleanText(value(row, "number", "invoice", "invoice_number"), 40).toUpperCase();
+        const status = normalizeStatus(value(row, "status")) || "sent";
+        const date = isoDate(value(row, "date", "issued", "invoice_date")) || today;
+        const dueRaw = value(row, "due", "due_date");
+        const due = isoDate(dueRaw) || (dueRaw ? "" : addDays(date, 14));
+        const rateRaw = value(row, "tax_rate", "taxrate");
+        const taxRate = rateRaw === "" ? shopTaxRate : Number(rateRaw);
+        const subtotal = moneyAmount(value(row, "subtotal"));
+        const tax = moneyAmount(value(row, "tax"));
+        if (!customer) error = "Customer is required";
+        else if (!Number.isFinite(amount) || amount < 0) error = "A numeric invoice amount is required";
+        else if (rateRaw !== "" && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = "Tax rate must be between 0 and 100";
+        else if (dueRaw && !due) error = "Due date must be a real date";
+        else if (!INVOICE_STATUSES.includes(status)) error = "Status must be sent, overdue, or paid";
+        else if (providedNumber && seenInvoices.has(providedNumber.toLowerCase())) skipped += 1;
+        else {
+          const number = providedNumber || nextPrefixed("INV", seenInvoices, 2e3);
+          if (providedNumber) seenInvoices.add(number.toLowerCase());
+          const resolvedTax = Number.isFinite(tax) ? tax : Number.isFinite(subtotal) ? Math.round(subtotal * taxRate) / 100 : Math.round((amount - amount / (1 + taxRate / 100 || 1)) * 100) / 100;
+          const resolvedSubtotal = Number.isFinite(subtotal) ? subtotal : Math.round((amount - (Number.isFinite(resolvedTax) ? resolvedTax : 0)) * 100) / 100;
+          record = {
+            id: number,
+            number,
+            ro: cleanText(value(row, "ro", "ro_number", "work_order"), 40),
+            customer,
+            vehicle: cleanText(value(row, "vehicle"), 120),
+            amount,
+            subtotal: resolvedSubtotal,
+            tax: Number.isFinite(resolvedTax) ? resolvedTax : 0,
+            taxRate,
+            status,
+            date,
+            due,
+            lines: [],
+            createdAt
+          };
+        }
+      } else if (type === "estimates") {
+        const providedNumber = cleanText(value(row, "number", "estimate", "estimate_number"), 40).toUpperCase();
+        const vehicle = cleanText(value(row, "vehicle", "vehicle_description"), 120);
+        const summary = cleanText(value(row, "summary", "complaint", "description", "concern"), 500);
+        const status = normalizeStatus(value(row, "status")) || "pending";
+        const rateRaw = value(row, "tax_rate", "taxrate");
+        const taxRate = rateRaw === "" ? shopTaxRate : Number(rateRaw);
+        const subtotal = moneyAmount(value(row, "subtotal"));
+        const tax = moneyAmount(value(row, "tax"));
+        if (!customer || !vehicle) error = "Customer and vehicle are required";
+        else if (!Number.isFinite(amount) || amount < 0) error = "A numeric estimate total is required";
+        else if (rateRaw !== "" && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = "Tax rate must be between 0 and 100";
+        else if (!ESTIMATE_STATUSES.includes(status)) error = "Status must be pending, approved, or declined";
+        else if (providedNumber && seenEstimates.has(providedNumber.toLowerCase())) skipped += 1;
+        else {
+          const number = providedNumber || nextPrefixed("EST", seenEstimates, 1e3);
+          if (providedNumber) seenEstimates.add(number.toLowerCase());
+          const resolvedSubtotal = Number.isFinite(subtotal) ? subtotal : amount;
+          const resolvedTax = Number.isFinite(tax) ? tax : Math.max(0, Math.round((amount - resolvedSubtotal) * 100) / 100);
+          record = {
+            id: `estimate-${number}`,
+            number,
+            customer,
+            email: cleanText(value(row, "email"), 120),
+            phone: cleanText(value(row, "phone"), 40),
+            vehicle,
+            workOrderId: cleanText(value(row, "ro", "ro_number", "work_order"), 40) || null,
+            createdAt,
+            status,
+            lines: [{ service: summary || "Imported service", notes: summary, hours: 0, laborRate: 0, labor: 0, parts: resolvedSubtotal, total: resolvedSubtotal }],
+            fees: 0,
+            subtotal: resolvedSubtotal,
+            tax: resolvedTax,
+            taxRate,
+            total: amount,
+            summary,
+            signature: null,
+            authorizationName: ""
+          };
+        }
+      } else if (type === "expenses") {
+        const vendor = cleanText(value(row, "vendor", "payee"), 120);
+        const expenseAmount = moneyAmount(value(row, "amount", "total"));
+        const date = isoDate(value(row, "date")) || today;
+        if (!vendor || !Number.isFinite(expenseAmount)) error = "Vendor and numeric amount are required";
+        else {
+          record = {
+            date: value(row, "date") ? date : today,
+            vendor,
+            category: cleanText(value(row, "category"), 80) || "Uncategorized",
+            memo: cleanText(value(row, "memo", "description", "notes"), 240),
+            amount: expenseAmount
+          };
+        }
+      }
+      if (error) {
+        errors.push(`Row ${line}: ${error}`);
+        skipped += 1;
+      } else if (record) {
+        records.push(record);
+      }
+    });
+    return { type, records, errors, skipped };
+  }
+  var IMPORT_TYPES, ORDER_STATUSES, INVOICE_STATUSES, ESTIMATE_STATUSES;
+  var init_imports = __esm({
+    "src/modules/imports.js"() {
+      IMPORT_TYPES = {
+        customers: {
+          title: "Customers",
+          icon: "users",
+          columns: "name, phone, email",
+          required: "name",
+          sample: "name,phone,email\nDemo Customer,555-0123,demo.customer@example.com"
+        },
+        vehicles: {
+          title: "Vehicles",
+          icon: "car-front",
+          columns: "customer, year, make, model, vin, plate",
+          required: "customer, year, make, model",
+          sample: "customer,year,make,model,vin,plate\nDemo Customer,2020,Ford,Escape,DEMOVIN000000010,ABC-1234"
+        },
+        orders: {
+          title: "Work orders",
+          icon: "clipboard-list",
+          columns: "ro_number, customer, vehicle, complaint, status, total",
+          required: "customer, vehicle, complaint",
+          sample: "ro_number,customer,vehicle,complaint,status,total\nRO-1053,Demo Customer,2020 Ford Escape,Oil change,approved,89.95"
+        },
+        invoices: {
+          title: "Invoices",
+          icon: "receipt",
+          columns: "number, customer, ro, date, due, status, subtotal, tax_rate, tax, amount",
+          required: "customer, amount",
+          sample: "number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-15,sent,100.00,8.25,8.25,108.25"
+        },
+        estimates: {
+          title: "Estimates",
+          icon: "file-spreadsheet",
+          columns: "number, customer, vehicle, summary, status, subtotal, tax, total, email, phone",
+          required: "customer, vehicle, total",
+          sample: "number,customer,vehicle,summary,status,subtotal,tax_rate,tax,total,email,phone\nEST-1001,Demo Customer,2020 Ford Escape,Front brake service,pending,420.00,8.25,34.65,454.65,demo.customer@example.com,555-0123"
+        },
+        expenses: {
+          title: "Expenses",
+          icon: "wallet-cards",
+          columns: "date, vendor, category, memo, amount",
+          required: "vendor, amount",
+          sample: "date,vendor,category,memo,amount\n2026-08-14,Demo Tool Supply,Tools,Socket set,149.99"
+        }
+      };
+      ORDER_STATUSES = ["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"];
+      INVOICE_STATUSES = ["sent", "overdue", "paid"];
+      ESTIMATE_STATUSES = ["pending", "approved", "declined"];
+    }
+  });
+
+  // src/modules/canned-services.js
+  function missingCannedServices(existing = [], seededIds = []) {
+    const present = /* @__PURE__ */ new Set([
+      ...Array.isArray(seededIds) ? seededIds : [],
+      ...existing.map((service) => service?.id)
+    ]);
+    const names = new Set(existing.map((service) => String(service?.name || "").trim().toLowerCase()).filter(Boolean));
+    return CANNED_MENU.filter((item) => !present.has(item.id) && !names.has(item.name.toLowerCase()));
+  }
+  function cannedServiceGroups(services = []) {
+    const groups = [
+      { id: "van", label: "Van menu", items: [] },
+      { id: "shop", label: "Shop menu", items: [] },
+      { id: "other", label: "Other services", items: [] }
+    ];
+    const sorted = [...services].sort((left, right) => Number(left.sort || 1e3) - Number(right.sort || 1e3) || String(left.name || "").localeCompare(String(right.name || "")));
+    for (const service of sorted) {
+      const channel = service.channel === "van" || service.channel === "shop" ? service.channel : "other";
+      groups.find((group) => group.id === channel).items.push(service);
+    }
+    return groups.filter((group) => group.items.length);
+  }
+  function estimateLineFromService(service) {
+    const menuPrice = Number(service?.menuPrice);
+    const priced = service?.menuPrice != null && Number.isFinite(menuPrice);
+    return {
+      service: String(service?.name || ""),
+      notes: String(service?.description || ""),
+      hours: priced ? 0 : Math.max(0, Number(service?.laborHours) || 0),
+      parts: priced ? Math.max(0, menuPrice) : Math.max(0, Number(service?.partsPrice) || 0),
+      discount: Math.min(100, Math.max(0, Number(service?.discount) || 0))
+    };
+  }
+  var CANNED_MENU;
+  var init_canned_services = __esm({
+    "src/modules/canned-services.js"() {
+      CANNED_MENU = [
+        {
+          id: "menu-conventional-oil",
+          sort: 1,
+          channel: "van",
+          name: "Conventional Oil Change",
+          menuPrice: 54.95,
+          description: "Includes up to 5 quarts conventional oil, standard oil filter, drain-plug washer if needed, fluid-level check, and tire-pressure check.",
+          marginNote: "Protects margin through a five-quart cap and standard filter; extra oil or specialty filters are add-ons."
+        },
+        {
+          id: "menu-synthetic-oil",
+          sort: 2,
+          channel: "van",
+          name: "Full Synthetic Oil Change",
+          menuPrice: 74.95,
+          description: "Includes up to 5 quarts full-synthetic oil, standard filter, drain-plug washer if needed, fluid-level check, and tire-pressure check.",
+          marginNote: "Matches the local dealer's advertised $74.95 and stays near Costa/Midas while controlling oil-capacity and filter costs."
+        },
+        {
+          id: "menu-front-pads",
+          sort: 3,
+          channel: "van",
+          name: "Front Brake Pad Replacement",
+          menuPrice: 219.95,
+          description: "Includes front ceramic/semi-metallic pads, hardware where supplied, pad replacement, bracket cleaning, contact-point lubrication, brake inspection, and road test; rotors excluded.",
+          marginNote: "Standard pad selection and no rotor guarantee keep parts predictable; seized hardware or rotor replacement is separately quoted."
+        },
+        {
+          id: "menu-rear-pads",
+          sort: 4,
+          channel: "van",
+          name: "Rear Brake Pad Replacement",
+          menuPrice: 209.95,
+          description: "Includes rear pads, supplied hardware, bracket cleaning, lubrication, brake inspection, and road test; rotors excluded.",
+          marginNote: "Rear jobs generally require less labor and material than fronts; electronic parking-brake service or seized components may add cost."
+        },
+        {
+          id: "menu-brake-flush",
+          sort: 5,
+          channel: "van",
+          name: "Brake Fluid Flush",
+          menuPrice: 79.95,
+          description: "Includes removal/exchange of old brake fluid, fresh DOT 3/4 fluid, four-wheel bleed, leak check, and pedal check.",
+          marginNote: "Fluid consumption is capped at approximately one quart; ABS bleed procedures or damaged bleeders are extra."
+        },
+        {
+          id: "menu-battery",
+          sort: 6,
+          channel: "van",
+          name: "Battery Swap",
+          menuPrice: 219.95,
+          description: "Includes a standard 3-year flooded battery, installation, terminal cleaning/protection, charging-system test, and battery reset when supported.",
+          marginNote: "Price assumes common group-size batteries; AGM/EFB batteries, battery registration, and difficult-access batteries preserve profitability through an upgrade charge."
+        },
+        {
+          id: "menu-wipers",
+          sort: 7,
+          channel: "van",
+          name: "Wiper Blades",
+          menuPrice: 39.95,
+          description: "Includes two standard beam or hybrid blades, installation, washer-fluid check, and windshield wipe test.",
+          marginNote: "The price is below KBB's roughly $53-$64 installed benchmark while allowing a normal markup on mid-grade blades."
+        },
+        {
+          id: "menu-engine-filter",
+          sort: 8,
+          channel: "van",
+          name: "Engine Air Filter",
+          menuPrice: 39.95,
+          description: "Includes one standard engine air filter, installation, airbox inspection, and intake-area cleanup.",
+          marginNote: "Standard filter coverage keeps parts cost controlled; specialty or multiple-filter applications are exceptions."
+        },
+        {
+          id: "menu-cabin-filter",
+          sort: 9,
+          channel: "van",
+          name: "Cabin Air Filter",
+          menuPrice: 59.95,
+          description: "Includes one standard cabin/pollen filter, installation, housing cleanup, and HVAC airflow check.",
+          marginNote: "It undercuts McGavock's $69.95 starting price; difficult glovebox/cowl access and premium carbon filters are the main cost risks."
+        },
+        {
+          id: "menu-serpentine",
+          sort: 10,
+          channel: "van",
+          name: "Serpentine Belt",
+          menuPrice: 139.95,
+          description: "Includes one standard serpentine belt, removal/installation, pulley and tensioner inspection, belt-routing verification, and run test.",
+          marginNote: "Close to Turbo Mo's $140 local menu price, with profit protected by excluding tensioners, idlers, and damaged pulleys."
+        },
+        {
+          id: "menu-rotation",
+          sort: 11,
+          channel: "van",
+          name: "Tire Rotation",
+          menuPrice: 29.95,
+          description: "All four tires rotated to pattern, lug torque check, pressures set.",
+          marginNote: "Pairs with oil (bundle free/half-off); alone covers short labor plus a trip share."
+        },
+        {
+          id: "menu-nostart",
+          sort: 12,
+          channel: "van",
+          name: "No-Start Diagnostic",
+          menuPrice: 99.95,
+          description: "Battery load test, starter draw, alternator charging test; written go/no-go on those three.",
+          marginNote: "In the local $75-$150 diagnostic band; credit toward the same-visit repair if approved."
+        },
+        {
+          id: "menu-fuel-treatment",
+          sort: 13,
+          channel: "van",
+          name: "Fuel System Treatment / DI Injector Clean",
+          menuPrice: 149.95,
+          description: "DI-safe induction or on-car cleaner plus tank additive, idle/road check. Not injector R&R.",
+          marginNote: "Chemical cost is low; labor and the DI-specific product carry the profit."
+        },
+        {
+          id: "menu-callout",
+          sort: 14,
+          channel: "van",
+          name: "Call-Out / No-Access Fee",
+          menuPrice: 49.95,
+          description: "Customer no-show, locked/inaccessible vehicle, or job can't start through no fault of yours.",
+          marginNote: "Covers a Lubbock drive without sticker shock; waive on a same-day reschedule if the trip wasn't wasted far."
+        },
+        {
+          id: "menu-brake-job",
+          sort: 15,
+          channel: "shop",
+          name: "Full Brake Job With Rotors",
+          menuPrice: 899.95,
+          description: "Includes all four standard rotors, all four ceramic/semi-metallic pad sets, hardware where supplied, bracket cleaning/lubrication, brake inspection, and road test.",
+          marginNote: "This sits in the Lubbock market's roughly $600-$1,200 all-four range while leaving room for normal parts markup; calipers, hubs, premium trucks, and seized hardware are excluded."
+        },
+        {
+          id: "menu-coolant",
+          sort: 16,
+          channel: "shop",
+          name: "Coolant Flush",
+          menuPrice: 159.95,
+          description: "Includes cooling-system drain/flush, up to approximately two gallons of OEM-spec coolant and distilled-water mixture, reservoir service, leak inspection, refill, and temperature check.",
+          marginNote: "Consistent with independent-shop estimates around $100-$180 and KBB's broader $131-$209 range; specialty coolant, extra capacity, and bleeding complications are add-ons."
+        },
+        {
+          id: "menu-transmission",
+          sort: 17,
+          channel: "shop",
+          name: "Transmission Service",
+          menuPrice: 299.95,
+          description: "Includes transmission pan drain, filter and gasket where serviceable, up to six quarts OEM-spec ATF, fluid-level correction, leak inspection, and shift-quality check.",
+          marginNote: "Undercuts McGavock's $399.95 starting price while covering a proper service rather than a low-priced labor-only flush; sealed units, extra fluid, and machine exchanges are separately priced."
+        },
+        {
+          id: "menu-differential",
+          sort: 18,
+          channel: "shop",
+          name: "Differential Fluid Service",
+          menuPrice: 129.95,
+          description: "Includes one differential drain-and-fill, up to three quarts synthetic gear oil, limited-slip additive when required, plug inspection, leak check, and cleanup.",
+          marginNote: "Slightly above Turbo Mo's $105 local menu price but includes fluid and materials; AWD vehicles, two differentials, covers, and gasket replacement require an upgrade."
+        },
+        {
+          id: "menu-v6-tuneup",
+          sort: 19,
+          channel: "shop",
+          name: "V6 Tune-Up With Plugs and Coils",
+          menuPrice: 849.95,
+          description: "Includes six OEM-spec iridium/platinum spark plugs, six OE-quality ignition coils, dielectric grease, plug-gap verification, ignition-system scan, code clearing, and road test.",
+          marginNote: "Targets the common 2026 V6 combined range of approximately $600-$1,000 while preserving margin on coils; transverse V6 intake-manifold removal, OEM-only coils, and luxury applications require a revised quote."
+        }
+      ].map((item) => ({
+        ...item,
+        catalog: true,
+        laborHours: 0,
+        partsPrice: item.menuPrice,
+        discount: 0
+      }));
+    }
+  });
+
+  // src/modules/repair-guide.js
+  function svg(label2, body) {
+    return `<svg class="repair-diagram" viewBox="0 0 360 210" role="img" aria-label="${label2}" xmlns="http://www.w3.org/2000/svg"><rect width="360" height="210" rx="8" fill="#e7efe9"/><text x="16" y="24" fill="#1c3a32" font-family="sans-serif" font-size="13" font-weight="700">${label2}</text>${body}</svg>`;
+  }
+  function repairFamily(repair) {
+    const text = String(repair || "").toLowerCase();
+    if (/brake fluid|fluid flush/.test(text) && /brake|fluid/.test(text)) return "brake-flush";
+    if (/no-start|no start|won't start|wont start|crank/.test(text)) return "nostart";
+    if (/brake|rotor|pad|caliper/.test(text)) return "brakes";
+    if (/water pump|thermostat|coolant|radiator/.test(text)) return "cooling";
+    if (/transmission|atf/.test(text)) return "transmission";
+    if (/differential|gear oil/.test(text)) return "differential";
+    if (/spark plug|ignition coil|tune-up|tune up/.test(text)) return "ignition";
+    if (/serpentine|drive belt/.test(text) || /\bbelt\b/.test(text) && !/seat/.test(text)) return "belt";
+    if (/cabin|pollen/.test(text)) return "cabin-filter";
+    if (/air filter/.test(text)) return "air-filter";
+    if (/wiper/.test(text)) return "wipers";
+    if (/rotat/.test(text) && /tire|wheel/.test(text)) return "rotation";
+    if (/battery/.test(text)) return "battery";
+    if (/injector|fuel system|induction/.test(text)) return "fuel";
+    if (/oil/.test(text)) return "oil";
+    if (/call-out|call out|no-access|no access/.test(text)) return "callout";
+    return "general";
+  }
+  function youtubeSearchUrl(query2) {
+    const search = new URL("https://www.youtube.com/results");
+    search.searchParams.set("search_query", String(query2 || "").replace(/\s+/g, " ").trim().slice(0, 180));
+    return search.href;
+  }
+  function safeVideoUrl(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      if (parsed.protocol !== "https:" || parsed.hostname !== "www.youtube.com" || parsed.pathname !== "/results") return "";
+      return parsed.href;
+    } catch {
+      return "";
+    }
+  }
+  function repairDiagram(key) {
+    return DIAGRAMS[key] || DIAGRAMS.general;
+  }
+  function stepText(step) {
+    if (!step || typeof step === "string") return String(step || "");
+    const watch = step.watch ? ` Watch for: ${step.watch}` : "";
+    return `${step.title}. ${step.detail}${watch}`;
+  }
+  function buildRepairGuide(vehicle, repair) {
+    const familyId = repairFamily(repair);
+    const family = FAMILIES[familyId];
+    const vehicleName = String(vehicle || "").trim() || "the vehicle";
+    const repairName = String(repair || "").trim() || "the requested repair";
+    const videos = [
+      { label: `${vehicleName} ${repairName}`, query: `${vehicleName} ${repairName} repair procedure` },
+      ...family.videos.map((topic) => ({ label: topic, query: `${vehicleName} ${topic}` }))
+    ].map((item) => ({ label: item.label, url: youtubeSearchUrl(item.query) }));
+    return {
+      kind: "guide",
+      family: familyId,
+      vehicle: vehicleName,
+      repair: repairName,
+      title: `${repairName} \u2014 ${vehicleName}`,
+      difficulty: family.difficulty,
+      time: family.time,
+      diagram: family.diagram,
+      tools: family.tools,
+      parts: family.parts,
+      steps: family.steps,
+      safety: family.safety,
+      videos,
+      tips: ["Photograph connectors and routing before they are disturbed.", "Write measurements on the repair order, not only in your head."],
+      postRepair: [
+        "The original complaint is gone under the same conditions, or the reason it could not be verified is written down.",
+        "Fluid level, leaks, warning lights, and lug torque are checked after the repair.",
+        "Codes were cleared only if the procedure allowed it, and a rescan is saved."
+      ],
+      note: "Diagrams show the layout of the job. Torque, fluid type, bleed order, and one-time-use parts come from current service information for this VIN. Video links open a YouTube search for this vehicle and procedure."
+    };
+  }
+  var FAMILIES, DIAGRAMS;
+  var init_repair_guide = __esm({
+    "src/modules/repair-guide.js"() {
+      FAMILIES = {
+        brakes: {
+          difficulty: "Intermediate",
+          time: "1.5\u20132.5 hours",
+          diagram: "brakes",
+          tools: ["Floor jack and jack stands", "Torque wrench", "Brake caliper compressor or wind-back tool", "Brake micrometer and dial indicator", "Wire brush and brake cleaner", "C-clamp only if the piston is a simple push-back style"],
+          parts: ["Pads specified for the axle", "Rotors if measured under spec or included on the work order", "Hardware kit", "Approved brake lubricant", "Brake fluid for top-off"],
+          safety: ["Do not road-test a vehicle that pulls hard, has a sinking pedal, or has a leak.", "Support the caliper. Never hang it from the hose.", "Keep lubricant and cleaner off the friction surface and the rotor hat."],
+          videos: ["front or rear brake pad and rotor replacement", "brake caliper slide pin service and bedding procedure"],
+          steps: [
+            { title: "Confirm the complaint and the sold job", detail: "Read the work order before the wheel comes off. Note whether this is pads only, pads and rotors, one axle, or all four. If the pedal still stops the vehicle in a straight line, do a short road test and write down pull, pulsation, grind, or a soft pedal. Photograph the pad face and rotor before disassembly.", watch: "A soft pedal, fluid leak, or illuminated ABS light is a different job than a pad replacement. Stop and rewrite the estimate." },
+            { title: "Open the wheel end without loading the hose", detail: "Loosen the lug nuts on the ground. Lift and support the vehicle only at the approved points. Remove the wheel. Look at the hose, slide boots, piston boot, and anti-rattle clips before you compress anything. Match what you see to the brake diagram: pad, rotor, caliper, and slide pin.", watch: "Torn boots, a kinked hose, or fluid at the piston means the caliper or hose is part of the repair.", diagram: "brakes" },
+            { title: "Measure pads and the rotor before parts are committed", detail: "Measure inner and outer pad thickness. Measure rotor thickness at several clock positions and compare every reading with the discard thickness in current service information for this VIN. Check lateral runout if the complaint is pulsation. Write the numbers on the repair order.", watch: "A rotor at or under discard, a crack, or a deep groove is not a machine job. Replace it or get authorization before you continue.", diagram: "measure" },
+            { title: "Remove the caliper and support it", detail: "Take the caliper off and hang it from the knuckle or a hook with a wire or hook tool. Remove the bracket only if the rotor is coming off. Lay the old pads and clips on the bench in the same orientation so the new hardware goes back the same way.", watch: "Rounded slide-pin bolts and seized pins need heat, penetrating oil, and the correct socket. Do not pry against the rotor hat." },
+            { title: "Clean the bracket and service the slides", detail: "Wire-brush the bracket ears until the new clips sit flat. Replace the hardware kit. Clean and lube only the slide pins and the pad contact points the manufacturer allows. Keep grease off the friction material, the rotor face, and any rubber that is not a slide boot.", watch: "A pin that will not slide freely is a seized-hardware add-on, not something to force and send down the road." },
+            { title: "Install the rotor and pads", detail: "Clean the hub face so the rotor sits flat. Hold the rotor with one lug nut if needed. Open the master-cylinder cap, watch the fluid level, and retract the piston with the correct tool. Wind-back pistons on an electronic parking brake must be retracted with a scan tool, not a clamp. Fit the pads, clips, and caliper. Start every bolt by hand.", watch: "Fluid overflowing the reservoir, or a piston that will not retract, stops the job until the caliper or parking-brake service is quoted." },
+            { title: "Torque, seat the pedal, and bed the pads", detail: "Torque bracket bolts, slide pins, and lug nuts to the current specification, in the wheel sequence. With the vehicle still on stands, pump the pedal until it is high and firm. Then follow the pad maker\u2019s bedding stops if the customer drive allows it. Road-test for pull, noise, and pedal height, and recheck lug torque per shop policy.", watch: "A pedal that stays low after pumping means air or a leak. Do not deliver the vehicle." }
+          ]
+        },
+        "brake-flush": {
+          difficulty: "Intermediate",
+          time: "0.8\u20131.2 hours",
+          diagram: "brakes",
+          tools: ["Approved catch bottle", "Bleeder wrench", "Fresh sealed DOT fluid of the specified type", "Scan tool if the vehicle needs an ABS bleed"],
+          parts: ["About one quart of the specified brake fluid", "Bleeder caps if they are missing"],
+          safety: ["Brake fluid damages paint. Keep it off the finish and wash spills immediately.", "Do not mix DOT 5 silicone with DOT 3 or DOT 4.", "An ABS automated bleed is extra if the scan tool procedure is required."],
+          videos: ["brake fluid flush four wheel bleed", "ABS brake bleed procedure"],
+          steps: [
+            { title: "Identify the fluid and the bleed order", detail: "Read the cap and the service information. Confirm DOT 3, DOT 4, or a low-viscosity variant. Look up the bleed sequence for this VIN. Test the pedal height and look for wet fittings before you open a bleeder.", watch: "A sinking pedal or a wet hose is a leak diagnosis, not a flush." },
+            { title: "Protect the reservoir and the paint", detail: "Suck the old fluid out of the reservoir down to the minimum, then fill with fresh fluid. Leave the cap loose. Put a fender cover over the painted area around the reservoir.", watch: "If the reservoir is black and sludged, plan to flush until the color at each wheel matches the new fluid." },
+            { title: "Bleed each wheel in sequence", detail: "Start at the wheel the service information names first. Open the bleeder only while a helper or a pressure bleeder is pushing fluid. Close it before the pedal is released. Keep the reservoir from running dry. Repeat until the fluid at that wheel is clean, then move to the next wheel. Stay near one quart unless the fluid stays dirty.", watch: "A bleeder that will not open, or threads that weep, is an extra. Do not round it off and leave it leaking." },
+            { title: "Finish the pedal and scan", detail: "Top off to the mark, install the cap, and pump to a firm pedal. If the vehicle uses an ABS or electronic parking-brake bleed, run that routine with a scan tool before the road test. Check every bleeder and the master cylinder for seepage.", watch: "A soft pedal after a clean flush means air is still in a circuit or the master cylinder is bypassing." }
+          ]
+        },
+        cooling: {
+          difficulty: "Advanced",
+          time: "2.5\u20134.0 hours",
+          diagram: "cooling",
+          tools: ["Drain pan", "Cooling-system pressure tester", "Torque wrench", "Hose clamp pliers", "Spill-free funnel for bleeding"],
+          parts: ["Water pump and gasket or one-time-use seal", "Thermostat and seal if the job includes it", "OEM-spec coolant", "Any one-time-use stretch belt the procedure names"],
+          safety: ["Never open a hot, pressurized cap. Wait until the system is cool.", "Dispose of coolant so animals cannot reach it.", "Support the engine if a mount has to come off to reach the pump."],
+          videos: ["water pump and thermostat replacement", "how to bleed air from the cooling system"],
+          steps: [
+            { title: "Confirm the leak or the overheat before parts come off", detail: "Cold-pressure-test the system and note where it weeps: pump weep hole, hose, radiator end tank, or heater core. Record the temperature when the gauge climbs and whether the fans and the upper hose get hot. The cooling diagram shows the loop: pump, thermostat, radiator, and return.", watch: "A head-gasket smell, white exhaust, or combustion gas in the coolant is not a pump job. Stop and test before you quote a pump." },
+            { title: "Cool, depressurize, and drain", detail: "Key off. Confirm the upper hose is not pressurized. Drain at the radiator or the lower hose into a pan. Capture the coolant. Note the color and any oil sheen or rust. Remove the air intake, belt, and covers only as far as the procedure requires to see the pump.", watch: "Oil in the coolant, or coolant in the oil, changes the repair. Do not refill and send it." },
+            { title: "Remove the belt and the pump", detail: "Release the tensioner the way the diagram shows, with a wrench on the tensioner hex, and slip the belt off without bending a pulley. Unbolt the pump. Scrape the old gasket without gouging the aluminum. Compare the new pump impeller and gasket with the old one before it is bolted on.", watch: "A grooved pulley, a weak tensioner, or a cracked plastic impeller on the old pump should be quoted while the belt is off." },
+            { title: "Install the pump and thermostat in sequence", detail: "Follow the torque sequence in service information. Do not use extra sealant where the gasket is already coated. If the thermostat is in this job, install it in the direction stamped on the housing, with the jiggle pin or bleed notch where the procedure shows it. Refit hoses with the clamps back on the bead, not on the hose end.", watch: "A thermostat installed backwards, or a clamp on the flare, is a comeback. Check both before the belt goes on." },
+            { title: "Refill, bleed, and pressure-test", detail: "Mix the specified coolant and distilled water to the ratio on the bottle or the service spec, unless the coolant is premix. Fill through a spill-free funnel. Run the engine with the heater on hot until the thermostat opens and both hoses are hot. Squeeze the hoses to chase air. Top off, cap the system, and pressure-test cold or as the procedure allows.", watch: "The level dropping after the thermostat opens means air is still burping, or a leak opened up. Do not deliver it low." },
+            { title: "Road-test to operating temperature", detail: "Drive until the fan cycles or the gauge sits in the normal range. Watch for heat at idle and heat on the highway. Recheck the level after cooldown and look under the pump and the thermostat housing with a light.", watch: "Temperature that climbs only at idle points back at airflow and the fan, not at the new pump." }
+          ]
+        },
+        oil: {
+          difficulty: "Basic",
+          time: "0.5\u20130.8 hours",
+          diagram: "oil",
+          tools: ["Drain pan", "Correct drain-plug socket or wrench", "Filter wrench", "Torque wrench", "Fender covers"],
+          parts: ["Oil of the specified viscosity, up to the capacity on the work order", "Filter that matches the VIN", "Drain-plug washer if the plug uses one"],
+          safety: ["Exhaust and oil are hot. Wear gloves and eye protection.", "Confirm the vehicle is in park or gear with the brake set before you go underneath.", "Do not overfill. Extra oil can aerate and damage the engine."],
+          videos: ["oil and filter change procedure", "drain plug torque and filter install"],
+          steps: [
+            { title: "Identify the oil and the filter before you drain", detail: "Match the viscosity and specification (such as the dexos or European rating on the cap or in service information) to the oil on the van. Confirm the filter and the drain plug tool. Set the lift or ramps so the plug and the filter are both reachable. The diagram shows the pan plug low and the filter on the side or the housing on top.", watch: "A plastic housing and a cartridge is not a spin-on job. Use the housing tool and replace the O-rings." },
+            { title: "Drain and inspect the plug", detail: "Start the drain with the engine warm, not scalding. Crack the plug, then remove it by hand so it does not fall into the pan. Look at the magnet or the plug face for metal. Replace the washer if the procedure calls for a new one. Let it drain until it slows to a drip.", watch: "Chunks of metal or a strong fuel smell in the oil is a diagnosis, not a normal service. Stop and show the service writer." },
+            { title: "Change the filter without double-gasketing", detail: "Remove the old filter. Confirm the old gasket came off with it. Oil the new gasket with clean oil. Spin the filter on until the gasket contacts, then the additional turn the filter maker prints on the can. For a cartridge, lube the new O-rings and torque the cap to spec.", watch: "A gasket left on the engine will blow oil out as soon as it starts." },
+            { title: "Fill, run, and set the level", detail: "Install the plug and torque it. Add the quantity on the work order, which caps conventional and synthetic jobs at about five quarts unless the estimate added more. Start the engine, confirm oil pressure, shut it off, wait, and set the level on the dipstick or the electronic gauge. Reset the oil-life monitor if the vehicle has one. Check the plug and the filter for seepage.", watch: "The level climbing above full, or a drip at the plug, gets fixed before the vehicle leaves the bay." }
+          ]
+        },
+        battery: {
+          difficulty: "Basic",
+          time: "0.6\u20131.0 hours",
+          diagram: "battery",
+          tools: ["Memory saver if the customer wants radio and window settings kept", "Terminal cleaner", "Torque wrench or terminal tool", "Battery tester", "Scan tool for registration when the vehicle requires it"],
+          parts: ["Battery of the correct group size and type on the work order", "Anti-corrosion washers or spray", "Hold-down hardware if the old hardware is broken"],
+          safety: ["Disconnect the negative cable first and reconnect it last.", "Keep the positive from touching body metal.", "AGM and EFB batteries are an upgrade, not a substitute for a flooded battery on the menu price."],
+          videos: ["car battery replacement negative first", "battery registration after replacement"],
+          steps: [
+            { title: "Test the battery and the charging system first", detail: "Load-test or conductance-test the battery and record the result. With the engine running, check charging voltage. A battery that tests good with a weak alternator is not fixed by a new battery. The diagram shows negative to the body and positive through the fuse box.", watch: "Charging voltage that stays low or climbs past the spec means finish the charging test before you sell a battery." },
+            { title: "Save memory and disconnect negative first", detail: "Connect a memory saver if you are keeping adaptations. Switch the ignition off. Remove the negative cable, then the positive, then the hold-down. Note the vent hose and the heat shield on vehicles that use them.", watch: "A swollen case or a wet tray is a reason to quote the tray and the cables, not only the battery." },
+            { title: "Clean the terminals and the tray", detail: "Neutralize corrosion, brush the posts and the clamps, and rinse so powder does not stay in the tray. Confirm the new battery group size, terminal location, and CCA match the job. Flooded, AGM, and EFB are not interchangeable on this menu.", watch: "A clamp that will not tighten, or a post that rocks, needs a new cable end." },
+            { title: "Install, torque, and register", detail: "Set the battery, install the hold-down, connect positive, then negative. Torque the clamps so they cannot rotate by hand. Protect the posts. If service information requires battery registration or a reset, do that with a scan tool before you close the hood. Recheck charging voltage.", watch: "A vehicle that will not start after the swap, or a stop-start light that stays on, usually still needs registration or a charging repair." }
+          ]
+        },
+        belt: {
+          difficulty: "Intermediate",
+          time: "0.8\u20131.5 hours",
+          diagram: "belt",
+          tools: ["Serpentine-belt tool or the correct wrench for the tensioner", "Torque wrench", "Inspection light"],
+          parts: ["Belt that matches the VIN and the accessory layout", "Tensioner or idler only if they failed inspection and were quoted"],
+          safety: ["Release the tensioner in the direction it is built to move. Do not pry the belt off a spinning pulley.", "Keep fingers clear when the tensioner snaps back.", "Confirm the routing diagram under the hood or in service information before the old belt comes off."],
+          videos: ["serpentine belt replacement tensioner", "belt routing diagram"],
+          steps: [
+            { title: "Photograph the routing and inspect the pulleys", detail: "With the engine off, photograph the belt path. Compare it with the underhood sticker and with the belt diagram: crank at the bottom, tensioner arrow, alternator, and idlers. Spin each pulley by hand. A groaning tensioner, a wobbly idler, or a pulley that grinds gets quoted before the new belt goes on.", watch: "The menu price is the belt. Tensioners, idlers, and damaged pulleys are a revised quote." },
+            { title: "Release the tensioner and remove the belt", detail: "Put the tool on the tensioner hex or square and rotate it the way the arrow shows, only far enough to slip the belt off one pulley. Do not let the tensioner slam. Pull the belt and note any glazing, cord, or rib that is missing.", watch: "A tensioner that will not move, or that sits against the stop, is worn. Replace it on this visit if the customer approves." },
+            { title: "Route the new belt and release the tensioner slowly", detail: "Follow the photo and the sticker rib by rib. The belt ribs sit in the grooved pulleys. The back of the belt rides the smooth pulleys. Keep the tensioner loaded, seat the belt, and let the tensioner return under control.", watch: "One rib off a pulley will shred the belt on startup. Recheck every pulley before you start the engine." },
+            { title: "Run and look for tracking", detail: "Start the engine and watch the belt from a safe distance. It should run in the center of each pulley without walking off or chirping. Shut it off and confirm the tensioner mark, if it has one, is in the normal range.", watch: "A chirp that remains is usually a pulley or a misroute, not a reason to spray the belt." }
+          ]
+        },
+        "air-filter": {
+          difficulty: "Basic",
+          time: "0.3\u20130.5 hours",
+          diagram: "filter",
+          tools: ["Screwdriver or the housing clip tool", "Shop vacuum or a rag for the airbox", "Flashlight"],
+          parts: ["One standard engine air filter for the VIN"],
+          safety: ["Do not start the engine with the airbox open.", "A performance or dual-filter housing is outside the standard menu price."],
+          videos: ["engine air filter replacement airbox"],
+          steps: [
+            { title: "Open the airbox without breaking the clips", detail: "Unclip or unbolt the lid. Note which sensors and hoses stay on the lid. Lift the old filter straight out and compare the shape with the new one before you throw the old filter away.", watch: "A housing that uses a different filter, or two filters, is a specialty application. Revise the price." },
+            { title: "Clean the box and seat the new filter", detail: "Vacuum leaves and dirt out of the box. Wipe the sealing face. Set the new filter so the seal is even all the way around. Close the lid and fasten every clip. Reconnect any hose you moved.", watch: "A filter that sits crooked will let dirt past the seal. Reopen the box and seat it again." },
+            { title: "Confirm the intake is closed", detail: "Trace the tube from the box to the throttle body. Clamps should be on the bead. Start the engine and listen for a whistle at the lid.", watch: "A whistle means the lid or a clamp is still open." }
+          ]
+        },
+        "cabin-filter": {
+          difficulty: "Basic",
+          time: "0.4\u20130.8 hours",
+          diagram: "filter",
+          tools: ["Trim tool", "Flashlight", "Vacuum for the housing"],
+          parts: ["One standard cabin or pollen filter"],
+          safety: ["A carbon or two-piece filter, or a filter behind the cowl, is an upgrade when access is not the glovebox door.", "Do not break the glovebox stop if the procedure says to release it."],
+          videos: ["cabin air filter replacement glovebox"],
+          steps: [
+            { title: "Find the housing", detail: "Most filters are behind the glovebox. Empty the glovebox, release the stop or the damper the service information shows, and let the door hang. If the filter is under the cowl, the wiper cowl panel has to come off and that labor is extra.", watch: "Leaves packed in the cowl mean the housing should be cleaned or the new filter loads up immediately." },
+            { title: "Note the airflow arrow and remove the old filter", detail: "Open the cover. Photograph the arrow on the old filter. Slide it out without dumping debris into the blower. Vacuum the housing.", watch: "A damp filter or a musty housing is a reason to tell the customer, and to dry the box before the new filter goes in." },
+            { title: "Install with the arrow pointing the correct way", detail: "Match the new filter arrow to the old one and to the arrow molded in the housing. Slide it in without folding the media. Reinstall the cover, the glovebox stops, and any trim you removed. Run the fan and confirm airflow at the vents.", watch: "An arrow aimed the wrong way can pull debris into the blower and reduce airflow." }
+          ]
+        },
+        wipers: {
+          difficulty: "Basic",
+          time: "0.3 hours",
+          diagram: "wipers",
+          tools: ["Fender cover", "Small flat tool for the connector if it is the pinch type"],
+          parts: ["Two standard beam or hybrid blades of the correct lengths"],
+          safety: ["Keep the arms from snapping onto the glass while the blade is off.", "Washer fluid that is oily or contaminated gets flushed, not topped off."],
+          videos: ["wiper blade replacement connector types"],
+          steps: [
+            { title: "Match the length and the connector", detail: "Measure both blades or read the old part. Driver and passenger lengths are often different. Identify the connector: hook, pinch tab, or side pin. Lay a fender cover on the glass.", watch: "A rear blade or a specialty connector is not included in the two-blade menu price." },
+            { title: "Swap the blades and park the arms", detail: "Lift the arm, release the connector, and install the new blade until it clicks. Lower the arm onto the glass. Do not let it drop. Repeat on the other side.", watch: "An arm that sits high or hits the cowl needs the park position checked before the customer leaves." },
+            { title: "Test the washers and the wipe", detail: "Fill the washer reservoir if it is low. Spray and run the wipers. The glass should clear in one or two passes without streaking or chatter.", watch: "A streak that remains is usually glass contamination or a twisted arm, not a reason to replace the blade again immediately." }
+          ]
+        },
+        rotation: {
+          difficulty: "Basic",
+          time: "0.4\u20130.6 hours",
+          diagram: "rotation",
+          tools: ["Torque wrench", "Jack or lift", "Tread depth gauge", "Pressure gauge"],
+          parts: ["No parts on a rotation-only job"],
+          safety: ["Torque lug nuts to the specification for this vehicle, not a generic guess.", "A tire at the wear bars, or with a bulge, does not go back on the vehicle."],
+          videos: ["tire rotation pattern FWD AWD", "lug nut torque star pattern"],
+          steps: [
+            { title: "Record depth and choose the pattern", detail: "Measure tread at each tire and note the drive layout. Front-wheel drive usually moves the fronts straight back and crosses the rears forward. All-wheel drive and directional tires follow the pattern in service information or on the sidewall. Do not cross a directional tire.", watch: "More than 2/32 inch of difference, or a tire with a plug in the shoulder, gets shown to the customer before you rotate." },
+            { title: "Move the tires and seat the wheels", detail: "Mark the wheels if it helps you keep the pattern. Clean the hub face if rust holds the wheel off-center. Install by hand, then snug the lugs in a star before the vehicle comes down.", watch: "A wheel that will not sit flush has debris on the hub or the wrong wheel. Do not pull it on with the lug nuts." },
+            { title: "Torque and set pressures", detail: "Lower the vehicle and torque in a star to the door-sticker or service specification. Set pressures to the placard, including the spare if you touched it. Reset the indirect TPMS if the procedure requires a drive cycle or a button.", watch: "A lug that will not reach torque, or a stud that spins, stops the job until the stud is repaired." }
+          ]
+        },
+        nostart: {
+          difficulty: "Intermediate",
+          time: "0.8\u20131.2 hours",
+          diagram: "battery",
+          tools: ["Battery tester", "Digital multimeter", "Inductive amp clamp", "Scan tool"],
+          parts: ["No parts until the test names a failed component"],
+          safety: ["Keep clear of the fan and belts during a cranking test.", "Do not jump a swollen or frozen battery.", "This menu item is the three-test written result, not the repair."],
+          videos: ["no start battery starter alternator test", "voltage drop test starter circuit"],
+          steps: [
+            { title: "Separate no-crank from crank-no-start", detail: "Ask what the driver heard: click, slow crank, or a normal crank with no fire. Confirm park or clutch, the security light, and fuel level. Record battery voltage at rest.", watch: "A security light or a no-communication scan is outside the three-test menu. Tell the service writer before you go further." },
+            { title: "Load-test the battery", detail: "Test the battery at the posts, not only at the clamps. Record voltage and the tester decision. Clean and retest if the clamps are the weak point. A marginal battery gets replaced or charged before you condemn the starter.", watch: "Voltage under about 12.4 at rest, or a fail on the load test, means the starter-draw number is not valid until the battery is known good." },
+            { title: "Measure starter draw and voltage drop", detail: "Clamp the amp probe on the battery cable and crank. Compare the draw with the specification for this starter. Measure voltage drop on the positive cable and on the ground while cranking. A large drop on a cable is a connection or cable fault, not a starter.", watch: "Draw that is far above spec with a good battery and clean cables supports starter replacement. Quote it. Do not install it inside the diagnostic price." },
+            { title: "Test charging and write the go or no-go", detail: "If the engine will run, measure charging voltage at idle and with loads. Write three lines on the repair order: battery pass or fail, starter circuit pass or fail, alternator pass or fail. Credit the diagnostic toward a same-visit repair if the customer approves that repair.", watch: "Leave the written result even if the customer declines the repair." }
+          ]
+        },
+        fuel: {
+          difficulty: "Intermediate",
+          time: "0.8\u20131.2 hours",
+          diagram: "general",
+          tools: ["Scan tool", "Induction tool or the approved on-car cleaner kit", "Fender covers", "Fire extinguisher within reach"],
+          parts: ["DI-safe induction or on-car cleaner", "Tank additive specified for the job"],
+          safety: ["This is a chemical service, not injector removal.", "Keep cleaner off paint and off hot exhaust.", "Do not introduce cleaner into a vacuum port the manufacturer does not allow."],
+          videos: ["direct injection intake valve cleaning on car", "fuel system treatment procedure"],
+          steps: [
+            { title: "Confirm it is a cleaning, not a diagnosis", detail: "Read fuel trims and look for misfire counts before you introduce chemical. A lean code, a fuel-pressure fault, or a single-cylinder misfire needs diagnosis first. Tell the customer this service does not remove the injectors.", watch: "Active misfire or a pressure code means stop and diagnose." },
+            { title: "Introduce the DI-safe cleaner the approved way", detail: "Follow the tool instructions for an induction or rail service that is safe on direct injection. Keep shop air and cleaner pressure inside the tool\u2019s limit. Run the engine at the speed the procedure names until the chemical is consumed. Add the tank additive.", watch: "A stumble that does not clear, or a hydrolock risk from too much liquid, means shut it down and pull the chemical back out of the intake." },
+            { title: "Clear the idle and road-test", detail: "Let the idle settle. Look for smoke that clears, then road-test. Recheck trims and misfire counters. Write the before-and-after feel on the repair order.", watch: "A misfire that remains is an ignition, mechanical, or injector-replacement diagnosis, not a second bottle of the same chemical." }
+          ]
+        },
+        transmission: {
+          difficulty: "Advanced",
+          time: "1.5\u20132.5 hours",
+          diagram: "general",
+          tools: ["Drain pan", "Torque wrench", "Fluid transfer pump", "Scan tool for temperature and level", "New filter and gasket if the pan is serviceable"],
+          parts: ["Up to about six quarts of the specified ATF", "Filter and gasket when the pan is serviceable"],
+          safety: ["Fluid temperature for the level check is part of the procedure. A cold level reading is wrong.", "A sealed unit, a machine exchange, and extra fluid are quoted separately.", "Hot fluid burns. Lower the pan slowly."],
+          videos: ["transmission fluid and filter service check level at temperature", "ATF drain and fill procedure"],
+          steps: [
+            { title: "Confirm the unit is serviceable", detail: "Look up whether this transmission has a pan, a filter, and a level plug, or whether it is sealed. Identify the exact ATF specification. Scan for transmission codes and record the fluid color and smell before you drain.", watch: "Burnt fluid with metal, or a slip complaint, is a diagnosis. A drain-and-fill will not fix a failing unit, and it can change how it behaves. Tell the customer first." },
+            { title: "Drain, drop the pan if it is serviceable, and replace the filter", detail: "Drain at the plug. Support the pan, remove it, and dump it in the drain container. Clean the magnet and note the debris. Replace the filter and the gasket. Sealant goes only where the procedure allows, and only as a thin film.", watch: "A magnet full of metal stops the service. Show it to the service writer before you refill." },
+            { title: "Refill and set the level at temperature", detail: "Pump in the quantity that came out, then follow the level-plug procedure at the scan-tool temperature. Shift through the gears with the brake applied if the procedure says to. Recheck the plug for seepage. Cap the job near six quarts unless extra fluid was sold.", watch: "Overfilling causes aeration and venting. Underfilling causes slip. Do not guess the level on a cold unit." },
+            { title: "Road-test shift quality", detail: "Drive through the gears the customer uses. Feel for flare, harsh shifts, or a delayed engagement. Recheck for leaks at the pan and the fill plug when you return.", watch: "A new shift complaint that was not there before the service gets documented and the level rechecked before the vehicle is delivered." }
+          ]
+        },
+        differential: {
+          difficulty: "Intermediate",
+          time: "0.8\u20131.2 hours",
+          diagram: "general",
+          tools: ["Drain pan", "Pump for gear oil", "Torque wrench", "Thread sealant if the plugs require it"],
+          parts: ["Up to about three quarts of the specified synthetic gear oil", "Limited-slip additive when the unit requires it"],
+          safety: ["A second differential, a cover that needs a gasket, and an AWD transfer case are upgrades.", "Gear oil on the exhaust will smoke. Wipe the housing."],
+          videos: ["differential fluid change drain and fill", "limited slip additive gear oil"],
+          steps: [
+            { title: "Identify which housing and which oil", detail: "Confirm front, rear, or the single housing. Read the required oil and whether limited-slip additive is required. This menu is one housing and about three quarts.", watch: "Two differentials or a cover that is leaking at the gasket is a different estimate." },
+            { title: "Drain and inspect the plug", detail: "Crack the fill plug first so you are never stuck with a drained housing and a fill plug that will not open. Then remove the drain plug. Look for metal on the magnet.", watch: "Chunks of gear metal mean stop. Fluid service will not quiet a failing bearing or gear set." },
+            { title: "Fill to the plug and clean up", detail: "Pump oil in until it seeps at the fill hole, or to the quantity in service information, whichever the procedure uses. Install the additive when this unit requires it. Torque both plugs. Wipe the housing and the exhaust.", watch: "A plug that weeps needs sealant or a new plug, not a second attempt with the same damaged threads." }
+          ]
+        },
+        ignition: {
+          difficulty: "Advanced",
+          time: "2.5\u20134.5 hours",
+          diagram: "general",
+          tools: ["Spark-plug socket and extension", "Torque wrench", "Dielectric grease", "Scan tool", "Compressed air to blow out the wells"],
+          parts: ["Six iridium or platinum plugs of the specified heat range for a V6", "Six OE-quality coils when the job includes coils", "New boots if they are not part of the coil"],
+          safety: ["Let the engine cool. A plug in a hot aluminum head can strip or seize.", "Blow debris out of the well before the plug comes out so it does not fall into the cylinder.", "Intake removal on a transverse V6 is a revised quote."],
+          videos: ["V6 spark plug and ignition coil replacement", "spark plug torque and dielectric grease"],
+          steps: [
+            { title: "Scan and record misfire counts first", detail: "Save codes and misfire counters before you clear anything. Note which cylinder is the offender. A tune-up on a mechanical misfire wastes the plugs. Blow out each plug well.", watch: "Coolant or oil in a plug well means the tube seal or the valve cover is part of the job. Quote it while the coil is off." },
+            { title: "Remove one coil and one plug at a time", detail: "Unbolt the coil, unplug it, and pull it straight out. Remove that plug, read the color, gap the new plug only if it is not pregapped to spec, and install it. A small amount of dielectric grease goes in the boot, not on the electrode. Torque the plug. Seat the coil and its bolt before you move to the next cylinder.", watch: "A plug that will not turn needs penetrant and patience. Forcing it strips the head." },
+            { title: "Replace the coils that the job includes", detail: "On a six-coil job, install the new coils as you go so each connector is accounted for. Listen for a full click on every connector. Reroute any harness you moved so it cannot melt on the exhaust.", watch: "A connector lock that is broken will cause an intermittent misfire. Repair the terminal before you close the cover." },
+            { title: "Clear, relearn, and road-test", detail: "Reconnect the battery if it was disconnected. Clear the codes the procedure allows. Start the engine and listen for a smooth idle. Road-test under the same load that set the misfire. Confirm the counters stay at zero.", watch: "A misfire that remains on one cylinder after plugs and coils points at compression, an injector, or wiring. Do not keep swapping parts." }
+          ]
+        },
+        general: {
+          difficulty: "Intermediate",
+          time: "Varies \u2014 confirm the labor operation",
+          diagram: "general",
+          tools: ["Scan tool when the system is electronic", "Torque wrench", "Service information for this VIN", "Fender covers and the lifting equipment the job requires"],
+          parts: ["Parts confirmed by VIN after inspection", "One-time-use fasteners, seals, and fluids named in the procedure"],
+          safety: ["This guide is a workflow, not a substitute for the current manufacturer procedure.", "Stop if the condition on the vehicle does not match the authorized repair.", "Look up torque, fluid, and programming steps for this VIN before assembly."],
+          videos: ["repair procedure", "torque specs service precautions"],
+          steps: [
+            { title: "Verify the vehicle and the authorization", detail: "Match the VIN, the complaint, and the sold operation. Open current service information for this vehicle and read the precautions, the torque list, and any one-time-use parts before the first bolt comes out. Photograph connectors and routing you will disturb.", watch: "A different engine, a different axle, or an open recall that overlaps this job changes the procedure. Confirm it now." },
+            { title: "Baseline the concern", detail: "Scan and save codes if the system is electronic. Record fluid level, leak evidence, noise, and any measurement the procedure asks for before disassembly. Road-test only when it is safe and the complaint needs to be felt.", watch: "If you cannot reproduce the complaint, write down the conditions and ask for more detail before parts are ordered." },
+            { title: "Protect the vehicle and isolate energy", detail: "Use fender covers, lug-nut caps, and a battery disconnect when the procedure requires it. Support the vehicle at approved points. Contain fuel, oil, coolant, and refrigerant. High-voltage systems stay locked out under the manufacturer procedure.", watch: "A repair that needs refrigerant recovery, airbag work, or high-voltage certification stops until that equipment and training are in the bay." },
+            { title: "Disassemble only as far as the procedure requires", detail: "Follow the sequence. Bag fasteners by location. Replace clips and seals that the procedure calls one-time-use. Compare the new part with the old one before it is installed. Clean mating surfaces without gouging aluminum.", watch: "Hidden damage, stripped threads, or a broken connector is a revised estimate, not something to glue and hide." },
+            { title: "Assemble to the specification", detail: "Install in the reverse sequence unless the procedure says otherwise. Torque and angle-tighten in the published order. Refill with the specified fluid and bleed or program if the procedure includes that step. Reroute harnesses away from heat and moving parts.", watch: "A bolt that will not reach torque is not \u201Cclose enough.\u201D Repair the thread or replace the fastener." },
+            { title: "Verify the original complaint is gone", detail: "Clear codes only when the procedure says to. Road-test in the same conditions as the complaint. Recheck for leaks, warning lights, and noises. Record the final readings and any remaining recommendation on the repair order.", watch: "A new noise or a light that was not there at the start gets fixed or disclosed before delivery." }
+          ]
+        }
+      };
+      FAMILIES.callout = {
+        difficulty: "Basic",
+        time: "Trip time",
+        diagram: "general",
+        tools: ["Camera", "The work order and the address"],
+        parts: ["None"],
+        safety: ["Do not enter a closed garage or a yard you were not given access to.", "If the vehicle is inaccessible, document it and leave. Do not force a lock."],
+        videos: ["mobile mechanic arrival inspection"],
+        steps: [
+          { title: "Confirm the address and a way to reach the customer", detail: "Call or text when you are close. If nobody answers and the vehicle is locked, gated, or not there, photograph the location and the time.", watch: "A same-day reschedule can waive the fee when the drive was not wasted. A no-show after you arrived is the call-out fee." },
+          { title: "Write what stopped the job", detail: "Note locked vehicle, no access, wrong address, or unsafe conditions. Attach the photos to the work order so the fee is explainable.", watch: "Do not start a repair you cannot finish because of missing authorization or missing access." }
+        ]
+      };
+      DIAGRAMS = {
+        brakes: svg("Brake corner", `
+    <circle cx="168" cy="118" r="62" fill="#8aa0a6"/>
+    <circle cx="168" cy="118" r="28" fill="#d7dee0"/>
+    <circle cx="168" cy="118" r="10" fill="#1c3a32"/>
+    <rect x="126" y="52" width="84" height="28" rx="6" fill="#1c3a32"/>
+    <rect x="146" y="78" width="18" height="22" fill="#c45c26"/>
+    <rect x="172" y="78" width="18" height="22" fill="#c45c26"/>
+    <text x="132" y="70" fill="#f4f7f4" font-family="sans-serif" font-size="10">Caliper</text>
+    <text x="118" y="168" fill="#1c3a32" font-family="sans-serif" font-size="11">Rotor</text>
+    <text x="196" y="108" fill="#1c3a32" font-family="sans-serif" font-size="11">Pads</text>
+    <line x1="250" y1="90" x2="300" y2="70" stroke="#1c3a32" stroke-width="3"/>
+    <circle cx="308" cy="64" r="8" fill="#d7f56a" stroke="#1c3a32"/>
+    <text x="250" y="58" fill="#1c3a32" font-family="sans-serif" font-size="11">Slide pin</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Support the caliper. Do not hang it from the hose.</text>`),
+        measure: svg("Measure before you replace", `
+    <rect x="70" y="78" width="150" height="16" rx="3" fill="#8aa0a6"/>
+    <rect x="78" y="96" width="134" height="8" fill="#d7dee0"/>
+    <path d="M40 70 h40 v70 h-40 z" fill="#1c3a32"/>
+    <path d="M210 70 h40 v70 h-40 z" fill="#1c3a32"/>
+    <text x="48" y="108" fill="#f4f7f4" font-family="sans-serif" font-size="10">Mic</text>
+    <text x="232" y="150" fill="#1c3a32" font-family="sans-serif" font-size="12">Discard thickness</text>
+    <text x="232" y="168" fill="#c45c26" font-family="sans-serif" font-size="12">from service info</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Measure several points. One thin spot fails the rotor.</text>`),
+        cooling: svg("Cooling loop", `
+    <rect x="40" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
+    <text x="58" y="110" fill="#f4f7f4" font-family="sans-serif" font-size="12">Engine</text>
+    <circle cx="150" cy="150" r="22" fill="#8aa0a6" stroke="#1c3a32" stroke-width="3"/>
+    <text x="128" y="188" fill="#1c3a32" font-family="sans-serif" font-size="11">Pump</text>
+    <rect x="210" y="48" width="28" height="36" rx="4" fill="#c45c26"/>
+    <text x="248" y="70" fill="#1c3a32" font-family="sans-serif" font-size="11">Thermostat</text>
+    <rect x="250" y="90" width="70" height="80" rx="6" fill="#d7dee0" stroke="#1c3a32"/>
+    <text x="262" y="135" fill="#1c3a32" font-family="sans-serif" font-size="12">Radiator</text>
+    <path d="M130 80 H210" stroke="#1c3a32" stroke-width="3" fill="none"/>
+    <path d="M224 84 H250" stroke="#1c3a32" stroke-width="3" fill="none"/>
+    <path d="M285 170 H172" stroke="#1c3a32" stroke-width="3" fill="none"/>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Bleed until both hoses are hot, then pressure-test.</text>`),
+        oil: svg("Oil service", `
+    <rect x="80" y="40" width="160" height="70" rx="10" fill="#1c3a32"/>
+    <text x="130" y="80" fill="#f4f7f4" font-family="sans-serif" font-size="13">Engine</text>
+    <rect x="120" y="110" width="80" height="36" rx="4" fill="#8aa0a6"/>
+    <circle cx="160" cy="162" r="8" fill="#c45c26"/>
+    <text x="176" y="166" fill="#1c3a32" font-family="sans-serif" font-size="11">Drain plug</text>
+    <rect x="250" y="78" width="36" height="48" rx="6" fill="#d7f56a" stroke="#1c3a32"/>
+    <text x="292" y="106" fill="#1c3a32" font-family="sans-serif" font-size="11">Filter</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Old gasket must come off with the filter.</text>`),
+        battery: svg("Battery connections", `
+    <rect x="120" y="50" width="120" height="90" rx="8" fill="#1c3a32"/>
+    <rect x="145" y="34" width="16" height="20" fill="#c45c26"/>
+    <rect x="198" y="34" width="16" height="20" fill="#24302c"/>
+    <text x="136" y="100" fill="#f4f7f4" font-family="sans-serif" font-size="13">Battery</text>
+    <text x="108" y="30" fill="#c45c26" font-family="sans-serif" font-size="12">+</text>
+    <text x="220" y="30" fill="#1c3a32" font-family="sans-serif" font-size="12">\u2212</text>
+    <path d="M206 34 H280 V150" stroke="#24302c" stroke-width="4" fill="none"/>
+    <text x="250" y="170" fill="#1c3a32" font-family="sans-serif" font-size="11">Negative first off, last on</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Register the battery when the scan tool requires it.</text>`),
+        belt: svg("Belt routing", `
+    <circle cx="180" cy="150" r="28" fill="#8aa0a6" stroke="#1c3a32" stroke-width="4"/>
+    <text x="164" y="154" fill="#1c3a32" font-family="sans-serif" font-size="11">Crank</text>
+    <circle cx="100" cy="70" r="22" fill="#d7dee0" stroke="#1c3a32" stroke-width="4"/>
+    <text x="78" y="48" fill="#1c3a32" font-family="sans-serif" font-size="11">Alternator</text>
+    <circle cx="250" cy="80" r="16" fill="#d7f56a" stroke="#1c3a32" stroke-width="4"/>
+    <text x="230" y="48" fill="#1c3a32" font-family="sans-serif" font-size="11">Tensioner</text>
+    <path d="M112 88 Q180 40 236 86 Q250 120 196 140 Q140 150 108 90" fill="none" stroke="#1c3a32" stroke-width="5"/>
+    <text x="16" y="188" fill="#3d5148" font-family="sans-serif" font-size="11">Photograph the real routing before the belt comes off.</text>`),
+        filter: svg("Filter direction", `
+    <rect x="70" y="60" width="150" height="90" rx="8" fill="#1c3a32"/>
+    <rect x="88" y="78" width="114" height="54" rx="4" fill="#d7f56a"/>
+    <path d="M230 105 h54" stroke="#c45c26" stroke-width="4" fill="none"/>
+    <polygon points="300,105 284,97 284,113" fill="#c45c26"/>
+    <text x="96" y="110" fill="#1c3a32" font-family="sans-serif" font-size="13">Filter</text>
+    <text x="236" y="96" fill="#c45c26" font-family="sans-serif" font-size="12">Airflow</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Match the arrow to the housing before you close the cover.</text>`),
+        wipers: svg("Wiper swap", `
+    <path d="M40 150 Q180 40 320 150" fill="none" stroke="#8aa0a6" stroke-width="10"/>
+    <rect x="150" y="78" width="70" height="14" rx="4" transform="rotate(-28 150 78)" fill="#1c3a32"/>
+    <rect x="188" y="70" width="46" height="10" rx="3" transform="rotate(-28 188 70)" fill="#d7f56a"/>
+    <text x="16" y="40" fill="#1c3a32" font-family="sans-serif" font-size="12">Arm</text>
+    <text x="250" y="70" fill="#1c3a32" font-family="sans-serif" font-size="12">New blade</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Do not let the arm snap onto the glass.</text>`),
+        rotation: svg("Rotation pattern", `
+    <rect x="70" y="40" width="70" height="110" rx="16" fill="none" stroke="#1c3a32" stroke-width="3"/>
+    <circle cx="88" cy="62" r="12" fill="#d7f56a" stroke="#1c3a32"/>
+    <circle cx="122" cy="62" r="12" fill="#d7dee0" stroke="#1c3a32"/>
+    <circle cx="88" cy="128" r="12" fill="#d7dee0" stroke="#1c3a32"/>
+    <circle cx="122" cy="128" r="12" fill="#d7f56a" stroke="#1c3a32"/>
+    <path d="M160 70 h40 l-8 -8 m8 8 l-8 8" stroke="#c45c26" stroke-width="3" fill="none"/>
+    <text x="210" y="74" fill="#1c3a32" font-family="sans-serif" font-size="12">Fronts often go straight back</text>
+    <text x="210" y="98" fill="#1c3a32" font-family="sans-serif" font-size="12">Rears often cross forward</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Directional tires and AWD follow their own pattern.</text>`),
+        general: svg("Inspect, repair, verify", `
+    <rect x="24" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
+    <rect x="134" y="70" width="90" height="70" rx="8" fill="#c45c26"/>
+    <rect x="244" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
+    <text x="40" y="110" fill="#f4f7f4" font-family="sans-serif" font-size="13">Inspect</text>
+    <text x="154" y="110" fill="#f4f7f4" font-family="sans-serif" font-size="13">Repair</text>
+    <text x="264" y="110" fill="#f4f7f4" font-family="sans-serif" font-size="13">Verify</text>
+    <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Torque and fluids come from service information for this VIN.</text>`)
+      };
+    }
+  });
+
+  // src/modules/shop-inspections.js
+  function shopInspection(id) {
+    return SHOP_INSPECTIONS.find((item) => item.id === id) || null;
+  }
+  function statusLabel2(id) {
+    return INSPECTION_STATUSES.find((item) => item.id === id)?.label || "Not performed";
+  }
+  function inspectionItems(catalog) {
+    return (catalog?.sections || []).flatMap((section) => section.items.map((item) => ({
+      ...item,
+      section: section.title,
+      status: "",
+      note: "",
+      measurement: ""
+    })));
+  }
+  function closeInspectionIssues(record) {
+    const issues = [];
+    const items = record?.items || [];
+    const openFindings = items.filter((item) => item.status === "critical" || item.status === "soon");
+    const photos = record?.photoKeys || [];
+    if (openFindings.length && !photos.length) issues.push("Attach a photo of each key finding before closing.");
+    if (!String(record?.customerName || "").trim()) issues.push("Add the customer name on the acknowledgment.");
+    if (record?.catalogId === "pre-purchase" && !record?.verdict) issues.push("Choose BUY, NEGOTIATE, or WALK AWAY.");
+    const unmarked = items.filter((item) => !item.status);
+    if (unmarked.length) issues.push(`${unmarked.length} item${unmarked.length === 1 ? "" : "s"} still need a result, or mark them Not performed.`);
+    return issues;
+  }
+  function inspectionPhotoSrc(key, apiUrl = "") {
+    const value2 = String(key || "");
+    if (value2.startsWith("data:image/")) return value2;
+    if (value2.startsWith("http://") || value2.startsWith("https://") || value2.startsWith("/")) return value2;
+    if (apiUrl && value2 && !value2.includes("..") && !value2.includes("/")) return `${apiUrl}/files/${encodeURIComponent(value2)}`;
+    return "";
+  }
+  function customerInspectionDocument(inspection, profile = {}, escapeHtml2 = (value2) => String(value2 ?? ""), apiUrl = "") {
+    const catalog = shopInspection(inspection.catalogId);
+    const name = inspection.inspectionName || catalog?.name || "Vehicle inspection";
+    const price = Number(inspection.price ?? catalog?.price ?? 0);
+    const groups = /* @__PURE__ */ new Map();
+    for (const item of inspection.items || []) {
+      const title = item.section || "Inspection";
+      if (!groups.has(title)) groups.set(title, []);
+      groups.get(title).push(item);
+    }
+    const sections = [...groups.entries()].map(([title, items]) => {
+      const rows = items.map((item) => `<tr><td>${escapeHtml2(item.label || item.name || "")}</td><td class="result ${escapeHtml2(item.status || "skipped")}">${escapeHtml2(statusLabel2(item.status))}</td><td>${escapeHtml2(item.measurement || "")}</td><td>${escapeHtml2(item.note || "")}</td></tr>`).join("");
+      return `<h2>${escapeHtml2(title)}</h2><table><thead><tr><th>Item</th><th>Result</th><th>Measurement</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }).join("");
+    const verdict = (catalog?.verdicts || []).find((item) => item.id === inspection.verdict);
+    const photos = (inspection.photoKeys || []).map((key) => inspectionPhotoSrc(key, apiUrl)).filter(Boolean).map((src) => `<img src="${escapeHtml2(src)}" alt="Inspection photo"/>`).join("");
+    const signature = inspectionPhotoSrc(inspection.customerSignature, apiUrl);
+    const scanKept = (inspection.items || []).some((item) => /not cleared/i.test(item.label || item.name || "") && item.status && item.status !== "skipped");
+    return `<article class="customer-inspection">
+    <p class="fee">Inspection fee ${price.toFixed(2)} USD. Repairs, parts, and disassembly are quoted separately.</p>
+    <h1>${escapeHtml2(name)}</h1>
+    <p>${escapeHtml2(profile.shopName || "Reliable Automotive Services")}</p>
+    <p>${escapeHtml2(inspection.number || "")} \xB7 ${escapeHtml2(inspection.createdAt || "")}</p>
+    <p><b>Customer</b> ${escapeHtml2(inspection.customer || "")} \xB7 <b>Vehicle</b> ${escapeHtml2(inspection.vehicle || "")}</p>
+    <p><b>VIN</b> ${escapeHtml2(inspection.vin || "")} \xB7 <b>Mileage</b> ${escapeHtml2(inspection.mileage || "")} \xB7 <b>Technician</b> ${escapeHtml2(inspection.techName || "")}</p>
+    ${(inspection.conditions || []).length ? `<p><b>Conditions</b> ${escapeHtml2(inspection.conditions.join(", "))}</p>` : ""}
+    ${verdict ? `<p class="verdict">${escapeHtml2(verdict.label)}</p>` : ""}
+    ${scanKept ? "<p>Stored codes were recorded and were not cleared.</p>" : ""}
+    ${inspection.sellerSummary ? `<h2>Seller summary</h2><p>${escapeHtml2(inspection.sellerSummary)}</p>` : ""}
+    ${sections}
+    <h2>Recommendations</h2><p>${escapeHtml2(inspection.recommendations || "None beyond the items above.")}</p>
+    <h2>Limits</h2><p>${escapeHtml2(inspection.limits || catalog?.limits || "")}</p>
+    ${photos ? `<h2>Photos</h2><div class="photos">${photos}</div>` : ""}
+    <h2>Customer acknowledgment</h2>
+    <p>${escapeHtml2(inspection.customerName || "")} acknowledges this inspection. Repairs are not included in the inspection fee.</p>
+    ${signature ? `<img class="signature" src="${escapeHtml2(signature)}" alt="Customer signature"/>` : ""}
+  </article>`;
+  }
+  function inspectionMenuHtml(escapeHtml2 = (value2) => String(value2 ?? "")) {
+    return SHOP_INSPECTIONS.map((item) => `<button type="button" class="inspection-offer" data-start-inspection="${escapeHtml2(item.id)}"><b>${escapeHtml2(item.name)}</b><span>$${item.price}</span><small>${escapeHtml2(item.summary)}</small></button>`).join("");
+  }
+  function statusOptions(selected, escapeHtml2) {
+    const blank = `<option value="" ${selected ? "" : "selected"}>Choose</option>`;
+    return blank + INSPECTION_STATUSES.map((status) => `<option value="${status.id}" ${selected === status.id ? "selected" : ""}>${escapeHtml2(status.label)}</option>`).join("");
+  }
+  function catalogInspectionFormHtml(catalog, record = null, context = {}, escapeHtml2 = (value2) => String(value2 ?? "")) {
+    const items = record?.items?.length ? record.items : inspectionItems(catalog);
+    const sections = [];
+    for (const item of items) {
+      const title = item.section || "Inspection";
+      let section = sections.find((entry) => entry.title === title);
+      if (!section) {
+        section = { title, items: [] };
+        sections.push(section);
+      }
+      section.items.push(item);
+    }
+    const fields = sections.map((section) => {
+      const rows = section.items.map((item) => `<div class="inspect-row" data-section="${escapeHtml2(section.title)}">
+      <div><b>${escapeHtml2(item.label || item.name || "")}</b></div>
+      <select name="status-${escapeHtml2(item.id)}" aria-label="Result for ${escapeHtml2(item.label || item.name || "")}">${statusOptions(item.status, escapeHtml2)}</select>
+      ${item.measure || item.measurement ? `<input name="measure-${escapeHtml2(item.id)}" value="${escapeHtml2(item.measurement || "")}" placeholder="${escapeHtml2(item.measure || "Measurement")}" aria-label="${escapeHtml2(item.measure || "Measurement")}"/>` : "<span></span>"}
+      <input name="note-${escapeHtml2(item.id)}" value="${escapeHtml2(item.note || "")}" placeholder="Finding" aria-label="Note"/>
+      <button type="button" class="secondary dictate" data-dictate="note-${escapeHtml2(item.id)}">Dictate</button>
+    </div>`).join("");
+      return `<section class="inspect-section"><div class="inspect-section-head"><h3>${escapeHtml2(section.title)}</h3><button type="button" class="mini-action" data-mark-section="${escapeHtml2(section.title)}">Mark unmarked OK</button></div>${rows}</section>`;
+    }).join("");
+    const vehicles = (context.vehicles || []).map((vehicle) => `<option value="${escapeHtml2(vehicle.id)}" ${record?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml2(vehicle.label)}</option>`).join("");
+    const orders2 = (context.orders || []).map((order) => `<option value="${escapeHtml2(order.id)}" ${record?.workOrderId === order.id ? "selected" : ""}>${escapeHtml2(order.label)}</option>`).join("");
+    const verdicts = (catalog.verdicts || []).map((item) => `<option value="${item.id}" ${record?.verdict === item.id ? "selected" : ""}>${escapeHtml2(item.label)}</option>`).join("");
+    const conditions = ["Cold", "Already warm", "Road test authorized", "Lift or jack stands", "Scan authorized", "Compression authorized"];
+    const selectedConditions = new Set(record?.conditions || []);
+    const photos = (record?.photoKeys || []).map((key) => inspectionPhotoSrc(key, context.apiUrl)).filter(Boolean);
+    return `<form class="modal wide inspect-sheet" id="catalog-inspection-form">
+    <div class="modal-head"><h2>${escapeHtml2(catalog.name)}</h2><button type="button" class="close" data-close></button></div>
+    <div class="modal-body">
+      <p class="inspect-fee">Inspection fee $${catalog.price}. Repairs, parts, and disassembly are quoted separately. Type a finding or dictate it.</p>
+      <div class="form-grid">
+        <label>Customer<input name="customer" value="${escapeHtml2(record?.customer || "")}" required/></label>
+        <label>Vehicle<input name="vehicle" value="${escapeHtml2(record?.vehicle || "")}" placeholder="Year make model" required/></label>
+        <label>VIN<input name="vin" value="${escapeHtml2(record?.vin || "")}"/></label>
+        <label>Mileage<input name="mileage" value="${escapeHtml2(record?.mileage || "")}"/></label>
+        <label>Technician<input name="tech" value="${escapeHtml2(record?.techName || context.techName || "")}"/></label>
+        <label>Linked vehicle<select name="vehicleId"><option value="">Not in the shop list</option>${vehicles}</select></label>
+        <label>Work order<select name="workOrderId"><option value="">Unlinked</option>${orders2}</select></label>
+      </div>
+      <div class="inspect-conditions">${conditions.map((condition) => `<label><input type="checkbox" name="condition" value="${escapeHtml2(condition)}" ${selectedConditions.has(condition) ? "checked" : ""}/>${escapeHtml2(condition)}</label>`).join("")}</div>
+      <details class="inspect-guide"><summary>Technician guide</summary><p>${escapeHtml2(catalog.summary)}</p><p><b>Photos before closing:</b> ${escapeHtml2(catalog.photos)}</p><p>${escapeHtml2(catalog.limits)}</p></details>
+      ${fields}
+      <label class="full">Recommendations<textarea name="recommendations" rows="3">${escapeHtml2(record?.recommendations || "")}</textarea></label>
+      <button type="button" class="secondary dictate" data-dictate="recommendations">Dictate recommendations</button>
+      ${verdicts ? `<label>Verdict<select name="verdict"><option value="">Choose</option>${verdicts}</select></label><label class="full">One-page seller summary<textarea name="sellerSummary" rows="4">${escapeHtml2(record?.sellerSummary || "")}</textarea></label><button type="button" class="secondary dictate" data-dictate="sellerSummary">Dictate seller summary</button>` : ""}
+      <label class="full">Photos of key findings<input name="photos" type="file" accept="image/*" capture="environment" multiple/></label>
+      ${photos.length ? `<div class="inspect-photos">${photos.map((src) => `<img src="${escapeHtml2(src)}" alt="Attached inspection photo"/>`).join("")}</div>` : ""}
+      <input type="hidden" name="existingPhotos" value="${escapeHtml2(JSON.stringify(record?.photoKeys || []))}"/>
+      <label>Customer acknowledgment name<input name="customerName" value="${escapeHtml2(record?.customerName || record?.customer || "")}" placeholder="Name on the customer copy"/></label>
+      <div class="inspect-sign"><span>Customer signature</span><canvas id="inspection-signature" width="520" height="140"></canvas><button type="button" class="secondary" id="clear-signature">Clear signature</button></div>
+      <p class="inspect-limits">${escapeHtml2(catalog.limits)}</p>
+    </div>
+    <div class="modal-actions">
+      <button type="submit" class="secondary" data-intent="draft">Save draft</button>
+      <button type="submit" class="secondary" data-intent="print">Print customer copy</button>
+      <button type="submit" class="primary" data-intent="close">Close inspection</button>
+    </div>
+  </form>`;
+  }
+  var check, INSPECTION_STATUSES, SHOP_INSPECTIONS;
+  var init_shop_inspections = __esm({
+    "src/modules/shop-inspections.js"() {
+      check = (id, label2, measure = "") => ({ id, label: label2, measure });
+      INSPECTION_STATUSES = [
+        { id: "ok", label: "OK" },
+        { id: "monitor", label: "Monitor" },
+        { id: "soon", label: "Soon" },
+        { id: "critical", label: "Safety-critical" },
+        { id: "skipped", label: "Not performed" }
+      ];
+      SHOP_INSPECTIONS = [
+        {
+          id: "pre-purchase",
+          name: "Flagship Pre-Purchase Inspection",
+          price: 229,
+          summary: "Identity, body, tires, engine bay, cold start, road test, scan, compression, underbody, recalls, and a buy / negotiate / walk-away verdict.",
+          limits: "Any section not performed is marked. This inspection cannot predict every future failure or hidden damage.",
+          verdicts: [
+            { id: "buy", label: "BUY" },
+            { id: "negotiate", label: "NEGOTIATE" },
+            { id: "walk", label: "WALK AWAY" }
+          ],
+          photos: "VIN, odometer, four corners, tread on all four, pads and rotors if visible, underbody and rust, engine-bay leaks, OBD screen if codes are present, and every finding that supports the verdict.",
+          sections: [
+            { title: "Identity and authorization", items: [
+              check("auth", "Authorization, location, cold status, and permission for road test, lift, compression, and scan"),
+              check("identity", "VIN, mileage, and identity match the vehicle presented", "Mileage")
+            ] },
+            { title: "Exterior", items: [
+              check("paint", "Paint, panel gaps, glass, and visible damage")
+            ] },
+            { title: "Tires and wheels", items: [
+              check("tread", "Tread at multiple points, wear, date codes, mismatch, spare, and TPMS", "Tread /32")
+            ] },
+            { title: "Engine bay and start", items: [
+              check("bay", "Fluids, leaks, belts, hoses, mounts, battery, and cooling"),
+              check("start", "Cold start: crank time, smoke, idle, noises, and lights. Mark not observed if already warm")
+            ] },
+            { title: "Scan and mechanical", items: [
+              check("scan", "All accessible modules scanned. Codes not cleared. DTCs, freeze frame, readiness, module faults"),
+              check("compression", "Cold or hot compression, or relative compression by scan. Method labeled. Leak-down if uneven", "Readings")
+            ] },
+            { title: "Road test and underbody", items: [
+              check("road", "Road test when legal and safe: accel, shifts, clutch, vibration, pull, brakes, steering, suspension, HVAC"),
+              check("underbody", "Underbody on a lift or jack stands: frame, rust, leaks, bushings, exhaust, tanks, lines, brakes")
+            ] },
+            { title: "Records and campaigns", items: [
+              check("history", "Service history if provided. Gaps, salvage, or flood noted"),
+              check("recalls", "NHTSA recalls and OEM TSBs. Source, date, and open campaigns recorded")
+            ] }
+          ]
+        },
+        {
+          id: "brakes",
+          name: "Brake Inspection",
+          price: 89,
+          summary: "Pedal, fluid, friction thickness, rotors or drums, hardware, parking brake, ABS, and a controlled road test.",
+          limits: "Wheels-off measurements are noted when performed. Repairs are a separate quote.",
+          photos: "Warning lights, reservoir, pads, rotors or drums, hoses, lines, hardware, and every worn, leaking, or heat-damaged part.",
+          sections: [
+            { title: "Setup", items: [check("complaint", "Complaint, mileage, recent brake work, and whether wheels come off", "Mileage")] },
+            { title: "Measure and inspect", items: [
+              check("friction", "Pad or shoe thickness. Estimate versus measured is labeled", "Thickness"),
+              check("rotors", "Rotor or drum condition"),
+              check("hardware", "Calipers, slides, hoses, lines, parking brake, and ABS wiring or tone rings"),
+              check("pedal", "Pedal firmness, travel, and leaks")
+            ] },
+            { title: "Road test", items: [check("road", "Controlled road test: pull, pulsation, noise, and ABS if conditions allow")] }
+          ]
+        },
+        {
+          id: "tires",
+          name: "Tire and Wheel Inspection",
+          price: 79,
+          summary: "Tread, wear, age, size and load match, sidewalls, wheels, spare, TPMS, and a short road test.",
+          limits: "Replacement and alignment are quoted separately.",
+          photos: "Each sidewall, DOT code, tread, wheel, damage, spare, and the TPMS light if it is on.",
+          sections: [
+            { title: "Tires", items: [
+              check("tread", "Inner, center, and outer tread plus pressure on all four", "Tread / pressure"),
+              check("condition", "Cuts, bubbles, cracking, repairs, cords, and separation"),
+              check("match", "Size, load, speed, direction, matching, and clearance")
+            ] },
+            { title: "Wheels and spare", items: [
+              check("wheels", "Bends, cracks, bead corrosion, and missing lugs or studs"),
+              check("spare", "Spare, jack, wrench, lock key, and TPMS"),
+              check("road", "Brief road test for vibration, pull, and noise when safe")
+            ] }
+          ]
+        },
+        {
+          id: "battery",
+          name: "Battery and Charging System Inspection",
+          price: 89,
+          summary: "Case, terminals, state of charge, load or conductance test, cranking, alternator output, belt, cables, and related codes.",
+          limits: "A replacement battery or starter repair is a separate quote.",
+          photos: "Label, terminals, corrosion, hold-down, grounds, belt, warning lights, and meter readings.",
+          sections: [
+            { title: "Battery", items: [
+              check("visual", "Case, terminals, hold-down, cables, and grounds"),
+              check("test", "Resting voltage and battery test", "Volts / result")
+            ] },
+            { title: "Cranking and charging", items: [
+              check("crank", "Crank speed, voltage drop, and starter noise", "Crank volts"),
+              check("charge", "Charging voltage at base and under load. Belt condition", "Charge volts"),
+              check("codes", "Charging and start codes recorded. Codes not cleared")
+            ] }
+          ]
+        },
+        {
+          id: "cooling",
+          name: "Cooling System Inspection",
+          price: 89,
+          summary: "Coolant, radiator, cap, hoses, pump, fans, leaks, warm-up, and a pressure test when it is safe.",
+          limits: "A hot system is not opened. A pressure test is marked not performed when equipment or temperature does not allow it.",
+          photos: "Reservoir, radiator and cap, hoses, pump area, leaks, fans, and gauge readings.",
+          sections: [
+            { title: "Cold inspection", items: [
+              check("level", "Level and condition, only when the system is safe to open"),
+              check("hoses", "Hoses, belts, radiator, thermostat housing, heater hoses, pump, and fan wiring")
+            ] },
+            { title: "Heat and pressure", items: [
+              check("warmup", "Warm-up: temperature rise, fan, cabin heat, idle, and lights"),
+              check("pressure", "Pressure test when safe and equipment is available", "Pressure"),
+              check("mix", "Oil and coolant mix, steam, bubbling, or combustion-gas clues. Skipped tests noted"),
+              check("road", "Controlled road test if safe. Temperature watched")
+            ] }
+          ]
+        },
+        {
+          id: "transmission",
+          name: "Transmission Inspection",
+          price: 109,
+          summary: "Fluid where serviceable, leaks, engagement, shift quality, mounts, codes, and a controlled road test.",
+          limits: "Fluid is checked only by the OEM procedure. Color alone is not a diagnosis. A unit repair is a separate quote.",
+          photos: "Leaks, pan or case, cooler lines, mounts, and warning lights.",
+          sections: [
+            { title: "Fluid and case", items: [
+              check("history", "Type, symptoms, towing, and service history"),
+              check("fluid", "Fluid level and condition where the OEM procedure allows it"),
+              check("leaks", "Case, cooler lines, seals, pan, and mounts")
+            ] },
+            { title: "Function", items: [
+              check("codes", "TCM, PCM, ABS, and drivetrain codes recorded. Codes not cleared"),
+              check("engage", "Park, reverse, neutral, and drive: delay, noise, harshness"),
+              check("road", "Road test: light and moderate accel, shifts, downshifts, coast, cruise. Manual clutch noted if equipped")
+            ] }
+          ]
+        },
+        {
+          id: "differential",
+          name: "Differential / 4x4 Inspection",
+          price: 99,
+          summary: "Differentials, transfer case, seals, U-joints and CV joints, 4WD or AWD engagement, and related noises.",
+          limits: "Fluid service, seal work, and noise diagnosis are separate quotes.",
+          photos: "Housings, seals, vents, boots, leaks, and metal on a magnet if fluid was sampled.",
+          sections: [
+            { title: "Housings", items: [
+              check("type", "2WD, 4WD, or AWD, use, and recent fluid service"),
+              check("fluid", "Fluid level and condition where possible. Burnt smell or metal noted"),
+              check("seals", "Cracks, cover leaks, pinion and axle seals, vents, West Texas dust")
+            ] },
+            { title: "Driveline", items: [
+              check("joints", "U-joints, CV boots, carrier, and mounts"),
+              check("modes", "4HI, 4LO, or AWD engaged safely. Lights and lockers verified if equipped"),
+              check("road", "Road test: accel, coast, turns, highway whine, clunk on tip-in"),
+              check("codes", "Transfer or AWD codes recorded if equipped. Codes not cleared")
+            ] }
+          ]
+        },
+        {
+          id: "steering",
+          name: "Steering and Suspension Inspection",
+          price: 99,
+          summary: "Play, tie rods, ball joints, bushings, shocks, bearings, ride height, and a road test.",
+          limits: "Parts replacement and alignment are quoted separately. The vehicle is supported before anything underneath is loaded.",
+          photos: "Tire wear, leaking struts, broken springs, torn boots, cracks, and rust.",
+          sections: [
+            { title: "Steering", items: [
+              check("history", "Steering complaint, tires, alignment, and collision history"),
+              check("play", "Free play, effort, return, and warning lights, stationary"),
+              check("links", "Tie rods, ball joints, bushings, links, rack or gear, boots, and subframes")
+            ] },
+            { title: "Suspension and road", items: [
+              check("bearings", "Wheel bearing play and noise. CV boots. Impact damage"),
+              check("shocks", "Shock and strut leaks, spring seats, ride height, bump stops"),
+              check("road", "Road test: pull, wander, shimmy, clunks, return, and stability")
+            ] }
+          ]
+        },
+        {
+          id: "exhaust",
+          name: "Exhaust Inspection",
+          price: 79,
+          summary: "Manifolds, flex pipe, catalyst, muffler, hangers, leaks, rust, visible sensors, and a road test.",
+          limits: "Catalyst or pipe replacement is a separate quote.",
+          photos: "Manifolds, catalyst, muffler, hangers, shields, rust-through, and soot.",
+          sections: [
+            { title: "System", items: [
+              check("listen", "Cold and idle listen for manifold tick, then raised inspection"),
+              check("pipes", "Flanges, flex, catalyst rattle, muffler seams, hangers, and shields"),
+              check("leaks", "Soot at joints and heat damage to nearby lines or wiring")
+            ] },
+            { title: "Codes and road", items: [
+              check("codes", "Catalyst, oxygen sensor, and fuel-trim codes recorded. Codes not cleared"),
+              check("road", "Road test: drone, rattle over bumps, and exhaust smell in the cabin")
+            ] }
+          ]
+        },
+        {
+          id: "fuel",
+          name: "Fuel System Inspection",
+          price: 89,
+          summary: "Smell and visible leaks, tank and lines, EVAP, rail area, pump prime, trims, and a short road test.",
+          limits: "This is not injector removal or a tank drop. Adding a chemical is not a leak repair.",
+          photos: "Tank and lines, rail area, EVAP parts if visible, wet stains, and code screens.",
+          sections: [
+            { title: "Leaks", items: [
+              check("smell", "Smell at the filler, tank, and engine bay. No smoking or sparks"),
+              check("lines", "Tank straps, lines, external filter, rail fittings, and DI pump area")
+            ] },
+            { title: "Function", items: [
+              check("pump", "In-tank pump prime on key-on. Unusual whine noted"),
+              check("codes", "Fuel, EVAP, and misfire codes plus trims. Codes not cleared", "Trims"),
+              check("road", "Light and moderate throttle hesitation, documented only")
+            ] }
+          ]
+        },
+        {
+          id: "electrical",
+          name: "Electrical and Lighting Inspection",
+          price: 99,
+          summary: "Exterior and interior lamps, windows, locks, wipers, horn, fuses, visible wiring, and body or restraint codes.",
+          limits: "Items that cannot be tested are listed. Circuit repair is a separate quote.",
+          photos: "Each failed lamp or switch, aftermarket splices, the fuse panel, and scan screens.",
+          sections: [
+            { title: "Lamps and body", items: [
+              check("exterior", "Every exterior lamp, including brake and reverse"),
+              check("interior", "Interior lamps, gauges, windows, locks, mirrors, seats, sunroof, liftgate, and remote"),
+              check("accessories", "Wipers, washers, horn, defrost, blower speeds, outlets, and basic radio")
+            ] },
+            { title: "Power and codes", items: [
+              check("fuses", "Fuses, relays, grounds, moisture, and non-OEM splices"),
+              check("codes", "Body, airbag, ABS, and network codes recorded. Codes not cleared")
+            ] }
+          ]
+        },
+        {
+          id: "hvac",
+          name: "HVAC Inspection",
+          price: 89,
+          summary: "Vent temperature, heat, defrost, blower, compressor, condenser airflow, and cabin filter if it is accessible.",
+          limits: "This is not a recharge. Pressures are taken only after the refrigerant is identified. Refrigerant is not vented.",
+          photos: "Climate panel, cabin filter, compressor, belt, condenser, lines, residue, and gauge readings if taken.",
+          sections: [
+            { title: "Controls", items: [
+              check("modes", "All blower speeds, mode, temperature, recirc, heat, and defrost"),
+              check("vents", "Vent temperature after it stabilizes, at idle and at raised rpm", "Vent temp")
+            ] },
+            { title: "Refrigerant side", items: [
+              check("compressor", "Compressor engagement, cycling, belt noise, and condenser airflow"),
+              check("visual", "Residue, blocked fins, evaporator drain, odors, and cabin filter if accessible"),
+              check("pressures", "Pressures only with identified refrigerant and proper gauges", "Pressures")
+            ] }
+          ]
+        },
+        {
+          id: "engine",
+          name: "Engine Performance / Compression Inspection",
+          price: 129,
+          summary: "Start, idle, misfire, scan with live data, compression or relative compression, and a driveability road test.",
+          limits: "This sets the diagnostic direction. It is not authorization to repair.",
+          photos: "Engine bay, warning lights, leaks, code screens, and compression notes.",
+          sections: [
+            { title: "Baseline", items: [
+              check("history", "When it happens, fuel, recent repairs, and warning lights"),
+              check("visual", "Fluids, intake, vacuum, throttle, belts, battery, and visible ignition or fuel parts"),
+              check("start", "Crank time, idle, misfire feel, smoke, noises, and temperature")
+            ] },
+            { title: "Tests", items: [
+              check("scan", "Accessible modules scanned. Codes not cleared. Live data tied to the complaint"),
+              check("compression", "Mechanical compression, or relative compression by scan. Method labeled. Leak-down if uneven", "Readings"),
+              check("screens", "Voltage, vacuum, or fuel pressure if the tools are on hand", "Readings"),
+              check("road", "Road test: idle, light, moderate, cruise, decel, and restart")
+            ] }
+          ]
+        },
+        {
+          id: "alignment",
+          name: "Alignment Check",
+          price: 79,
+          summary: "Tire wear, pull, steering center, ride height, and a loose-parts screen before any alignment.",
+          limits: "Rack measurements are recorded when a rack is used. Adjustment is a separate authorization.",
+          photos: "Tires, wear patterns, wheel position, and worn or bent parts.",
+          sections: [
+            { title: "Tires and parts", items: [
+              check("history", "Pull or wander, prior alignment, tires, and collision history"),
+              check("tread", "Inside, center, and outside tread. Left versus right. Pressures", "Tread"),
+              check("parts", "Tire construction, wheel damage, looseness, and ride height")
+            ] },
+            { title: "Road and rack", items: [
+              check("road", "Level-road test: pull, wander, center, shimmy, and return"),
+              check("rack", "Before-measurements if a rack is available. No adjustment without authorization", "Toe / camber / caster")
+            ] }
+          ]
+        },
+        {
+          id: "multipoint",
+          name: "General Multi-Point Inspection",
+          price: 129,
+          summary: "A shop visit inspection: exterior, tires, under-hood, start, scan, brakes, steering, underbody, lights, HVAC, and a short road test.",
+          limits: "Urgent, soon, monitor, and OK are the customer ratings. Repairs are quoted separately.",
+          photos: "VIN, odometer, damage, dash lights, and every worn, leaking, or safety item.",
+          sections: [
+            { title: "Vehicle", items: [
+              check("identity", "VIN, mileage, warning lights, and conditions", "Mileage"),
+              check("body", "Exterior and interior concerns"),
+              check("tires", "Pressure, tread, age, wear, and mismatch", "Tread")
+            ] },
+            { title: "Under-hood and scan", items: [
+              check("fluids", "Fluids, belts, hoses, battery, airbox, wiring, and leaks"),
+              check("start", "Crank, idle, smoke, noises, lights, and charging voltage", "Charge volts"),
+              check("scan", "OBD scan. Codes not cleared")
+            ] },
+            { title: "Chassis and controls", items: [
+              check("brakes", "Pedal, visible pads and rotors, fluid, and leaks"),
+              check("chassis", "Steering and suspension looseness, shocks, and bearings"),
+              check("underbody", "Underbody, exhaust, lines, frame, and leaks"),
+              check("controls", "Lights, horn, wipers, HVAC, windows, locks, and belts"),
+              check("road", "Short road test when authorized")
+            ] }
+          ]
+        }
+      ];
+    }
+  });
+
+  // src/modules/autozone-pro.js
+  function autozoneProLoginUrl(keyword = "") {
+    const term = String(keyword || "").trim().replace(/\s+/g, " ").slice(0, 120);
+    const destination = new URL("/ui/product-results", "https://www.autozonepro.com");
+    if (term) destination.searchParams.set("searchKeyword", term);
+    const url = new URL(AUTOZONE_PRO_LOGIN);
+    url.searchParams.set("originalURL", `${destination.pathname}${destination.search}`);
+    return url.toString();
+  }
+  function orderingPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2, icon: icon2 }) {
+    const connected = Boolean(account.connected && account.username);
+    const status = connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>AutoZone Pro login saved</strong><span>${escapeHtml2(account.username)}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>No AutoZone Pro login saved</strong><span>An owner or admin can store the shop username and password. MechPro encrypts them and does not put them on the work order.</span></div></div>`;
+    const form = canSave ? `<form id="autozone-login-form" class="form-grid">
+        <label>Username<input name="username" autocomplete="off" value="${escapeHtml2(account.username || "")}" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
+        <button class="primary" type="submit">${icon2("save", 14)} Save AutoZone Pro login</button>
+        ${connected ? `<button class="secondary danger" type="button" id="autozone-disconnect">${icon2("log-out", 14)} Remove saved login</button>` : ""}
+      </form>` : '<p class="ops-note">Ask an owner or admin to save the shop AutoZone Pro login.</p>';
+    const unavailable = account.unavailable ? '<p class="login-error">Sign in to the shop account to store or copy the AutoZone Pro login.</p>' : "";
+    return `<section class="settings-panel autozone-ordering">
+      <div class="statement-head"><div><div class="eyebrow">Parts ordering</div><h2>AutoZone Pro</h2><p>Open the shop's AutoZone Pro account from MechPro. After you open it, paste the saved password on AutoZone's sign-in page. Ordering, pricing, and checkout stay on AutoZone Pro.</p></div>${icon2("shopping-cart", 20)}</div>
+      ${status}
+      ${unavailable}
+      ${form}
+      <form id="autozone-search-form" class="form-grid">
+        <label class="full">Part search<input name="keyword" placeholder="canister purge valve pump" /></label>
+        <button class="primary" type="submit">${icon2("search", 14)} Search on AutoZone Pro</button>
+        <button class="secondary" type="button" id="autozone-open">${icon2("external-link", 14)} Open AutoZone Pro</button>
+      </form>
+    </section>`;
+  }
+  var AUTOZONE_PRO_LOGIN;
+  var init_autozone_pro = __esm({
+    "src/modules/autozone-pro.js"() {
+      AUTOZONE_PRO_LOGIN = "https://www.autozonepro.com/ui/login";
+    }
+  });
+
+  // src/modules/offline-desktop.js
+  function escapeText(value2) {
+    return String(value2 || "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
+  }
+  function isOfflineDesktop() {
+    return Boolean(globalThis.window?.mechproDesktop?.offline && globalThis.window.mechproDesktop.localAuth);
+  }
+  function offlineSession(account) {
+    const expires = Math.floor(Date.now() / 1e3) + 12 * 60 * 60;
+    const email = String(account?.email || "").trim().toLowerCase();
+    const name = String(account?.name || "").trim();
+    return {
+      claims: {
+        sub: "offline-pc",
+        email,
+        name,
+        "custom:shopId": "offline-pc",
+        "custom:role": "admin",
+        exp: expires
+      },
+      expiresAt: expires * 1e3,
+      offline: true
+    };
+  }
+  function offlineLoginMarkup({ hasAccount, email, icon: icon2 }) {
+    const mark = icon2("wrench");
+    const lock = icon2("lock-keyhole", 15);
+    const buttonIcon = icon2(hasAccount ? "log-in" : "save", 16);
+    const safeEmail = escapeText(email);
+    const nameField = hasAccount ? "" : `<label for="offline-name">Your name</label><input id="offline-name" name="name" autocomplete="name" required minlength="2" maxlength="80" placeholder="Shop owner"/>`;
+    const confirmField = hasAccount ? "" : `<label for="offline-confirm">Confirm password</label><input id="offline-confirm" name="confirm" type="password" autocomplete="new-password" required minlength="8"/>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${mark}</div><div><div class="brand-name">MechPro</div><small>Offline on this PC</small></div></div><div class="eyebrow">This computer</div><h1>${hasAccount ? "Sign in on this computer" : "Create this computer\u2019s sign-in"}</h1><p>${hasAccount ? "The password check stays on this PC. Work orders, customers, and invoices open from this computer when the internet is down." : "Choose a password for this PC. MechPro stores the sign-in check here and does not send the password to the cloud."}</p><form id="login-form">${nameField}<label for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" required ${hasAccount ? `value="${safeEmail}"` : "autofocus"} placeholder="you@yourshop.com"/><label for="offline-password">Password</label><input id="offline-password" name="password" type="password" autocomplete="${hasAccount ? "current-password" : "new-password"}" required minlength="8" ${hasAccount ? "autofocus" : ""}/>${confirmField}<p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${buttonIcon}${hasAccount ? "Sign in" : "Save sign-in on this PC"}</button></form><div class="login-security">${lock}<span>Shop records for this copy are saved in the MechPro Offline folder on this computer.</span></div></section></main>`;
+  }
+  function stripOfflineSecrets(value2) {
+    if (Array.isArray(value2)) return value2.map(stripOfflineSecrets);
+    if (!value2 || typeof value2 !== "object") return value2;
+    const out = {};
+    for (const [key, item] of Object.entries(value2)) {
+      if (SECRET_KEY.test(key)) continue;
+      out[key] = stripOfflineSecrets(item);
+    }
+    return out;
+  }
+  function snapshotShop(state2) {
+    return stripOfflineSecrets(structuredClone(state2));
+  }
+  function applyShopSnapshot(state2, snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return false;
+    const clean = stripOfflineSecrets(snapshot);
+    for (const [key, value2] of Object.entries(clean)) state2[key] = value2;
+    return true;
+  }
+  function ensureOfflineOwner(state2, account) {
+    const email = String(account?.email || "").trim().toLowerCase();
+    const name = String(account?.name || email).trim();
+    const users = Array.isArray(state2.users) ? state2.users : [];
+    let user = users.find((item) => String(item?.email || "").trim().toLowerCase() === email);
+    if (!user) {
+      user = {
+        id: "user-offline-owner",
+        name,
+        email,
+        role: "admin",
+        title: "Owner",
+        techName: "",
+        active: true,
+        employeeId: "EMP-LOCAL",
+        phone: "",
+        address: "",
+        startDate: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+        employmentType: "Salary",
+        payRate: 0,
+        payFrequency: "Biweekly",
+        department: "Management",
+        emergencyContact: "",
+        taxStatus: "W-2"
+      };
+      state2.users = [user, ...users];
+    } else {
+      user.name = name || user.name;
+      user.active = true;
+      if (!user.role) user.role = "admin";
+    }
+    state2.currentUserId = user.id;
+    return user;
+  }
+  var SECRET_KEY;
+  var init_offline_desktop = __esm({
+    "src/modules/offline-desktop.js"() {
+      SECRET_KEY = /^(password|passphrase|secret|token|apikey|api_key)$/i;
+    }
+  });
+
+  // src/runtime/catalog-inspection-ui.js
+  function readItems(form, catalog, existing) {
+    const source = existing?.items?.length ? existing.items : null;
+    const base = source || (catalog.sections || []).flatMap((section) => section.items.map((item) => ({ ...item, section: section.title })));
+    return base.map((item) => ({
+      id: item.id,
+      section: item.section,
+      label: item.label,
+      measure: item.measure || "",
+      status: String(form.elements[`status-${item.id}`]?.value || ""),
+      note: String(form.elements[`note-${item.id}`]?.value || ""),
+      measurement: String(form.elements[`measure-${item.id}`]?.value || "")
+    }));
+  }
+  function readRecord(form, catalog, existing, app) {
+    const data = new FormData(form);
+    let photoKeys = [];
+    try {
+      photoKeys = JSON.parse(String(data.get("existingPhotos") || "[]"));
+    } catch {
+      photoKeys = existing?.photoKeys || [];
+    }
+    if (!Array.isArray(photoKeys)) photoKeys = [];
+    return {
+      id: existing?.id || `insp-${Date.now()}`,
+      number: existing?.number || `INSP-${Date.now().toString().slice(-6)}`,
+      catalogId: catalog.id,
+      inspectionName: catalog.name,
+      price: catalog.price,
+      limits: catalog.limits,
+      customer: String(data.get("customer") || "").trim(),
+      vehicle: String(data.get("vehicle") || "").trim(),
+      vin: String(data.get("vin") || "").trim(),
+      mileage: String(data.get("mileage") || "").trim(),
+      techName: String(data.get("tech") || "").trim(),
+      vehicleId: String(data.get("vehicleId") || ""),
+      workOrderId: String(data.get("workOrderId") || ""),
+      conditions: [...form.querySelectorAll("[name=condition]:checked")].map((item) => item.value),
+      items: readItems(form, catalog, existing),
+      recommendations: String(data.get("recommendations") || "").trim(),
+      sellerSummary: String(data.get("sellerSummary") || "").trim(),
+      verdict: String(data.get("verdict") || ""),
+      customerName: String(data.get("customerName") || "").trim(),
+      customerSignature: form.dataset.signature || existing?.customerSignature || "",
+      photoKeys,
+      createdAt: existing?.createdAt || app.now(),
+      updatedAt: existing?.updatedAt,
+      closedAt: existing?.closedAt || "",
+      recordStatus: existing?.recordStatus || "draft",
+      approvalStatus: existing?.approvalStatus || "pending",
+      approvalHistory: existing?.approvalHistory || [],
+      damageZones: existing?.damageZones || []
+    };
+  }
+  function fileToDataUrl(file) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      const url = URL.createObjectURL(file);
+      image.onload = () => {
+        const scale = Math.min(1, 1280 / Math.max(image.width, image.height, 1));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL("image/jpeg", 0.72));
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve("");
+      };
+      image.src = url;
+    });
+  }
+  async function attachPhotos(form, record, app) {
+    const files = [...form.elements.photos?.files || []];
+    const keys = [...record.photoKeys];
+    for (const file of files) {
+      try {
+        keys.push(await app.uploadFileToR2(file, "inspection", file.type || "image/jpeg"));
+      } catch {
+        const dataUrl = await fileToDataUrl(file);
+        if (dataUrl) keys.push(dataUrl);
+      }
+    }
+    return keys;
+  }
+  function bindDictation(form, toast2) {
+    let active = null;
+    form.querySelectorAll("[data-dictate]").forEach((button) => {
+      button.onclick = () => {
+        const field = form.elements[button.dataset.dictate];
+        const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Speech || !field) {
+          toast2("Dictation is not available in this browser. Type the note.");
+          field?.focus();
+          return;
+        }
+        if (active) {
+          active.stop();
+          return;
+        }
+        const recognition = new Speech();
+        recognition.lang = "en-US";
+        recognition.interimResults = false;
+        recognition.onresult = (event) => {
+          const text = [...event.results].map((result) => result[0]?.transcript || "").join(" ").trim();
+          if (text) field.value = `${field.value} ${text}`.trim();
+        };
+        recognition.onerror = () => toast2("Dictation stopped. Type the note.");
+        recognition.onend = () => {
+          active = null;
+          button.textContent = button.dataset.dictate === "note" ? "Dictate" : button.textContent.replace("Stop", "Dictate");
+          if (button.dataset.dictate.startsWith("note-")) button.textContent = "Dictate";
+          if (button.dataset.dictate === "recommendations") button.textContent = "Dictate recommendations";
+          if (button.dataset.dictate === "sellerSummary") button.textContent = "Dictate seller summary";
+        };
+        active = recognition;
+        button.textContent = "Stop";
+        recognition.start();
+      };
+    });
+  }
+  function bindSignature(form, existing) {
+    const canvas = form.querySelector("#inspection-signature");
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    context.strokeStyle = "#172029";
+    context.lineWidth = 2;
+    let drawing = false;
+    const point = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const source = event.touches ? event.touches[0] : event;
+      return {
+        x: (source.clientX - rect.left) * (canvas.width / rect.width),
+        y: (source.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    };
+    canvas.onpointerdown = (event) => {
+      drawing = true;
+      const start = point(event);
+      context.beginPath();
+      context.moveTo(start.x, start.y);
+    };
+    canvas.onpointermove = (event) => {
+      if (!drawing) return;
+      const next = point(event);
+      context.lineTo(next.x, next.y);
+      context.stroke();
+    };
+    const finish = () => {
+      if (!drawing) return;
+      drawing = false;
+      form.dataset.signature = canvas.toDataURL("image/png");
+    };
+    canvas.onpointerup = finish;
+    canvas.onpointerleave = finish;
+    form.querySelector("#clear-signature").onclick = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      form.dataset.signature = "";
+    };
+    if (String(existing?.customerSignature || "").startsWith("data:image/")) {
+      const image = new Image();
+      image.onload = () => context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      image.src = existing.customerSignature;
+      form.dataset.signature = existing.customerSignature;
+    }
+  }
+  function printCatalogInspection(app, inspection) {
+    const profile = app.shopProfile();
+    const brand = app.printableBrand(profile);
+    const body = customerInspectionDocument(inspection, profile, app.escapeHtml, app.cloudflareConfig.apiUrl);
+    const win = window.open("", "_blank", "noopener");
+    if (!win) {
+      app.toast("Allow pop-ups to print the inspection");
+      return;
+    }
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${app.escapeHtml(inspection.number)} inspection</title><style>${brand.style}body{font:13px/1.5 system-ui,sans-serif;max-width:860px;margin:auto;padding:22px;color:#172029}h1{margin:8px 0 4px;font-size:26px}h2{margin:18px 0 6px;color:var(--brand);font-size:15px}table{width:100%;border-collapse:collapse}th,td{padding:6px 8px;border:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.fee{font-weight:700}.verdict{display:inline-block;margin:8px 0;padding:6px 10px;color:#fff;background:var(--brand);font-weight:800;letter-spacing:.04em}.result.critical{color:#a93428;font-weight:700}.result.soon{color:#9b4821;font-weight:700}.result.ok{color:#08705f}.photos{display:flex;flex-wrap:wrap;gap:8px}.photos img,.signature{max-width:180px;border:1px solid #d6ddd7}</style></head><body>${brand.header}${body}<button type="button" onclick="window.print()">Print inspection</button></body></html>`);
+    win.document.close();
+  }
+  function presentCatalogInspection(app, existing = null, catalogId = existing?.catalogId) {
+    const catalog = shopInspection(catalogId);
+    if (!catalog) {
+      app.toast("That inspection is not on the menu");
+      return;
+    }
+    const html = catalogInspectionFormHtml(catalog, existing, {
+      vehicles: app.state.vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.customer || "Customer"} \xB7 ${app.vehicleLabel(vehicle)}` })),
+      orders: (app.state.orders || []).map((order) => ({ id: order.id, label: `${order.id} \xB7 ${order.customer || ""}` })),
+      techName: app.currentUser()?.techName || app.currentUser()?.name || "",
+      apiUrl: app.cloudflareConfig.apiUrl
+    }, app.escapeHtml);
+    app.showModal(html);
+    const form = document.querySelector("#catalog-inspection-form");
+    if (!form) return;
+    form.elements.customer?.addEventListener("change", () => {
+      if (!form.elements.customerName.value) form.elements.customerName.value = form.elements.customer.value;
+    });
+    form.elements.vehicleId?.addEventListener("change", () => {
+      const vehicle = app.state.vehicles.find((item) => item.id === form.elements.vehicleId.value);
+      if (!vehicle) return;
+      if (!form.elements.customer.value) form.elements.customer.value = vehicle.customer || "";
+      if (!form.elements.vehicle.value) form.elements.vehicle.value = app.vehicleLabel(vehicle);
+      if (!form.elements.vin.value) form.elements.vin.value = vehicle.vin || "";
+      if (!form.elements.mileage.value && vehicle.mileage) form.elements.mileage.value = vehicle.mileage;
+    });
+    form.querySelectorAll("[data-mark-section]").forEach((button) => {
+      button.onclick = () => {
+        form.querySelectorAll(`[data-section="${CSS.escape(button.dataset.markSection)}"] select`).forEach((select) => {
+          if (!select.value) select.value = "ok";
+        });
+      };
+    });
+    bindDictation(form, app.toast);
+    bindSignature(form, existing);
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const intent = event.submitter?.dataset.intent || "draft";
+      const record = readRecord(form, catalog, existing, app);
+      if (intent === "close") {
+        const issues = closeInspectionIssues({ ...record, photoKeys: [...record.photoKeys, ...form.elements.photos?.files?.length ? ["pending"] : []] });
+        if (issues.length) {
+          app.toast(issues[0]);
+          return;
+        }
+      }
+      record.photoKeys = await attachPhotos(form, record, app);
+      if (intent === "close") {
+        const issues = closeInspectionIssues(record);
+        if (issues.length) {
+          app.toast(issues[0]);
+          return;
+        }
+        record.closedAt = app.now();
+        record.recordStatus = "closed";
+      }
+      try {
+        const saved = await app.saveShopEntity("inspections", record);
+        existing = saved;
+        app.toast(intent === "close" ? "Inspection closed" : "Inspection saved");
+        if (intent === "print" || intent === "close") printCatalogInspection(app, saved);
+        app.closeModal();
+        app.render();
+      } catch (error) {
+        const localPreview = typeof app.isLocalShell === "function" && app.isLocalShell() && /404|Failed to fetch|NetworkError/i.test(error?.message || "");
+        if (!localPreview) {
+          app.toast(error?.message || "Could not save the inspection");
+          return;
+        }
+        const index = app.state.inspections.findIndex((item) => item.id === record.id);
+        if (index >= 0) app.state.inspections[index] = record;
+        else app.state.inspections.push(record);
+        app.save();
+        app.toast(intent === "close" ? "Inspection closed on this device" : "Inspection saved on this device");
+        if (intent === "print" || intent === "close") printCatalogInspection(app, record);
+        app.closeModal();
+        app.render();
+      }
+    };
+  }
+  var init_catalog_inspection_ui = __esm({
+    "src/runtime/catalog-inspection-ui.js"() {
+      init_shop_inspections();
+    }
+  });
+
+  // src/runtime/entity-persistence.js
+  function entityPath(type) {
+    return `/entities/${type}`;
+  }
+  function persistMutationQueue(storage, key, queue) {
+    const records = Array.isArray(queue) ? queue : [];
+    if (records.length === 0) {
+      storage.removeItem(key);
+      return "[]";
+    }
+    const raw = JSON.stringify(records);
+    storage.setItem(key, raw);
+    return raw;
+  }
+  function applyQueuedEntityMutations(type, remoteRecords, queue) {
+    const basePath = entityPath(type);
+    const records = new Map(
+      (Array.isArray(remoteRecords) ? remoteRecords : []).map((record, index) => [record?.id ? String(record.id) : `__local-${index}`, record])
+    );
+    for (const mutation of Array.isArray(queue) ? queue : []) {
+      const path = String(mutation?.path || "");
+      if (mutation?.conflict || path !== basePath && !path.startsWith(`${basePath}/`)) continue;
+      const method = String(mutation.method || "").toUpperCase();
+      let body = null;
+      try {
+        body = mutation.body ? JSON.parse(mutation.body) : null;
+      } catch {
+        continue;
+      }
+      const pathId = path.startsWith(`${basePath}/`) ? decodeURIComponent(path.slice(basePath.length + 1)) : "";
+      const id = String(body?.id || pathId || "");
+      if (!id) continue;
+      if (method === "DELETE") records.delete(id);
+      if (method === "POST" || method === "PUT") records.set(id, body);
+    }
+    return [...records.values()];
+  }
+  var init_entity_persistence = __esm({
+    "src/runtime/entity-persistence.js"() {
+    }
+  });
+
+  // src/modules/estimate-workflow.js
+  function normalizeEstimateLine(line = {}, index = 0) {
+    const type = line.type === "part" ? "part" : "labor";
+    const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
+    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : line.laborRate)) || 0);
+    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
+    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
+    const total = type === "labor" ? roundMoney(hours * laborRate) : roundMoney(quantity * unitPrice);
+    return {
+      ...line,
+      id: String(line.id || `line-${index + 1}`),
+      type,
+      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : "Labor")),
+      notes: String(line.notes || line.explanation || ""),
+      quantity,
+      unitPrice,
+      hours,
+      laborRate,
+      total,
+      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
+    };
+  }
+  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
+    const normalizedLines = lines.map(normalizeEstimateLine);
+    const normalizedFees = fees.map((fee) => ({
+      ...fee,
+      description: String(fee.description || "Fee"),
+      amount: roundMoney(Math.max(0, Number(fee.amount) || 0))
+    }));
+    const labor = roundMoney(normalizedLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney(normalizedLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const subtotal = roundMoney(labor + parts + feeTotal);
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
+    const tax = roundMoney(subtotal * safeTaxRate / 100);
+    return {
+      lines: normalizedLines,
+      fees: normalizedFees,
+      labor,
+      laborHours: roundMoney(normalizedLines.reduce((sum, line) => sum + line.hours, 0)),
+      parts,
+      subtotal,
+      taxRate: safeTaxRate,
+      tax,
+      total: roundMoney(subtotal + tax)
+    };
+  }
+  function approvedEstimate(estimate = {}, decisions = {}) {
+    const lines = (estimate.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      return {
+        ...normalized,
+        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
+      };
+    });
+    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
+    const totals = calculateEstimate(approvedLines, estimate.taxRate, estimate.fees);
+    return {
+      ...estimate,
+      ...totals,
+      lines,
+      approvedLineCount: approvedLines.length,
+      declinedLineCount: lines.length - approvedLines.length
+    };
+  }
+  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
+    const estimate = order.estimate || calculateEstimate([], 0);
+    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
+    const due = new Date(issuedAt);
+    due.setDate(due.getDate() + 14);
+    return {
+      id: number,
+      number,
+      ro: order.id,
+      customer: order.customer,
+      vehicle: order.vehicle,
+      amount: roundMoney(order.total ?? estimate.total),
+      subtotal: roundMoney(estimate.subtotal),
+      tax: roundMoney(estimate.tax),
+      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
+      status: "sent",
+      date: issuedAt.toISOString().slice(0, 10),
+      due: due.toISOString().slice(0, 10),
+      lines: (estimate.lines || []).filter((line) => line.approvalStatus !== "declined").map(normalizeEstimateLine),
+      sourceEstimateApproval: order.estimateApproval || null,
+      createdAt: issuedAt.toISOString()
+    };
+  }
+  var roundMoney;
+  var init_estimate_workflow = __esm({
+    "src/modules/estimate-workflow.js"() {
+      roundMoney = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
     }
   });
 
@@ -405,7 +2378,7 @@
     return `${aiFormShell("AI estimator", "Build a practical service estimate with labor, parts, shop fees, and a tax-inclusive total.", `<label>Vehicle<input name="vehicle" required placeholder="2020 Honda CR-V EX"/></label><label>Requested service<input name="service" required placeholder="Front brake pads and rotors"/></label><label class="full">Additional notes<textarea name="notes" placeholder="Mileage, prior repairs, customer preferences"></textarea></label>`, "Generate estimate")}${aiResult?.kind === "estimate" ? estimateResult(aiResult) : ""}`;
   }
   function aiGuideForm() {
-    return `${aiFormShell("AI repair guide", "Create a technician-facing procedure with tools, safety notes, steps, and verification.", `<label>Vehicle<input name="vehicle" required placeholder="2017 GMC Sierra 1500"/></label><label>Repair / service<input name="repair" required placeholder="Replace water pump"/></label>`, "Generate repair guide")}${aiResult?.kind === "guide" ? guideResult(aiResult) : ""}`;
+    return `${aiFormShell("AI repair guide", "A step-by-step procedure with diagrams and YouTube searches for this vehicle. Torque and fluid specs still come from current service information.", `<label>Vehicle<input name="vehicle" required placeholder="2017 GMC Sierra 1500"/></label><label>Repair / service<input name="repair" required placeholder="Replace water pump"/></label>`, "Generate repair guide")}${aiResult?.kind === "guide" ? guideResult(aiResult) : ""}`;
   }
   function aiPhoneForm() {
     return `${aiFormShell("AI phone intake", "Turn a customer call transcript into service recommendations, questions, and booking guidance.", `<label class="full">Call transcript<textarea name="transcript" required placeholder="Customer: My 2016 Camry has a check engine light and shakes at stop lights..."></textarea></label>`, "Analyze call")}${aiResult?.kind === "phone" ? phoneResult(aiResult) : ""}`;
@@ -419,8 +2392,7 @@
     return { kind: "estimate", vehicle, lines: detail, fees: [{ description: "Shop supplies", amount: 12 }], subtotal, tax, total: subtotal + tax, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
   function guideLocal(vehicle, repair) {
-    const source = aiKeywords(repair), brake = /brake|rotor|pad/.test(source), water = /water pump|thermostat|coolant/.test(source), steps = brake ? ["Verify complaint and inspect wheel/brake assembly", "Measure pads and rotor condition; replace wear components", "Lubricate approved contact points and torque fasteners to specification", "Perform brake bedding procedure and road-test"] : water ? ["Allow engine to cool and isolate battery as required", "Drain coolant and remove obstructing components", "Replace water pump/gasket and thermostat using specified torque sequence", "Refill, bleed cooling system, pressure-test, and road-test"] : ["Verify vehicle identity, concern, and applicable service information", "Inspect related components and prepare work area", "Perform repair using manufacturer torque specifications", "Reassemble, clear codes if applicable, and verify repair with road test"];
-    return { kind: "guide", vehicle, repair, title: `${repair} \u2014 ${vehicle}`, difficulty: brake ? "Intermediate" : water ? "Advanced" : "Intermediate", time: brake ? "2.0 hours" : water ? "3.0 hours" : "1.5 hours", tools: brake ? ["Floor jack and stands", "Torque wrench", "Brake caliper tool", "Micrometer"] : water ? ["Coolant drain pan", "Torque wrench", "Cooling-system pressure tester", "Hand tools"] : ["Vehicle scan tool", "Torque wrench", "Approved hand tools"], parts: brake ? ["Brake pads", "Rotors", "Hardware kit", "Brake lubricant"] : water ? ["Water pump and gasket", "Thermostat", "Coolant"] : ["Verify applicable parts from vehicle VIN"], steps, safety: ["Support vehicle securely before working underneath.", "Use manufacturer service information for torque values and procedures."], tips: ["Document before/after readings in the repair order.", "Complete a final quality-control road test."] };
+    return buildRepairGuide(vehicle, repair);
   }
   function phoneLocal(transcript) {
     const text = aiKeywords(transcript), vehicle = (transcript.match(/(?:19|20)\d{2}\s+[A-Za-z]+(?:\s+[A-Za-z0-9-]+){0,2}/) || ["Vehicle not confirmed"])[0], urgent = /brake|smoke|overheat|stall|no.?start/.test(text), service = /brake/.test(text) ? "Brake system inspection" : /a\/c|warm/.test(text) ? "A/C performance inspection" : /check engine|rough|shake/.test(text) ? "Check-engine diagnostic" : /oil/.test(text) ? "Oil service and inspection" : "Diagnostic inspection";
@@ -436,8 +2408,7 @@
     return detailedDiagnosticPlan(vehicle, symptoms, dtc);
   }
   function detailedGuide(vehicle, repair) {
-    const base = guideLocal(vehicle, repair);
-    return { ...base, steps: ["Verify the vehicle, VIN, complaint, authorization, applicable service information, recalls/TSBs, and required one-time-use parts before beginning.", "Record pre-repair scan results, warning indicators, fluid levels, visual condition, and all measurements that support the selected cause.", "Protect the vehicle, isolate energy sources, lift/support it only at approved points, and use required PPE and containment.", "Perform the confirmed repair in the manufacturer sequence. Observe tightening pattern, torque/angle, fluid, cleanliness, programming, and calibration requirements.", "Inspect adjacent components and routing before reassembly. Replace required seals, fasteners, clips, fluids, and disturbed safety items.", "Reassemble and torque all fasteners and wheels to current specification. Mark or record critical torque checks according to shop policy.", "Clear DTCs or reset learned values only when the service procedure directs it; perform required bleed, relearn, calibration, or initialization.", "Complete the post-repair verification checklist and document final readings, road-test conditions, and any remaining recommendations."], safety: ["Use current manufacturer service information for the exact VIN; this worksheet does not supply model-specific torque, pressure, fluid, or electrical specifications.", "Stop work and notify the service writer if the observed condition differs from the authorized repair, additional safety damage is found, or specialized certification/equipment is required.", "Wear task-appropriate PPE. Control hot, pressurized, high-voltage, rotating, lifted, chemical, and refrigerant hazards before testing or disassembly."], postRepair: ["No leaks, loose connectors, pinched hoses, abnormal noise, warning indicators, or tools/materials remain.", "All disturbed fluid levels, caps, shields, fasteners, wheel torque, and underhood/underbody items are verified.", "DTC rescan is complete; original codes do not return and readiness/relearn status is documented.", "Original complaint is no longer present during an equivalent safe operating condition.", "Final measurements meet manufacturer specification and are recorded on the repair order.", "Quality-control road test and a second-person check are complete when required by shop policy."] };
+    return guideLocal(vehicle, repair);
   }
   function workflowLocal(order) {
     const diagnostics = detailedDiagnosticPlan(order.vehicle, order.complaint, ""), estimate = estimateLocal(order.vehicle, order.complaint, order.notes), guide = detailedGuide(order.vehicle, estimate.lines[0].service);
@@ -447,7 +2418,7 @@
     return `<li><span class="print-check">&#9633;</span><div><b>${escapeHtml(label2)}</b><p>${escapeHtml(text)}</p></div></li>`;
   }
   function workflowResult(result) {
-    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, step)).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
+    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
     return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
   }
   function diagnosticsResult(result) {
@@ -580,7 +2551,16 @@
     };
   }
   function guideResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Repair guide</div><h2>${escapeHtml(result.title)}</h2><p>${escapeHtml(result.difficulty)} \xB7 ${escapeHtml(result.time)}</p></div></div><div class="ai-result-grid"><section><h3>Tools required</h3><ul class="ai-checklist">${result.tools.map((tool) => `<li>${icon("wrench", 13)}${escapeHtml(tool)}</li>`).join("")}</ul><h3>Parts needed</h3><ul class="ai-checklist">${result.parts.map((part) => `<li>${icon("package", 13)}${escapeHtml(part)}</li>`).join("")}</ul></section><section><h3>Repair steps</h3><ol class="ai-steps">${result.steps.map((step, index) => `<li><b>${index + 1}</b><span>${escapeHtml(step)}</span></li>`).join("")}</ol><h3>Safety notes</h3><ul class="ai-checklist">${result.safety.map((note) => `<li>${icon("triangle-alert", 13)}${escapeHtml(note)}</li>`).join("")}</ul></section></div></section>`;
+    const videos = (result.videos || []).map((video) => {
+      const url = safeVideoUrl(video.url);
+      return url ? `<a class="guide-video" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${icon("play", 14)}<span><b>${escapeHtml(video.label)}</b><small>Opens a YouTube search for this vehicle</small></span></a>` : "";
+    }).join("");
+    const steps = (result.steps || []).map((step, index) => {
+      const item = typeof step === "string" ? { title: step, detail: "", watch: "" } : step;
+      const picture = item.diagram ? `<div class="guide-diagram">${repairDiagram(item.diagram)}</div>` : "";
+      return `<li class="guide-step"><b>${index + 1}</b><div><strong>${escapeHtml(item.title || "")}</strong><p>${escapeHtml(item.detail || "")}</p>${item.watch ? `<p class="guide-watch"><em>Watch for.</em> ${escapeHtml(item.watch)}</p>` : ""}${picture}</div></li>`;
+    }).join("");
+    return `<section class="ai-result guide-result"><div class="ai-result-head"><div><div class="eyebrow">Repair guide</div><h2>${escapeHtml(result.title)}</h2><p>${escapeHtml(result.difficulty || "")} \xB7 ${escapeHtml(result.time || "")}</p></div></div><p class="guide-note">${escapeHtml(result.note || "")}</p><div class="guide-layout"><div class="guide-diagram">${repairDiagram(result.diagram)}</div><section><h3>Tools</h3><ul class="ai-checklist">${(result.tools || []).map((tool) => `<li>${icon("wrench", 13)}${escapeHtml(tool)}</li>`).join("")}</ul><h3>Parts</h3><ul class="ai-checklist">${(result.parts || []).map((part) => `<li>${icon("package", 13)}${escapeHtml(part)}</li>`).join("")}</ul></section></div><h3>Repair steps</h3><ol class="guide-steps">${steps}</ol><h3>Reference videos</h3><div class="guide-videos">${videos}</div><h3>Safety</h3><ul class="ai-checklist">${(result.safety || []).map((note) => `<li>${icon("triangle-alert", 13)}${escapeHtml(note)}</li>`).join("")}</ul></section>`;
   }
   function phoneResult(result) {
     return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Call intake summary</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} \xB7 ${escapeHtml(result.service)}</p></div></div><div class="ai-result-grid"><section><h3>Customer concern</h3><p class="ai-copy">${escapeHtml(result.symptoms)}</p><h3>Suggested response</h3><p class="ai-copy">${escapeHtml(result.response)}</p></section><section><h3>Follow-up questions</h3><ul class="ai-checklist">${result.questions.map((question) => `<li>${icon("circle-help", 13)}${escapeHtml(question)}</li>`).join("")}</ul><div class="ai-booking">${icon("calendar-check", 16)} Booking recommended</div></section></div></section>`;
@@ -630,6 +2610,7 @@
     return location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
   }
   async function cloudflareAccessSignIn() {
+    if (isOfflineDesktop()) throw new Error("Sign in with the password saved on this computer.");
     if (isLocalShell()) return localAccessSession();
     const response = await fetch(`${cloudflareConfig2.apiUrl}/auth/session`, { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } });
     const session = await response.json().catch(() => ({}));
@@ -679,11 +2660,28 @@
     sessionStorage.removeItem(storageKeys.session);
     localStorage.removeItem(storageKeys.session);
   }
+  function signOutApiRequest() {
+    if (isOfflineDesktop()) return;
+    fetch(`${cloudflareConfig2.apiUrl}/auth/logout`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }).catch(() => {
+    });
+  }
+  async function signOutEverywhere() {
+    state.currentUserId = null;
+    desktopEntitlementVerified = !isDesktopApp;
+    signOutApiRequest();
+    clearAuthSession();
+    closeModal();
+    save();
+    render();
+    toast("Signed out of MechPro");
+  }
   function readMutationQueue() {
     return mutationQueueStore.read();
   }
   function writeMutationQueue(queue) {
-    mutationQueueStore.write(queue);
+    const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue);
+    mutationQueueRaw = raw;
+    mutationQueueCache = queue;
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -708,7 +2706,7 @@
     return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } });
   }
   async function verifyDesktopEntitlement() {
-    if (!isDesktopApp || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
+    if (!isDesktopApp || isOfflineDesktop() || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
       desktopEntitlementVerified = true;
       return true;
     }
@@ -761,6 +2759,15 @@
     }
   }
   async function apiFetch(path, options = {}) {
+    if (isOfflineDesktop()) {
+      const method = String(options.method || "GET").toUpperCase();
+      if (method === "GET" || method === "HEAD") {
+        const offlineError = new Error("This copy of MechPro keeps shop records on this computer.");
+        offlineError.retryable = false;
+        throw offlineError;
+      }
+      return { queued: true };
+    }
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareMutation(path, options);
     try {
@@ -774,7 +2781,7 @@
     } catch (error) {
       if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) {
         queueEntityMutation(mutation);
-        toast("Saved offline. MechPro will sync when the connection returns.");
+        if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns.");
         return { queued: true };
       }
       throw error;
@@ -826,6 +2833,13 @@
     } catch (error) {
       console.error("Failed to load orders from API; using local data", error);
       cloudSyncStatus = authSession() ? "offline" : "local";
+    }
+  }
+  async function pushInvoiceToApi(record) {
+    try {
+      await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(record) });
+    } catch (error) {
+      console.error("Failed to sync invoice to API", error);
     }
   }
   async function updateInvoiceInApi(record) {
@@ -1130,7 +3144,7 @@
   }
   function sidebarNavigation() {
     const counts = { active: visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, orders: visibleOrders().length, overdue: state.invoices.filter((x) => x.status === "overdue").length, unread: state.conversations.reduce((sum, item) => sum + chatUnread(item), 0) };
-    const oem = typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable();
+    const oem = true;
     return visibleSidebar2(canAccess, { oem }).map((section) => `<div class="nav-label">${escapeHtml(section.label)}</div><nav class="nav" aria-label="${escapeHtml(section.label)}">${section.items.map((item) => nav(item.route, item.icon, item.label, item.count ? String(counts[item.count] || "") : "")).join("")}</nav>`).join("");
   }
   function attentionMenu() {
@@ -1169,7 +3183,7 @@
   }
   function shell(content) {
     const user = currentUser(), profile = shopProfile(), shift = openShift(user.id);
-    return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>`;
+    return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden>${canAccess("settings") ? `<button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button>` : ""}<button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>`;
   }
   function heading(kicker, title, description, action = true) {
     return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>`;
@@ -1252,20 +3266,38 @@
     }).join("");
     return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>`;
   }
+  function catalogInspectionApp() {
+    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel, isLocalShell, save };
+  }
+  function openCatalogInspection(existing, catalogId) {
+    presentCatalogInspection(catalogInspectionApp(), existing, catalogId);
+  }
   function operationsInspections() {
     const rows = [...state.inspections].reverse().map((item) => {
-      const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), approvalBadge = item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`;
-      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td><span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span></td><td>${approvalBadge}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>`;
-    }).join(""), templateRows = state.inspectionTemplates.map((tpl) => `<tr><td><b>${escapeHtml(tpl.name)}</b></td><td>${(tpl.items || []).length} points</td><td><button class="mini-action" data-edit-template="${tpl.id}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
-    return `<div class="ops-actions"><span class="ops-note">Default multipoint: ${inspectionPoints.length} checks \xB7 ${state.inspectionTemplates.length} saved template(s)</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="primary" id="add-inspection">${icon("clipboard-check", 14)} New inspection</button></div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Approval</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No digital inspections yet.</td></tr>`}</tbody></table></div>`;
+      const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge2 = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`;
+      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} \xB7 ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge2}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>`;
+    }).join("");
+    return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
   function operationsInventory() {
-    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button></td></tr>`).join("");
+    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
     return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>`;
   }
+  function visibleCannedServices() {
+    const ids = new Set(CANNED_MENU.map((item) => item.id));
+    if (state.services.some((item) => ids.has(item.id))) return state.services;
+    const names = new Set(state.services.map((item) => String(item.name || "").trim().toLowerCase()));
+    return [...state.services, ...CANNED_MENU.filter((item) => !names.has(item.name.toLowerCase()))];
+  }
   function operationsServices() {
-    const rows = state.services.map((item) => `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small></td><td>${Number(item.laborHours || 0).toFixed(2)} hr</td><td>${money(Number(item.partsPrice || 0))}</td><td>${Number(item.discount || 0)}%</td></tr>`).join("");
-    return `<div class="ops-actions"><span class="ops-note">Reusable estimate lines and discounts</span><button class="primary" id="add-service">${icon("list-plus", 14)} Canned service</button></div><div class="data-panel"><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Default discount</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No canned services yet.</td></tr>`}</tbody></table></div>`;
+    const groups = cannedServiceGroups(visibleCannedServices()), tables = groups.map((group) => {
+      const rows = group.items.map((item) => {
+        const price = Number(item.menuPrice ?? item.partsPrice ?? 0), discount = Number(item.discount || 0);
+        return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>`;
+      }).join("");
+      return `<h3>${escapeHtml(group.label)}</h3><div class="data-panel"><table><thead><tr><th>Service</th><th>Menu price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    }).join("");
+    return `<div class="ops-actions"><span class="ops-note">Starter menu prices. Edit any job for this shop. The shop note stays off the customer estimate.</span><button class="primary" id="add-service">${icon("list-plus", 14)} Canned service</button></div>${tables || `<div class="data-panel"><table><tbody><tr><td>No canned services yet.</td></tr></tbody></table></div>`}`;
   }
   function reminderVehicle(item) {
     const lookup = getRelationshipDerived().vehicleByLookup;
@@ -1280,17 +3312,62 @@
   }
   function operationsReminders() {
     const filters = [["all", "All"], ["due", "Due"], ["overdue", "Overdue"], ["sent", "Sent"]], items = [...state.reminders].sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).filter((item) => reminderFilter === "all" || reminderStatus(item) === reminderFilter), rows = items.map((item) => {
-      const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel2 = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate";
-      return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` \xB7 current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel2}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>`;
+      const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel3 = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate";
+      return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` \xB7 current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel3}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>`;
     }).join("");
     return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value2, text]) => `<button class="tab ${reminderFilter === value2 ? "active" : ""}" data-reminder-filter="${value2}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
   }
   function operationsDiagnostics() {
-    const output = state.elmOutput || "Connect an adapter to begin. Basic OBD-II data only; this does not provide OEM programming, coding, or bidirectional controls.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
-    return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop \xB7 compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>`;
+    const output = state.elmOutput || "Connect an ELM327 for generic OBD-II data. OEM programming, module coding, and bidirectional controls are in OEM diagnostics.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
+    return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop \xB7 compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button><button class="primary" id="open-oem-programming" type="button">${icon("radio-tower", 14)} OEM programming, coding, and bidirectional</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>`;
+  }
+  function operationsOrdering() {
+    const canSave = ["owner", "admin"].includes(currentUser()?.role);
+    return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon });
+  }
+  async function loadAutozoneAccount(force = false) {
+    if (autozoneAccount.loaded && !force) return;
+    autozoneAccount = { ...autozoneAccount, loaded: true };
+    try {
+      const account = await apiFetch("/ordering/autozone");
+      autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true };
+    } catch {
+      autozoneAccount = { connected: false, loaded: true, unavailable: true };
+    }
+    if (state.route === "shopops" && shopOpsTab === "ordering") render();
+  }
+  async function openAutozoneOrder(keyword) {
+    const url = autozoneProLoginUrl(keyword);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      toast("Allow pop-ups to open AutoZone Pro.");
+      return;
+    }
+    if (!autozoneAccount.connected) {
+      toast("AutoZone Pro opened. Save the shop login on Ordering to copy the password next time.");
+      return;
+    }
+    try {
+      const detail = await apiFetch("/ordering/autozone?reveal=1");
+      if (detail?.password && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(detail.password);
+        toast(`AutoZone Pro opened for ${detail.username}. Password copied \u2014 paste it on their sign-in page.`);
+        return;
+      }
+      toast(`AutoZone Pro opened. Sign in as ${detail?.username || "the saved user"}.`);
+    } catch (error) {
+      toast(error.message || "AutoZone Pro opened. The saved password could not be copied.");
+    }
+  }
+  async function saveAutozoneLogin(form) {
+    const data = Object.fromEntries(new FormData(form));
+    const account = await apiFetch("/ordering/autozone", { method: "POST", body: JSON.stringify({ username: data.username, password: data.password }) });
+    autozoneAccount = { connected: true, username: account.username, connectedAt: account.connectedAt, loaded: true };
+    toast("AutoZone Pro login saved");
+    render();
   }
   function shopOperations() {
-    const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab];
+    const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["ordering", "Ordering"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, ordering: operationsOrdering, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab];
     return shell(`${heading("Connected workflow", "Shop operations", "Linked vehicles, inspections, stock, service templates, reminders, vendors, and basic OBD-II tools.", false)}<div class="accounting-tabs ops-tabs">${tabs.map((tab) => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${view()}`);
   }
   function openVehicleForm(existing = null) {
@@ -1469,8 +3546,58 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
   function addVendor() {
     simpleRecordModal("vendors", "Vendor", `<label>Name<input name="name" required/></label><label>Phone<input name="phone"/></label><label>Email<input name="email" type="email"/></label><label>Account number<input name="accountNumber"/></label><label class="full">Address<input name="address"/></label>`, (data) => ({ id: `vendor-${Date.now()}`, ...data, createdAt: now() }));
   }
+  function openServiceForm(existing = null) {
+    const price = existing ? Number(existing.menuPrice ?? existing.partsPrice ?? 0).toFixed(2) : "", channel = existing?.channel === "van" ? "van" : "shop";
+    showModal(`<form class="modal" id="service-form"><div class="modal-head"><h2>${existing ? "Edit" : "Add"} canned service</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label class="full">Name *<input name="name" required value="${escapeAttr(existing?.name || "")}"/></label><label>Where<select name="channel"><option value="van" ${channel === "van" ? "selected" : ""}>Van</option><option value="shop" ${channel === "shop" ? "selected" : ""}>Shop</option></select></label><label>Menu price *<input name="menuPrice" type="number" min="0" step=".01" required value="${price}"/></label><label>Default discount %<input name="discount" type="number" min="0" max="100" step=".1" value="${Number(existing?.discount || 0)}"/></label><label class="full">What the customer gets<textarea name="description">${escapeHtml(existing?.description || "")}</textarea></label><label class="full">Shop note<textarea name="marginNote" placeholder="Internal only. This does not print on the estimate.">${escapeHtml(existing?.marginNote || "")}</textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save service</button></div></form>`);
+    document.querySelector("#service-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target)), menuPrice = Math.round(Math.max(0, Number(data.menuPrice) || 0) * 100) / 100, record = { ...existing || {}, id: existing?.id || `service-${Date.now()}`, name: String(data.name || "").trim(), channel: data.channel === "van" ? "van" : "shop", menuPrice, partsPrice: menuPrice, laborHours: 0, discount: Math.min(100, Math.max(0, Number(data.discount) || 0)), description: String(data.description || "").trim(), marginNote: String(data.marginNote || "").trim(), catalog: existing?.catalog === true, sort: existing?.sort ?? 1e3, createdAt: existing?.createdAt || now(), updatedAt: existing ? existing.updatedAt || now() : void 0 };
+      try {
+        await saveShopEntity("services", record);
+        closeModal();
+        toast(`${record.name} saved`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not save this service");
+      }
+    };
+  }
   function addService() {
-    simpleRecordModal("services", "Canned service", `<label>Name<input name="name" required/></label><label>Labor hours<input name="laborHours" type="number" min="0" step=".25"/></label><label>Parts price<input name="partsPrice" type="number" min="0" step=".01"/></label><label>Default discount %<input name="discount" type="number" min="0" max="100" step=".1"/></label><label class="full">Description<textarea name="description"></textarea></label>`, (data) => ({ id: `service-${Date.now()}`, ...data, laborHours: Number(data.laborHours), partsPrice: Number(data.partsPrice), discount: Number(data.discount), createdAt: now() }));
+    openServiceForm();
+  }
+  async function ensureCannedMenu() {
+    const role = currentUser()?.role;
+    if (!["owner", "admin", "office", "service_writer"].includes(role)) return;
+    const profile = shopProfile();
+    const seeded = Array.isArray(profile.cannedMenuSeededIds) ? profile.cannedMenuSeededIds : [];
+    const catalogIds = CANNED_MENU.map((item) => item.id);
+    const missing = missingCannedServices(state.services, seeded);
+    if (!missing.length && catalogIds.every((id) => seeded.includes(id))) return;
+    const onServer = new Set(state.services.map((row) => row.id));
+    const confirmed = new Set(seeded.filter((id) => onServer.has(id)));
+    for (const item of CANNED_MENU) if (onServer.has(item.id)) confirmed.add(item.id);
+    const createdAt = now();
+    for (const item of missing) {
+      const record = { ...item, createdAt };
+      try {
+        const saved = await apiFetch("/entities/services", { method: "POST", body: JSON.stringify(record), silent: true });
+        const value2 = saved?.queued ? record : saved;
+        const index = state.services.findIndex((row) => row.id === value2.id);
+        if (index >= 0) state.services[index] = value2;
+        else state.services.push(value2);
+        if (saved && !saved.queued) confirmed.add(item.id);
+      } catch (error) {
+        console.error("Canned menu item was kept on this device", error);
+        if (!state.services.some((row) => row.id === record.id)) state.services.push(record);
+      }
+    }
+    save();
+    if (confirmed.size <= seeded.length) return;
+    try {
+      await saveProfilePatch({ cannedMenuSeededIds: [...confirmed] });
+    } catch (error) {
+      console.error("Canned menu marker was not saved", error);
+    }
   }
   function reminderDate(days = 7) {
     const date = /* @__PURE__ */ new Date();
@@ -1680,19 +3807,65 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     }
   }
   function bindShopOperations() {
+    document.querySelector("#open-oem-programming")?.addEventListener("click", () => {
+      state.route = "oem-diagnostics";
+      save();
+      render();
+    });
+    document.querySelectorAll("[data-order-autozone]").forEach((button) => {
+      button.onclick = () => {
+        const item = state.inventory.find((row) => row.id === button.dataset.orderAutozone);
+        void openAutozoneOrder(item?.name || "");
+      };
+    });
+    document.querySelector("#autozone-login-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await saveAutozoneLogin(event.target);
+      } catch (error) {
+        toast(error.message || "Could not save the AutoZone Pro login");
+      }
+    });
+    document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => {
+      try {
+        await apiFetch("/ordering/autozone", { method: "DELETE" });
+        autozoneAccount = { connected: false, loaded: true };
+        toast("AutoZone Pro login removed");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not remove the AutoZone Pro login");
+      }
+    });
+    document.querySelector("#autozone-search-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void openAutozoneOrder(new FormData(event.target).get("keyword"));
+    });
+    document.querySelector("#autozone-open")?.addEventListener("click", () => {
+      void openAutozoneOrder("");
+    });
+    if (shopOpsTab === "ordering") void loadAutozoneAccount();
     document.querySelectorAll("[data-ops-tab]").forEach((button) => button.onclick = () => {
       shopOpsTab = button.dataset.opsTab;
       render();
     });
     document.querySelector("#add-vehicle")?.addEventListener("click", () => openVehicleForm());
     document.querySelector("#add-inspection")?.addEventListener("click", () => openInspectionForm());
+    document.querySelectorAll("[data-start-inspection]").forEach((button) => button.onclick = () => openCatalogInspection(null, button.dataset.startInspection));
     document.querySelector("#manage-templates")?.addEventListener("click", openManageTemplates);
-    document.querySelectorAll("[data-edit-inspection]").forEach((button) => button.onclick = () => openInspectionForm(state.inspections.find((item) => item.id === button.dataset.editInspection)));
+    document.querySelectorAll("[data-edit-inspection]").forEach((button) => button.onclick = () => {
+      const inspection = state.inspections.find((item) => item.id === button.dataset.editInspection);
+      if (inspection?.catalogId) openCatalogInspection(inspection);
+      else openInspectionForm(inspection);
+    });
     document.querySelectorAll("[data-edit-template]").forEach((button) => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find((t) => t.id === button.dataset.editTemplate)));
     document.querySelectorAll("[data-edit-vehicle]").forEach((row) => row.onclick = () => openVehicleDetail(row.dataset.editVehicle));
     document.querySelector("#add-inventory")?.addEventListener("click", addInventory);
     document.querySelector("#add-vendor")?.addEventListener("click", addVendor);
     document.querySelector("#add-service")?.addEventListener("click", addService);
+    document.querySelectorAll("[data-edit-service]").forEach((button) => button.onclick = (event) => {
+      event.stopPropagation();
+      openServiceForm(state.services.find((item) => item.id === button.dataset.editService));
+    });
     document.querySelector("#add-reminder")?.addEventListener("click", addReminder);
     document.querySelectorAll("[data-reminder-filter]").forEach((button) => button.onclick = () => {
       reminderFilter = button.dataset.reminderFilter;
@@ -1878,19 +4051,25 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`);
   }
   function loginScreen() {
+    if (isOfflineDesktop()) return offlineLoginMarkup({ hasAccount: offlineAccountReady, email: offlineAccountEmail, icon });
     const googleUrl = `${cloudflareConfig2.authEndpoints.google}?returnTo=%2F${isDesktopApp ? "&desktop=1" : ""}`, google = isLocalShell() ? "" : `<a class="google-login-button" href="${googleUrl}" ${isDesktopApp ? 'target="_blank" rel="noopener"' : ""}><span class="google-mark" aria-hidden="true">G</span><span>Continue with Google</span></a><div class="login-divider"><span>or use your email</span></div>`;
-    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>Use your verified Google account, or receive a one-time link at your work email. No password required.</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>`;
+    return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>${isDesktopApp ? "Google opens in your browser. After you choose an account, click Open MechPro to return to this app." : "Use your verified Google account, or receive a one-time link at your work email. No password required."}</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>`;
   }
   async function upgradeShopPlan() {
-    try {
-      const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: "starter", successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
-      toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
-      if (result.url) {
-        if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url);
+    const plans = [["shop", "Shop \xB7 $139/mo"], ["solo", "Solo \xB7 $69/mo"], ["shop_pro", "Shop Pro \xB7 $279/mo"], ["enterprise", "Enterprise \xB7 $559/mo"]];
+    showModal(`<form class="modal" id="upgrade-plan-form"><div class="modal-head"><h2>Choose a plan</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Plan<select name="planId">${plans.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select></label><p>Unlimited users on every plan. Annual prepay is 2 months free once billing is connected. Live OEM programming is Shop Pro and Enterprise.</p><p class="login-error" id="upgrade-plan-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Continue</button></div></form>`);
+    document.querySelector("#upgrade-plan-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const planId = new FormData(event.target).get("planId"), error = document.querySelector("#upgrade-plan-error");
+      try {
+        const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+        toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
+        if (result.url && (String(result.url).startsWith("http") || String(result.url).startsWith("/"))) location.assign(result.url);
+      } catch (requestError) {
+        error.textContent = requestError.message || "Could not start upgrade";
+        error.hidden = false;
       }
-    } catch (error) {
-      toast(error.message || "Could not start upgrade");
-    }
+    };
   }
   async function platformApi(path, options = {}) {
     const response = await authorizedApiRequest(path, options);
@@ -1932,7 +4111,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
-    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
+    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="solo">Solo \xB7 $69/mo</option><option value="shop">Shop \xB7 $139/mo</option><option value="shop_pro">Shop Pro \xB7 $279/mo</option><option value="enterprise">Enterprise \xB7 $559/mo</option><option value="founding_solo">Founding Solo \xB7 $49/mo</option><option value="founding_shop">Founding Shop \xB7 $99/mo</option><option value="founding_pro">Founding Pro \xB7 $199/mo</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
     const form = document.querySelector("#customer-account-form"), mode = form.elements.accountMode, days = form.elements.trialDays;
     const syncMode = () => {
       days.disabled = mode.value === "active";
@@ -1980,7 +4159,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     };
   }
   function openConvertPaid(shopId, shopName) {
-    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
+    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="solo">Solo \xB7 $69/mo</option><option value="shop">Shop \xB7 $139/mo</option><option value="shop_pro">Shop Pro \xB7 $279/mo</option><option value="enterprise">Enterprise \xB7 $559/mo</option><option value="founding_solo">Founding Solo \xB7 $49/mo</option><option value="founding_shop">Founding Shop \xB7 $99/mo</option><option value="founding_pro">Founding Pro \xB7 $199/mo</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
     document.querySelector("#convert-paid-form").onsubmit = async (event) => {
       event.preventDefault();
       const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#convert-paid-error"), data = Object.fromEntries(new FormData(event.target));
@@ -2145,7 +4324,8 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       sendButton.disabled = true;
       append("user", message);
       try {
-        const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+        const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || void 0, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+        assistantSessionId = result.sessionId || assistantSessionId;
         const answer = result.message || "I could not answer that right now.";
         append("assistant", answer);
         if (!assistantPaused && "speechSynthesis" in window) {
@@ -2279,13 +4459,31 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.querySelectorAll("[data-order]").forEach((x) => x.onclick = () => openOrder(x.dataset.order));
     document.querySelector("#new-ro-button")?.addEventListener("click", openNew);
     document.querySelector("#new-employee")?.addEventListener("click", openEmployee);
-    document.querySelector("#sign-out")?.addEventListener("click", () => {
-      state.currentUserId = null;
-      clearAuthSession();
-      save();
-      if (!isLocalShell()) location.assign("/cdn-cgi/access/logout");
-      else render();
+    document.querySelector("#user-menu-toggle")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle");
+      if (!panel || !toggle) return;
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
     });
+    document.querySelector("#user-menu-settings")?.addEventListener("click", () => {
+      state.route = "settings";
+      save();
+      render();
+    });
+    document.querySelector("#sign-out")?.addEventListener("click", () => {
+      void signOutEverywhere();
+    });
+    if (!userMenuDismissBound) {
+      userMenuDismissBound = true;
+      document.addEventListener("click", (event) => {
+        const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle");
+        if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return;
+        openPanel.hidden = true;
+        openToggle?.setAttribute("aria-expanded", "false");
+      });
+    }
     document.querySelector("#global-clock")?.addEventListener("click", toggleShift);
     document.querySelector("#job-clock")?.addEventListener("click", (event) => {
       const id = event.currentTarget.dataset.workOrderId;
@@ -2977,7 +5175,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function imports() {
     const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join("");
-    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>Imports are stored in this browser. Review each batch before confirming it.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
+    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>Review each batch before confirming it. Valid rows are added to this shop and synced when you are signed in.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
   }
   function entityName(type) {
     return type === "orders" ? "work order" : type.slice(0, -1);
@@ -2986,76 +5184,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const p = importPreview, rows = p.records.slice(0, 5).map((record, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(Object.values(record).slice(0, 4).join(" \xB7 "))}</td></tr>`).join("");
     return `<section class="import-preview"><div><div class="eyebrow">Ready to import</div><h2>${p.records.length} valid ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"}</h2><p>${p.skipped} duplicate or invalid row${p.skipped === 1 ? "" : "s"} will not be imported.</p></div><div class="import-preview-actions"><button class="secondary" id="cancel-import">Cancel</button><button class="primary" id="confirm-import">${icon("check", 15)} Import ${p.records.length} records</button></div><table><thead><tr><th>Row</th><th>Preview</th></tr></thead><tbody>${rows || `<tr><td colspan="2">No valid rows found.</td></tr>`}</tbody></table>${p.errors.length ? `<div class="import-errors"><strong>${p.errors.length} row issue${p.errors.length === 1 ? "" : "s"}</strong>${p.errors.slice(0, 4).map((error) => `<span>${escapeHtml(error)}</span>`).join("")}</div>` : ""}</section>`;
   }
-  function parseCsv(text) {
-    const rows = [], row = [];
-    let cell = "", quoted = false, current = row;
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i], next = text[i + 1];
-      if (char === '"' && quoted && next === '"') {
-        cell += '"';
-        i++;
-      } else if (char === '"') {
-        quoted = !quoted;
-      } else if (char === "," && !quoted) {
-        current.push(cell.trim());
-        cell = "";
-      } else if ((char === "\n" || char === "\r") && !quoted) {
-        if (char === "\r" && next === "\n") i++;
-        current.push(cell.trim());
-        if (current.some(Boolean)) rows.push(current.slice());
-        current.length = 0;
-        cell = "";
-      } else cell += char;
-    }
-    current.push(cell.trim());
-    if (current.some(Boolean)) rows.push(current.slice());
-    return rows;
-  }
-  function rowData(text) {
-    const rows = parseCsv(text);
-    if (rows.length < 2) return [];
-    const headers = rows.shift().map((value2) => value2.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
-    return rows.map((row) => Object.fromEntries(headers.map((key, index) => [key, row[index] || ""])));
-  }
-  function value(row, ...keys) {
-    return keys.map((key) => row[key]).find((item) => item !== void 0 && item !== "") || "";
-  }
-  function nextRo() {
-    return `RO-${Math.max(1e3, ...state.orders.map((order) => Number(String(order.id).split("-")[1]) || 0)) + 1}`;
-  }
   function prepareImport(type, text) {
-    const errors = [], records = [];
-    let skipped = 0;
-    const rows = rowData(text);
-    if (!rows.length) return { type, records, errors: ["The file needs a header row and at least one data row."], skipped };
-    rows.forEach((row, index) => {
-      const line = index + 2, customer = value(row, "customer", "customer_name", "name"), amount = Number(value(row, "amount", "total").replace(/[$,]/g, ""));
-      let record, error = "";
-      if (type === "customers") {
-        const name = value(row, "name", "customer", "customer_name");
-        if (!name) error = "Customer name is required";
-        else if (state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) skipped++;
-        else record = { name, phone: value(row, "phone", "mobile"), email: value(row, "email"), vehicles: 0, visits: 0, spend: 0 };
-      } else if (type === "vehicles") {
-        const year = value(row, "year"), make = value(row, "make"), model = value(row, "model"), vin = value(row, "vin");
-        if (!customer || !year || !make || !model) error = "Customer, year, make, and model are required";
-        else if (vin && state.vehicles.some((item) => item.vin.toLowerCase() === vin.toLowerCase())) skipped++;
-        else record = { customer, year, make, model, vin, plate: value(row, "plate", "license_plate") };
-      } else if (type === "orders") {
-        const id = value(row, "ro_number", "ro", "work_order") || nextRo(), vehicle = value(row, "vehicle", "vehicle_description"), status = value(row, "status").toLowerCase().replace(/\s+/g, "_") || "estimate";
-        if (!customer || !vehicle || !value(row, "complaint", "description", "concern")) error = "Customer, vehicle, and complaint are required";
-        else if (state.orders.some((item) => item.id.toLowerCase() === id.toLowerCase())) skipped++;
-        else record = { id, customer, phone: value(row, "phone"), vehicle, vin: value(row, "vin") || "VIN pending", complaint: value(row, "complaint", "description", "concern"), status: ["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(status) ? status : "estimate", priority: "normal", tech: value(row, "tech", "technician") || "Unassigned", bay: value(row, "bay") || "Unassigned", mobile: value(row, "mobile").toLowerCase() === "true", promise: value(row, "promise") || "Unscheduled", total: Number.isFinite(amount) ? amount : 0, scheduled: value(row, "scheduled") || "Unscheduled", notes: value(row, "notes"), labor: 0, parts: 0, tax: 0 };
-      } else {
-        if (!value(row, "vendor", "payee") || !Number.isFinite(amount)) error = "Vendor and numeric amount are required";
-        else record = { date: value(row, "date") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), vendor: value(row, "vendor", "payee"), category: value(row, "category") || "Uncategorized", memo: value(row, "memo", "description", "notes"), amount };
-      }
-      if (error) {
-        errors.push(`Row ${line}: ${error}`);
-        skipped++;
-      } else if (record) records.push(record);
-    });
-    return { type, records, errors, skipped };
+    return prepareImportRecords(type, text, { customers: state.customers, vehicles: state.vehicles, orders: state.orders, expenses: state.expenses, invoices: state.invoices, estimates: state.estimates, taxRate: Number(state.taxSettings?.rate) || 0, today: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), createdAt: (/* @__PURE__ */ new Date()).toISOString() });
   }
   function downloadTemplate(type) {
     const link = document.createElement("a"), file = importTypes[type];
@@ -3064,10 +5194,18 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     link.click();
     URL.revokeObjectURL(link.href);
   }
+  function ensureImportedCustomer(record) {
+    const name = record?.customer;
+    if (!name || state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) return;
+    const created = { name, phone: record.phone || "", email: record.email || "Not provided", vehicles: 0, visits: 0, spend: 0 };
+    state.customers.push(created);
+    pushCustomerToApi(created);
+  }
   function applyImport() {
     const p = importPreview;
     if (!p?.records.length) return;
-    const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", expenses: "expenses" }[p.type];
+    const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", invoices: "invoices", estimates: "estimates", expenses: "expenses" }[p.type];
+    if (!collection || !Array.isArray(state[collection])) return;
     state[collection].push(...p.records);
     if (p.type === "customers") p.records.forEach(pushCustomerToApi);
     if (p.type === "vehicles") p.records.forEach((vehicle) => {
@@ -3076,12 +5214,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
     if (p.type === "orders") p.records.forEach((order) => {
       pushOrderToApi(order);
-      if (!state.customers.some((item) => item.name.toLowerCase() === order.customer.toLowerCase())) {
-        const record = { name: order.customer, phone: order.phone, email: "Not provided", vehicles: 0, visits: 0, spend: 0 };
-        state.customers.push(record);
-        pushCustomerToApi(record);
-      }
+      ensureImportedCustomer(order);
     });
+    if (p.type === "invoices") p.records.forEach((invoice) => {
+      pushInvoiceToApi(invoice);
+      ensureImportedCustomer(invoice);
+    });
+    if (p.type === "estimates") p.records.forEach((estimate) => {
+      pushEstimateToApi(estimate);
+      ensureImportedCustomer(estimate);
+    });
+    if (p.type === "expenses") p.records.forEach(pushExpenseToApi);
     save();
     toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
     importPreview = null;
@@ -3343,8 +5486,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
     });
   }
-  function applyRemoteList(key, records) {
-    state[key] = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+  function applyRemoteList(key, records, entityType = key) {
+    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+    state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue());
     save();
   }
   function stampDemoAppointments() {
@@ -3355,13 +5499,379 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const next = localIsoDate2(tomorrow);
     state.appointments = state.appointments.map((item) => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item);
   }
+  async function loadEmployeesFromApi() {
+    if (isOfflineDesktop()) return;
+    try {
+      const employees2 = await apiFetch("/entities/employees");
+      if (Array.isArray(employees2)) {
+        state.users = sanitizeUsers(employees2);
+        save();
+      }
+    } catch (error) {
+      console.error("Failed to load employees from API; using local data", error);
+    }
+  }
+  function employeeFormValue(employee, field, fallback = "") {
+    return escapeAttr(employee?.[field] ?? fallback);
+  }
+  async function saveEmployeeRecord(existing, data) {
+    const record = {
+      ...existing || {},
+      id: existing?.id || `user-${Date.now()}`,
+      name: data.name.trim(),
+      email: String(existing?.email || data.email).trim().toLowerCase(),
+      role: data.role,
+      title: data.title.trim(),
+      techName: data.techName.trim(),
+      active: existing?.active !== false,
+      employeeId: data.employeeId.trim(),
+      phone: data.phone.trim(),
+      address: data.address.trim(),
+      startDate: data.startDate,
+      employmentType: data.employmentType,
+      payRate: Number(data.payRate),
+      payFrequency: data.payFrequency,
+      department: data.department.trim(),
+      emergencyContact: data.emergencyContact.trim(),
+      taxStatus: data.taxStatus,
+      createdAt: existing?.createdAt || now(),
+      updatedAt: existing?.updatedAt
+    };
+    let saved = record;
+    if (!isOfflineDesktop()) {
+      const path = existing ? `/entities/employees/${encodeURIComponent(record.id)}` : "/entities/employees";
+      const response = await apiFetch(path, {
+        method: existing ? "PUT" : "POST",
+        body: JSON.stringify(record)
+      });
+      if (response?.queued) throw new Error("Employee profiles require a live connection.");
+      saved = response;
+    }
+    const index = state.users.findIndex((user) => user.id === saved.id);
+    if (index >= 0) state.users[index] = saved;
+    else state.users.push(saved);
+    save();
+    return saved;
+  }
+  async function setEmployeeActive(user) {
+    const updated = { ...user, active: !user.active };
+    if (!isOfflineDesktop()) {
+      const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, {
+        method: "PUT",
+        body: JSON.stringify(updated)
+      });
+      if (saved?.queued) throw new Error("Employee access changes require a live connection.");
+      Object.assign(updated, saved);
+    }
+    state.users[state.users.indexOf(user)] = updated;
+    save();
+    return updated;
+  }
+  async function saveCustomerRecord(existing, data) {
+    const record = {
+      ...existing || {},
+      id: existing?.id || mutationId(),
+      name: data.name.trim(),
+      phone: data.phone.trim(),
+      email: data.email.trim(),
+      billingAddress: data.billingAddress.trim(),
+      billingNotes: data.billingNotes.trim(),
+      vehicles: Number(existing?.vehicles || 0),
+      visits: Number(existing?.visits || 0),
+      spend: Number(existing?.spend || 0),
+      createdAt: existing?.createdAt || now(),
+      updatedAt: existing?.updatedAt
+    };
+    let saved = record;
+    if (!isOfflineDesktop()) {
+      const response = await apiFetch(existing ? `/entities/customers/${encodeURIComponent(record.id)}` : "/entities/customers", {
+        method: existing ? "PUT" : "POST",
+        body: JSON.stringify(record)
+      });
+      saved = response?.queued ? record : response;
+    }
+    const index = existing ? state.customers.indexOf(existing) : -1;
+    if (index >= 0) state.customers[index] = saved;
+    else state.customers.unshift(saved);
+    save();
+    return saved;
+  }
+  function openCustomerForm(existing = null) {
+    showModal(`<form class="modal" id="customer-edit-form"><div class="modal-head"><h2>${existing ? "Edit customer" : "Add customer"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Name *<input name="name" value="${escapeAttr(existing?.name || "")}" required/></label><label>Phone<input name="phone" value="${escapeAttr(existing?.phone || "")}"/></label><label class="full">Email<input name="email" type="email" value="${escapeAttr(existing?.email === "Not provided" ? "" : existing?.email || "")}"/></label><label>Billing address<textarea name="billingAddress">${escapeHtml(existing?.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes">${escapeHtml(existing?.billingNotes || "")}</textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save customer</button></div></form>`);
+    document.querySelector("#customer-edit-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      if (state.customers.some((customer) => customer !== existing && customer.name.toLowerCase() === data.name.trim().toLowerCase())) return toast("A customer already uses that name");
+      const button = event.target.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        await saveCustomerRecord(existing, data);
+        closeModal();
+        toast("Customer saved");
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "Customer could not be saved");
+      }
+    };
+  }
+  function expandedEstimateLines(estimate = {}) {
+    return (estimate.lines || []).flatMap((line, index) => {
+      if (line.type) return [normalizeEstimateLine(line, index)];
+      const rows = [];
+      const labor = Math.max(0, Number(line.labor ?? Number(line.hours || 0) * Number(line.laborRate || 165)) || 0);
+      const hours = Math.max(0, Number(line.hours) || 0);
+      if (labor || hours) rows.push(normalizeEstimateLine({
+        ...line,
+        id: line.id || `labor-${index + 1}`,
+        type: "labor",
+        description: line.description || line.service,
+        notes: line.notes || line.explanation,
+        hours,
+        laborRate: hours ? labor / hours : Number(line.laborRate || 165)
+      }, index));
+      const parts = Math.max(0, Number(line.parts) || 0);
+      if (parts) rows.push(normalizeEstimateLine({
+        id: `part-${index + 1}`,
+        type: "part",
+        description: `${line.service || "Service"} parts & materials`,
+        notes: line.notes || line.explanation || "",
+        quantity: 1,
+        unitPrice: parts
+      }, index));
+      return rows.length ? rows : [normalizeEstimateLine(line, index)];
+    });
+  }
+  function coherentOrderEstimate(order) {
+    const source = order.estimate || {};
+    const estimate = calculateEstimate(expandedEstimateLines(source), source.taxRate ?? state.taxSettings.rate, source.fees || []);
+    estimate.summary = source.summary || `Estimate for ${order.vehicle}`;
+    estimate.generatedAt = source.generatedAt || now();
+    return estimate;
+  }
+  function inventoryPartOptions(selected = "") {
+    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money(item.price)}</option>`).join("")}`;
+  }
+  function estimateEditorLine(line = {}, index = 0, removable = true) {
+    const item = normalizeEstimateLine(line, index), part = item.type === "part";
+    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    <div class="form-grid">
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
+    </div>
+    <div class="job-line-total"><span>Line total</span><b>${money(item.total)}</b></div>
+  </article>`;
+  }
+  function estimateFromEditor(root) {
+    const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
+      const type = row.querySelector(".job-line-type").value;
+      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+      const inventory = type === "part" ? state.inventory.find((item) => item.id === row.querySelector(".job-line-inventory").value) : null;
+      return normalizeEstimateLine({
+        id: row.dataset.lineId || `line-${Date.now()}-${index}`,
+        type,
+        description: row.querySelector(".job-line-description").value.trim(),
+        notes: row.querySelector(".job-line-notes").value.trim(),
+        quantity,
+        unitPrice,
+        hours: type === "labor" ? quantity : 0,
+        laborRate: type === "labor" ? unitPrice : 0,
+        inventoryId: inventory?.id || null,
+        inventorySku: inventory?.sku || "",
+        committedQuantity: type === "part" && inventory ? quantity : 0
+      }, index);
+    }).filter((line) => line.description && line.quantity > 0);
+    return calculateEstimate(lines, state.taxSettings.rate, lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
+  }
+  function refreshEstimateEditor(root) {
+    root.querySelectorAll(".job-estimate-line").forEach((row) => {
+      const type = row.querySelector(".job-line-type").value;
+      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+      row.querySelector(".job-inventory-field").hidden = type !== "part";
+      row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+      row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+      row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
+      row.querySelector(".job-line-total b").textContent = money(quantity * rate);
+    });
+    const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
+    if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+    const total = document.querySelector("#new-estimate-total");
+    if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
+  }
+  function bindEstimateEditor(root) {
+    if (!root) return;
+    const bindRows = () => {
+      root.querySelectorAll("input,textarea,select").forEach((control) => control.oninput = () => refreshEstimateEditor(root));
+      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => refreshEstimateEditor(root));
+      root.querySelectorAll(".job-line-inventory").forEach((control) => control.onchange = () => {
+        const row = control.closest(".job-estimate-line"), item = state.inventory.find((entry) => entry.id === control.value);
+        if (item) {
+          row.querySelector(".job-line-description").value = item.name;
+          row.querySelector(".job-line-rate").value = Number(item.price || 0).toFixed(2);
+        }
+        refreshEstimateEditor(root);
+      });
+      root.querySelectorAll(".remove-job-line").forEach((button) => button.onclick = () => {
+        button.closest(".job-estimate-line").remove();
+        refreshEstimateEditor(root);
+      });
+    };
+    root._bindEstimateRows = bindRows;
+    bindRows();
+    refreshEstimateEditor(root);
+  }
+  async function ensureCustomerDocumentLink(documentType, documentId) {
+    return apiFetch("/document-links", {
+      method: "POST",
+      body: JSON.stringify({ documentType, documentId })
+    });
+  }
+  async function sendJobEstimate(order, channel) {
+    const customer = state.customers.find((item) => item.name === order.customer);
+    const to = channel === "email" ? customer?.email : customer?.phone || order.phone;
+    if (!to || to === "Not provided") return toast(`Add a customer ${channel === "email" ? "email address" : "phone number"} first`);
+    try {
+      const link = await ensureCustomerDocumentLink("estimate", order.id);
+      const subject = `Estimate ${order.id} \u2014 ${state.messagingSettings.shopName || "MechPro"}`;
+      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
+      const delivery = await deliverShopMessage({ channel, to, subject, body, metadata: { type: "estimate", workOrderId: order.id, approvalUrl: link.url } });
+      order.lastEstimateLink = { url: link.url, expiresAt: link.expiresAt, sentAt: now(), channel, deliveryMode: delivery.mode };
+      await updateOrderInApi(order);
+      save();
+      toast(`${order.id} approval link prepared by ${channel === "email" ? "email" : "text"}`);
+    } catch (error) {
+      toast(error.message || "Could not create the customer approval link");
+    }
+  }
+  function onsiteSignatureModal(kind, record) {
+    const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
+    const number = kind === "estimate" ? record.id : record.number;
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
+    let drawing = false, drawn = false;
+    const position = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
+    };
+    context.lineWidth = 3;
+    context.lineCap = "round";
+    context.strokeStyle = "#14201c";
+    canvas.onpointerdown = (event) => {
+      drawing = true;
+      drawn = true;
+      canvas.setPointerCapture(event.pointerId);
+      const point = position(event);
+      context.beginPath();
+      context.moveTo(point.x, point.y);
+    };
+    canvas.onpointermove = (event) => {
+      if (!drawing) return;
+      const point = position(event);
+      context.lineTo(point.x, point.y);
+      context.stroke();
+    };
+    canvas.onpointerup = () => {
+      drawing = false;
+    };
+    document.querySelector("#clear-signature").onclick = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      drawn = false;
+    };
+    document.querySelector("#document-signature-form").onsubmit = async (event) => {
+      event.preventDefault();
+      if (!drawn) return toast("Draw the customer signature first");
+      const approvedIds = new Set([...event.target.querySelectorAll('[name="approvedLine"]:checked')].map((input) => input.value));
+      if (kind === "estimate" && !approvedIds.size) return toast("Approve at least one line or close without signing");
+      const button = event.target.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        const signatureDataUrl = canvas.toDataURL("image/png");
+        const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
+        const signature = {
+          authorizationName: new FormData(event.target).get("authorizationName").trim(),
+          signatureKey: key,
+          signatureDataUrl: isLocalShell() ? signatureDataUrl : void 0,
+          signedAt: now(),
+          source: "on-site"
+        };
+        if (kind === "estimate") {
+          const decisions = Object.fromEntries(estimate.lines.map((line) => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
+          const approved = approvedEstimate(estimate, decisions);
+          record.estimate = approved;
+          record.total = approved.total;
+          record.labor = approved.labor;
+          record.laborHours = approved.laborHours;
+          record.parts = approved.parts;
+          record.tax = approved.tax;
+          record.status = "approved";
+          record.linesLockedAt = signature.signedAt;
+          record.estimateApproval = { status: "approved", ...signature, decisions };
+          await updateOrderInApi(record);
+        } else {
+          record.signature = signature;
+          await updateInvoiceInApi(record);
+        }
+        save();
+        closeModal();
+        toast(kind === "estimate" ? `${record.id} approved and signed` : `${record.number} signed`);
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "The signature could not be stored");
+      }
+    };
+  }
+  function jobCardLineTable(estimate) {
+    return `<div class="job-card-lines">${estimate.lines.map((line) => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}${line.inventorySku ? ` \xB7 ${escapeHtml(line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
+  }
+  function jobWorkflowSteps(order, invoice) {
+    const approval = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status);
+    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+  }
+  async function completeJobCard(order) {
+    const explicitlyApproved = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status);
+    if (!explicitlyApproved) return toast("Approve the estimate before completing this job");
+    if (!await commitLinkedInventory(order)) return;
+    order.status = "completed";
+    order.linesLockedAt || (order.linesLockedAt = now());
+    const saved = await updateOrderInApi(order);
+    state.orders[state.orders.indexOf(order)] = saved;
+    syncPayroll(saved);
+    save();
+    closeModal();
+    toast(`${saved.id} completed and invoice generated`);
+    render();
+  }
   async function startApp() {
+    if (isOfflineDesktop()) {
+      desktopEntitlementVerified = true;
+      try {
+        const status = await window.mechproDesktop.localAuth.status();
+        offlineAccountReady = Boolean(status?.exists);
+        offlineAccountEmail = status?.email || "";
+        const snapshot = await window.mechproDesktop.localShop.load();
+        if (snapshot) applyShopSnapshot(state, snapshot);
+      } catch (error) {
+        console.error("Offline shop could not be opened", error);
+      }
+      render();
+      return;
+    }
     try {
       const session = await cloudflareAccessSignIn();
       const user = await resolveAuthenticatedProfile(session);
       if (user) {
         state.currentUserId = user.id;
         if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
+        if (user.role !== "super_admin") await reloadOperationalData();
       }
     } catch (error) {
       if (!authSession()) console.info("Cloudflare Access session not available", error.message);
@@ -3377,7 +5887,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueStore, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3385,11 +5895,20 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_detect();
       init_utils();
       init_prepare_entity_mutation();
-      init_mutation_queue_store();
+      init_imports();
+      init_canned_services();
+      init_repair_guide();
+      init_shop_inspections();
+      init_autozone_pro();
+      init_offline_desktop();
+      init_catalog_inspection_ui();
+      init_entity_persistence();
+      init_estimate_workflow();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
+      assistantSessionId = "";
       STORE = storageKeys.dispatch;
       seed = {
         route: "home",
@@ -3495,17 +6014,22 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       cloudflareConfig2 = window.__MECHPRO_CONFIG__.cloudflare;
       desktopEntitlementVerified = !isDesktopApp;
       desktopLoginMessage = "";
+      offlineAccountReady = false;
+      offlineAccountEmail = "";
       cloudflareSignIn = cloudflareAccessSignIn;
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
       flushingMutationQueue = false;
-      mutationQueueStore = createMutationQueueStore({ storage: localStorage, storeKey: MUTATION_QUEUE_STORE });
+      mutationQueueCache = null;
+      mutationQueueRaw = null;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
       roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
       attentionDismissBound = false;
+      userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
+      autozoneAccount = { connected: false, loaded: false };
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
       financeDerivedCache = null;
       baseShopOperations = shopOperations;
@@ -3556,11 +6080,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       bindNewOrderEstimator = function() {
         bindNewOrderEstimatorCore();
         const lines = document.querySelector("#new-estimate-lines");
-        if (!lines || !state.services.length) return;
-        lines.insertAdjacentHTML("beforebegin", `<div class="canned-service-picker"><span>Canned services</span>${state.services.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${service.id}">${escapeHtml(service.name)}</button>`).join("")}</div>`);
+        const canned = visibleCannedServices();
+        if (!lines || !canned.length) return;
+        const picker = cannedServiceGroups(canned).map((group) => `<div class="canned-service-picker"><span>${escapeHtml(group.label)}</span>${group.items.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${escapeAttr(service.id)}">${escapeHtml(service.name)} \xB7 ${money(Number(service.menuPrice ?? service.partsPrice ?? 0))}</button>`).join("")}</div>`).join("");
+        lines.insertAdjacentHTML("beforebegin", picker);
         document.querySelectorAll("[data-add-canned-service]").forEach((button) => button.onclick = () => {
-          const service = state.services.find((item) => item.id === button.dataset.addCannedService);
-          lines.insertAdjacentHTML("beforeend", newOrderEstimateRow({ service: service.name, notes: service.description, hours: service.laborHours, parts: service.partsPrice, discount: service.discount }));
+          const service = visibleCannedServices().find((item) => item.id === button.dataset.addCannedService);
+          if (!service) return;
+          lines.insertAdjacentHTML("beforeend", newOrderEstimateRow(estimateLineFromService(service)));
           bindNewOrderEstimatorCore();
           toast(`${service.name} added to estimate`);
         });
@@ -3589,11 +6116,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         if (!original) {
           document.querySelector("#pending-sign-out")?.addEventListener("click", () => {
             pendingAuthProfile = null;
+            signOutApiRequest();
             clearAuthSession();
             state.currentUserId = null;
             save();
-            if (!isLocalShell()) location.assign("/cdn-cgi/access/logout");
-            else render();
+            render();
           });
           return;
         }
@@ -3607,6 +6134,24 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           submitButton.disabled = true;
           desktopEntitlementVerified = !isDesktopApp;
           try {
+            if (isOfflineDesktop()) {
+              const data = Object.fromEntries(new FormData(form));
+              if (!offlineAccountReady && data.password !== data.confirm) throw new Error("Those passwords do not match.");
+              const account = offlineAccountReady ? await window.mechproDesktop.localAuth.signIn({ email: data.email, password: data.password }) : await window.mechproDesktop.localAuth.create({ name: data.name, email: data.email, password: data.password });
+              const session = offlineSession(account);
+              sessionStorage.setItem(storageKeys.session, JSON.stringify(session));
+              const user = ensureOfflineOwner(state, account);
+              pendingAuthProfile = null;
+              state.currentUserId = user.id;
+              desktopEntitlementVerified = true;
+              offlineAccountReady = true;
+              offlineAccountEmail = account.email;
+              state.route = roleRoutes[user.role]?.[0] || "home";
+              query = "";
+              save();
+              render();
+              return;
+            }
             if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in.");
             if (isLocalShell()) {
               const session = await cloudflareSignIn();
@@ -3658,7 +6203,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
       });
       applyAppearance();
-      importTypes = { customers: { title: "Customers", icon: "users", columns: "name, phone, email", required: "name", sample: "name,phone,email\nDemo Customer,555-0123,demo.customer@example.com" }, vehicles: { title: "Vehicles", icon: "car-front", columns: "customer, year, make, model, vin, plate", required: "customer, year, make, model", sample: "customer,year,make,model,vin,plate\nDemo Customer,2020,Ford,Escape,DEMOVIN000000010,ABC-1234" }, orders: { title: "Work orders", icon: "clipboard-list", columns: "ro_number, customer, vehicle, complaint, status, total", required: "customer, vehicle, complaint", sample: "ro_number,customer,vehicle,complaint,status,total\nRO-1053,Demo Customer,2020 Ford Escape,Oil change,approved,89.95" }, expenses: { title: "Expenses", icon: "wallet-cards", columns: "date, vendor, category, memo, amount", required: "vendor, amount", sample: "date,vendor,category,memo,amount\n2026-08-14,Demo Tool Supply,Tools,Socket set,149.99" } };
+      importTypes = IMPORT_TYPES;
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
         const emptyCouponRows = '<tr><td colspan="4">No coupons configured.</td></tr>', vendorKindFields = kinds.map((kind) => "<label>" + kind + ' default<select name="vendor' + kind + '">' + vendorOptions(profile.defaultVendorByKind?.[kind] || "") + "</select></label>").join("");
@@ -3788,6 +6333,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         win.document.close();
       };
       printInspectionReport = function(inspection) {
+        if (inspection?.catalogId) {
+          printCatalogInspection(catalogInspectionApp(), inspection);
+          return;
+        }
         const profile = shopProfile(), brand = printableBrand(profile), counts = (inspection.items || []).reduce((total, item) => (total[item.status] = (total[item.status] || 0) + 1, total), {}), itemRows = (inspection.items || []).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.status === "not_checked" ? "Not checked" : item.status || "")}</td><td>${escapeHtml(item.note || "")}</td></tr>`).join(""), damage = (inspection.damageZones || []).map(escapeHtml).join(", "), approvalRows = (inspection.approvalHistory || []).map((entry) => `<tr><td>${escapeHtml(entry.status)}</td><td>${escapeHtml(entry.actorName || "")}</td><td>${escapeHtml(new Date(entry.timestamp).toLocaleString())}</td><td>${escapeHtml(entry.note || "")}</td></tr>`).join(""), photos = (inspection.photoKeys || []).map((key) => `<img src="${escapeHtml(`${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}`)}" alt="Inspection photo"/>`).join(""), win = window.open("", "_blank", "noopener");
         if (!win) {
           toast("Allow pop-ups to print the inspection");
@@ -4010,13 +6559,350 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       loadShopEntities = async function() {
         try {
           const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
-          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index]));
+          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type));
         } catch (error) {
           console.error("Failed to load shop operations; using local data", error);
         }
+        await ensureCannedMenu();
       };
       stampDemoAppointments();
-      if (isDesktopApp) setInterval(async () => {
+      employees = function() {
+        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+        return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
+      };
+      openEmployee = function(existing = null) {
+        showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label><label>Employee ID *<input name="employeeId" required value="${employeeFormValue(existing, "employeeId")}" placeholder="EMP-005"/></label><label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label><label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label><label class="full">Email address *<input type="email" name="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label><label>Role<select name="role">${["technician", "office", "service_writer", "admin"].map((role) => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role]}</option>`).join("")}</select></label><label class="full">Technician dispatch name<input name="techName" value="${employeeFormValue(existing, "techName")}" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType">${["Hourly", "Salary", "Contractor"].map((value2) => `<option ${existing?.employmentType === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label><label>Pay frequency<select name="payFrequency">${["Weekly", "Biweekly", "Monthly"].map((value2) => `<option ${existing?.payFrequency === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", (/* @__PURE__ */ new Date()).toISOString().slice(0, 10))}"/></label><label>Tax status<select name="taxStatus">${["W-2", "1099 Contractor"].map((value2) => `<option ${existing?.taxStatus === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label><label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label><label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+        document.querySelector("#employee-form").onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(event.target));
+          const email = String(existing?.email || data.email).trim().toLowerCase();
+          if (!existing && state.users.some((user) => user.email.toLowerCase() === email)) return toast("An employee profile already uses that email");
+          if (state.users.some((user) => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) return toast("An employee already uses that employee ID");
+          if (data.role === "technician" && !data.techName.trim()) return toast("Add the technician dispatch name to save this profile");
+          const button = event.target.querySelector("button[type=submit]");
+          button.disabled = true;
+          try {
+            const saved = await saveEmployeeRecord(existing, data);
+            closeModal();
+            toast(`${saved.name} profile saved`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Could not save employee profile");
+          }
+        };
+      };
+      openCustomerEditor = function(key) {
+        const customer = state.customers.find((item) => customerRecordKey(item) === key);
+        if (customer) openCustomerForm(customer);
+      };
+      customers = function() {
+        const q = query.toLowerCase();
+        const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
+          const key = encodeURIComponent(customerRecordKey(item));
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+        }).join("");
+        return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
+      };
+      openNewCore = openNew;
+      openNew = function() {
+        openNewCore();
+        const form = document.querySelector("#new-form");
+        if (!form) return;
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form));
+          const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+          if (!customerName) return toast("Select or enter a customer name");
+          const button = form.querySelector("button[type=submit], button:not([type])");
+          button.disabled = true;
+          try {
+            let customer = state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
+            if (!customer) {
+              customer = await saveCustomerRecord(null, {
+                name: customerName,
+                phone: String(data.phone || ""),
+                email: "",
+                billingAddress: "",
+                billingNotes: ""
+              });
+            }
+            const estimate = readNewOrderEstimate();
+            const id = `RO-${Math.max(1040, ...state.orders.map((item) => Number(item.id.split("-")[1]) || 0)) + 1}`;
+            const order = {
+              id,
+              customer: customer.name,
+              phone: data.phone,
+              vehicle: data.vehicle,
+              vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
+              complaint: data.complaint,
+              status: data.status,
+              priority: data.priority,
+              tech: data.tech,
+              bay: data.bay,
+              mobile: data.bay === "Mobile",
+              promise: data.promise,
+              total: estimate.total,
+              scheduled: "Unscheduled",
+              notes: "New intake. Diagnosis pending.",
+              labor: estimate.labor,
+              laborHours: estimate.laborHours,
+              parts: estimate.parts,
+              tax: estimate.tax,
+              estimate: {
+                ...estimate,
+                generatedAt: now(),
+                summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.`
+              }
+            };
+            let saved = order;
+            if (!isOfflineDesktop() && !isLocalShell()) {
+              const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(order) });
+              saved = response?.queued ? order : response;
+            }
+            state.orders.unshift(saved);
+            save();
+            closeModal();
+            toast(`${id} created successfully`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Work order could not be saved");
+          }
+        };
+      };
+      orders = function() {
+        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+        return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
+      };
+      updateOrderInApi = async function(record) {
+        if (["completed", "invoiced"].includes(record.status)) await ensureInvoiceForOrder(record);
+        if (isOfflineDesktop()) return record;
+        const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, {
+          method: "PUT",
+          body: JSON.stringify(record)
+        });
+        return saved?.queued ? record : saved;
+      };
+      openOrder = function(id) {
+        const order = state.orders.find((item) => item.id === id);
+        if (!order) return;
+        const canManage = ["admin", "service_writer"].includes(currentUser().role);
+        if (!canManage) {
+          toast("Only an admin or service writer can edit this work order");
+          return;
+        }
+        showModal(`<form class="modal wide" id="work-order-edit-form"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Edit work order</h2></div><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input name="phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input name="vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input name="vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required>${escapeHtml(order.complaint || "")}</textarea></label><label>Status<select name="status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((status) => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select name="priority">${["normal", "high", "low"].map((priority) => `<option value="${priority}" ${order.priority === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select name="tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select name="bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map((bay) => `<option ${order.bay === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input name="promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input name="laborHours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label><label class="full">Technician / service notes<textarea name="notes">${escapeHtml(order.notes || "")}</textarea></label></div></div><div class="modal-actions"><button class="secondary danger" type="button" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" type="submit">${icon("save", 14)} Save work order</button></div></form>`);
+        const form = document.querySelector("#work-order-edit-form");
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form));
+          const next = {
+            ...order,
+            customer: data.customer,
+            phone: data.phone.trim(),
+            vehicle: data.vehicle.trim(),
+            vin: data.vin.trim().toUpperCase() || "VIN pending",
+            complaint: data.complaint.trim(),
+            status: data.status,
+            priority: data.priority,
+            tech: data.tech,
+            bay: data.bay,
+            mobile: data.bay === "Mobile",
+            promise: data.promise.trim(),
+            laborHours: Math.max(0, Number(data.laborHours) || 0),
+            notes: data.notes.trim(),
+            updatedAt: order.updatedAt
+          };
+          const firstCompletion = ["completed", "invoiced"].includes(next.status) && !["completed", "invoiced"].includes(order.status);
+          const button = form.querySelector("button[type=submit]");
+          button.disabled = true;
+          try {
+            if (firstCompletion && !await commitLinkedInventory(next)) return;
+            const saved = await updateOrderInApi(next);
+            state.orders[state.orders.indexOf(order)] = saved;
+            syncPayroll(saved);
+            save();
+            closeModal();
+            toast(`${saved.id} saved`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Work order could not be saved");
+          }
+        };
+        document.querySelector("#delete-order").onclick = async () => {
+          if (!confirm(`Delete ${order.id}?`)) return;
+          try {
+            if (!isOfflineDesktop()) await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+            state.orders = state.orders.filter((item) => item !== order);
+            save();
+            closeModal();
+            toast(`${order.id} deleted`);
+            render();
+          } catch (error) {
+            toast(error.message || "Work order could not be deleted");
+          }
+        };
+      };
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: 165 }) {
+        return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
+      };
+      readNewOrderEstimate = function() {
+        const root = document.querySelector("#new-estimate-lines");
+        return root ? estimateFromEditor(root) : calculateEstimate([], state.taxSettings.rate);
+      };
+      bindNewOrderEstimator = function() {
+        const form = document.querySelector("#new-form"), root = document.querySelector("#new-estimate-lines");
+        if (!form || !root) return;
+        form.elements.status.innerHTML = '<option value="estimate">Estimate \xB7 approval required before work</option>';
+        form.elements.status.value = "estimate";
+        const toolbar2 = root.previousElementSibling;
+        if (toolbar2 && !document.querySelector("#add-part-line")) {
+          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+        }
+        const append = (line) => {
+          root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
+          bindEstimateEditor(root);
+        };
+        document.querySelector("#generate-new-estimate").onclick = () => {
+          const vehicle = form.elements.vehicle.value.trim(), complaint = form.elements.complaint.value.trim(), requested = form.elements.requestedServices.value.trim();
+          if (!vehicle || !complaint) return toast("Enter the vehicle and customer complaint before generating an estimate");
+          const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
+          const generated = services.flatMap((service, index) => {
+            const source = estimateLocal(vehicle, service).lines[0];
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : 165 }, index);
+            const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
+            return [labor, ...parts];
+          });
+          root.innerHTML = generated.map((line, index) => estimateEditorLine(line, index)).join("");
+          bindEstimateEditor(root);
+          toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
+        };
+        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 });
+        document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
+        bindEstimateEditor(root);
+      };
+      ensureInvoiceForOrder = async function(order) {
+        if (!["completed", "invoiced"].includes(order.status)) return null;
+        const existing = state.invoices.find((invoice2) => invoice2.ro === order.id);
+        if (existing) return existing;
+        const invoice = invoiceRecordForOrder({ ...order, estimate: coherentOrderEstimate(order) });
+        if (isOfflineDesktop()) {
+          state.invoices.push(invoice);
+          return invoice;
+        }
+        const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) });
+        const value2 = saved?.queued ? invoice : saved;
+        state.invoices.push(value2);
+        return value2;
+      };
+      openOrder = function(id) {
+        const order = state.orders.find((item) => item.id === id);
+        if (!order) return;
+        order.estimate = coherentOrderEstimate(order);
+        const estimate = order.estimate, invoice = state.invoices.find((item) => item.ro === order.id);
+        const canManage = ["admin", "service_writer"].includes(currentUser().role);
+        const locked = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+        const editor = canManage && !locked ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit estimate lines</h3><p>Use typed parts or select current inventory. Stock is deducted only when the invoice is generated.</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="secondary" id="save-job-lines" type="button">${icon("save", 14)} Save estimate lines</button></section>` : "";
+        const approvalActions = order.status === "estimate" && canManage ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
+        const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
+        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
+        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} \xB7 <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} \xB7 ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate \xB7 parts + labor</h3><p>${locked ? "Lines locked after approval." : "Review and edit before approval."}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+        const editorRoot = document.querySelector("#job-estimate-editor");
+        if (editorRoot) {
+          bindEstimateEditor(editorRoot);
+          document.querySelector("#job-add-labor").onclick = () => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 }, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          };
+          document.querySelector("#job-add-part").onclick = () => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          };
+          document.querySelector("#save-job-lines").onclick = async (event) => {
+            const next = estimateFromEditor(editorRoot);
+            if (!next.lines.length) return toast("Add at least one labor or part line");
+            event.currentTarget.disabled = true;
+            order.estimate = { ...next, generatedAt: order.estimate.generatedAt || now(), summary: order.estimate.summary };
+            Object.assign(order, { labor: next.labor, laborHours: next.laborHours, parts: next.parts, tax: next.tax, total: next.total });
+            try {
+              await updateOrderInApi(order);
+              save();
+              closeModal();
+              toast(`${order.id} estimate updated`);
+              openOrder(order.id);
+            } catch (error) {
+              event.currentTarget.disabled = false;
+              toast(error.message || "Estimate could not be saved");
+            }
+          };
+        }
+        document.querySelectorAll("[data-send-job-estimate]").forEach((button) => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
+        document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
+        document.querySelector("#start-job-work")?.addEventListener("click", async () => {
+          order.status = "in_progress";
+          await updateOrderInApi(order);
+          save();
+          closeModal();
+          toast(`${order.id} moved to in progress`);
+          render();
+        });
+        document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
+        document.querySelector("#sign-job-invoice")?.addEventListener("click", () => {
+          if (!invoice.signature) onsiteSignatureModal("invoice", invoice);
+        });
+        document.querySelectorAll("[data-print-invoice]").forEach((button) => button.onclick = () => printInvoice(button.dataset.printInvoice));
+      };
+      invoices = function() {
+        const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
+          const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)}</small><small>Balance ${money(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+        }).join("");
+        return shell(`${heading("Accounts receivable", "Invoices", "Review the completed job, capture a mobile signature, and collect payment.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+      };
+      bindJobCardInvoiceCore = bindEstimateActions;
+      bindEstimateActions = function() {
+        bindJobCardInvoiceCore();
+        document.querySelectorAll("[data-sign-invoice]").forEach((button) => button.onclick = () => {
+          const invoice = state.invoices.find((item) => item.number === button.dataset.signInvoice);
+          if (invoice && !invoice.signature) onsiteSignatureModal("invoice", invoice);
+        });
+      };
+      bindDurableRecordsCore = bind;
+      bind = function() {
+        bindDurableRecordsCore();
+        document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
+        document.querySelectorAll("[data-edit-order]").forEach((button) => {
+          button.onclick = (event) => {
+            event.stopPropagation();
+            openOrder(button.dataset.editOrder);
+          };
+        });
+        document.querySelectorAll("[data-edit-employee]").forEach((button) => {
+          button.onclick = () => openEmployee(state.users.find((user) => user.id === button.dataset.editEmployee));
+        });
+        document.querySelectorAll("[data-toggle-user]").forEach((button) => {
+          button.onclick = async () => {
+            const user = state.users.find((item) => item.id === button.dataset.toggleUser);
+            if (!user) return;
+            button.disabled = true;
+            try {
+              const saved = await setEmployeeActive(user);
+              toast(`${saved.name} account ${saved.active ? "activated" : "deactivated"}`);
+              render();
+            } catch (error) {
+              button.disabled = false;
+              toast(error.message || "Employee access could not be changed");
+            }
+          };
+        });
+        document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
+          await loadEmployeesFromApi();
+          if (state.route === "employees") render();
+        });
+      };
+      if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {
         if (!authSession()) return;
         try {
           await verifyDesktopEntitlement();
@@ -4027,6 +6913,36 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           render();
         }
       }, DESKTOP_ENTITLEMENT_INTERVAL);
+      SESSION_KEEPALIVE_MS = 6 * 60 * 60 * 1e3;
+      if (!isOfflineDesktop()) setInterval(async () => {
+        if (isLocalShell() || !authSession()) return;
+        try {
+          await cloudflareAccessSignIn();
+        } catch {
+        }
+      }, SESSION_KEEPALIVE_MS);
+      saveCloudPreferences = save;
+      offlineSaveTimer = 0;
+      save = function() {
+        saveCloudPreferences();
+        if (!isOfflineDesktop() || !window.mechproDesktop?.localShop) return;
+        clearTimeout(offlineSaveTimer);
+        offlineSaveTimer = setTimeout(() => {
+          void window.mechproDesktop.localShop.save(snapshotShop(state)).catch((error) => console.error("Offline save failed", error));
+        }, 200);
+      };
+      window.addEventListener("pagehide", () => {
+        if (isOfflineDesktop() && window.mechproDesktop?.localShop) void window.mechproDesktop.localShop.save(snapshotShop(state));
+      });
+      window.icon = icon;
+      window.escapeHtml = escapeHtml;
+      window.shell = shell;
+      window.heading = heading;
+      window.toast = toast;
+      window.apiFetch = apiFetch;
+      window.save = save;
+      Object.defineProperty(window, "state", { get: () => state });
+      Object.defineProperty(window, "render", { get: () => render });
       void startApp();
     }
   });

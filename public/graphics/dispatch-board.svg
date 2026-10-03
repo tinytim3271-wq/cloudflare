@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-labelledby="boardTitle boardDesc">
+  <title id="boardTitle">MechPro dispatch board</title>
+  <desc id="boardDesc">Four shop columns: estimate, approved, in the bay, and invoice, with sample repair cards.</desc>
+  <rect width="640" height="420" rx="28" fill="#162c24"/>
+  <rect x="24" y="24" width="592" height="56" rx="14" fill="#1f3b31"/>
+  <circle cx="52" cy="52" r="12" fill="#c8df59"/>
+  <text x="76" y="58" fill="#fffefb" font-family="Arial Narrow, Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="1.5">MECHPRO</text>
+  <text x="430" y="58" fill="#c8df59" font-family="Arial, sans-serif" font-size="14">Today / 6 jobs on the board</text>
+  <g font-family="Arial, sans-serif">
+    <g>
+      <rect x="24" y="100" width="140" height="292" rx="16" fill="#fffefb"/>
+      <text x="40" y="128" fill="#1f654b" font-size="13" font-weight="700">ESTIMATE</text>
+      <rect x="36" y="146" width="116" height="72" rx="10" fill="#f3f1eb"/>
+      <text x="48" y="170" fill="#14201c" font-size="13" font-weight="700">RO-1053</text>
+      <text x="48" y="190" fill="#5d6d66" font-size="12">Front brakes</text>
+      <rect x="36" y="228" width="116" height="72" rx="10" fill="#f3f1eb"/>
+      <text x="48" y="252" fill="#14201c" font-size="13" font-weight="700">RO-1054</text>
+      <text x="48" y="272" fill="#5d6d66" font-size="12">Oil service</text>
+    </g>
+    <g>
+      <rect x="176" y="100" width="140" height="292" rx="16" fill="#fffefb"/>
+      <text x="192" y="128" fill="#1f654b" font-size="13" font-weight="700">APPROVED</text>
+      <rect x="188" y="146" width="116" height="86" rx="10" fill="#e7f0ea"/>
+      <text x="200" y="172" fill="#14201c" font-size="13" font-weight="700">RO-1048</text>
+      <text x="200" y="192" fill="#5d6d66" font-size="12">Alignment</text>
+      <text x="200" y="212" fill="#1f654b" font-size="12">Promise 3:30</text>
+    </g>
+    <g>
+      <rect x="328" y="100" width="140" height="292" rx="16" fill="#fffefb"/>
+      <text x="344" y="128" fill="#1f654b" font-size="13" font-weight="700">IN THE BAY</text>
+      <rect x="340" y="146" width="116" height="86" rx="10" fill="#c8df59"/>
+      <text x="352" y="172" fill="#14201c" font-size="13" font-weight="700">RO-1046</text>
+      <text x="352" y="192" fill="#162c24" font-size="12">Tech A / Bay 2</text>
+      <text x="352" y="212" fill="#162c24" font-size="12">Waiting on pads</text>
+    </g>
+    <g>
+      <rect x="480" y="100" width="136" height="292" rx="16" fill="#fffefb"/>
+      <text x="496" y="128" fill="#1f654b" font-size="13" font-weight="700">INVOICE</text>
+      <rect x="492" y="146" width="112" height="86" rx="10" fill="#f3f1eb"/>
+      <text x="504" y="172" fill="#14201c" font-size="13" font-weight="700">INV-2042</text>
+      <text x="504" y="192" fill="#5d6d66" font-size="12">Balance $108.25</text>
+      <text x="504" y="212" fill="#1f654b" font-size="12">Ready to collect</text>
+    </g>
+  </g>
+</svg>

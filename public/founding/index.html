@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MechPro Founding Member</title>
+    <meta name="robots" content="noindex" />
+    <meta name="description" content="Invite-only Founding Member pricing for the first 50 MechPro shops." />
+    <link rel="icon" href="/mechpro-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/fonts/fonts.css" />
+    <link rel="stylesheet" href="/market.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site-header">
+        <a class="brand" href="/features"><span class="brand-mark">M</span><span><strong>MECHPRO</strong><small>Founding Member</small></span></a>
+        <nav class="nav" aria-label="Product">
+          <a href="/features">Product</a>
+          <a href="/pricing">Public pricing</a>
+          <a href="/login">Sign in</a>
+        </nav>
+      </header>
+      <section id="gate" class="note" hidden>
+        <h1>This page is an invite from the founder.</h1>
+        <p id="gate-message">Open the private link you were sent. Public plans are on the pricing page.</p>
+        <p><a class="btn primary" href="/pricing">See public pricing</a></p>
+      </section>
+      <div id="offer" hidden>
+        <section class="hero">
+          <p class="eyebrow">Invite-only · By invitation from the founder</p>
+          <h1>50 shops lock this rate for as long as they stay subscribed.</h1>
+          <p class="lede">MechPro runs dispatch, estimates, invoices, and a connected AI phone. Shop Pro adds live OEM programming on your J2534 adapter. The first 50 paying shops keep the founding rate.</p>
+          <p id="scarcity" class="scarcity" role="status">Checking spots…</p>
+          <div class="bar" aria-hidden="true"><span id="scarcity-bar"></span></div>
+          <div class="hero-actions">
+            <a class="btn primary" id="claim-top" href="#plans">Claim a Founding Member spot</a>
+          </div>
+          <p class="fine">No card is charged for 14 days. Cancel anytime.</p>
+        </section>
+        <section class="grid" aria-label="What founding members get">
+          <article class="card">
+            <h2>Price lock</h2>
+            <p>$49 Solo, $99 Shop, or $199 Shop Pro. The rate does not increase while the subscription stays active.</p>
+          </article>
+          <article class="card">
+            <h2>Founder line</h2>
+            <p>Founding shops get a direct line to the founder for setup, not a ticket queue.</p>
+          </article>
+          <article class="card">
+            <h2>Live diagnostics</h2>
+            <p>Founding Pro includes the same live OEM authorization as public Shop Pro, at the locked price.</p>
+          </article>
+        </section>
+        <section class="grid" id="plans" aria-label="Founding prices">
+          <article class="card">
+            <h2>Solo</h2>
+            <div class="price">$49<span>/month</span></div>
+            <p>Normally $69. 200 AI phone minutes. Diagnostics simulator. Unlimited users.</p>
+            <a class="btn primary" data-plan="founding_solo" href="/signup">Lock Solo at $49</a>
+          </article>
+          <article class="card featured">
+            <p class="plan-flag">Most shops</p>
+            <h2>Shop</h2>
+            <div class="price">$99<span>/month</span></div>
+            <p>Normally $139. 800 AI phone minutes. Dispatch, payroll planning, simulator. Unlimited users.</p>
+            <a class="btn primary" data-plan="founding_shop" href="/signup">Lock Shop at $99</a>
+          </article>
+          <article class="card">
+            <h2>Shop Pro</h2>
+            <div class="price">$199<span>/month</span></div>
+            <p>Normally $279. 2,500 AI phone minutes. Live OEM programming and AutoAuth. Unlimited users.</p>
+            <a class="btn primary" data-plan="founding_pro" href="/signup">Lock Shop Pro at $199</a>
+          </article>
+        </section>
+        <aside class="note">
+          <p>This is a working shop app: dispatch, work orders, estimates, invoices, CSV import, and the AgentPhone connection are in the product. Live programming requires a J2534 pass-thru and the shop's AutoAuth login, and it is limited to Pro plans. You will hit rough edges. That is the trade for the locked rate.</p>
+          <p>Annual prepay is 2 months free. After 50 shops claim a spot, this page closes. A claimed rate stays put.</p>
+          <p id="claim-error" class="error" hidden></p>
+        </aside>
+        <footer class="site-footer">
+          <span>MechPro</span>
+          <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+        </footer>
+      </div>
+    </div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const token = params.get("invite") || "";
+      const gate = document.querySelector("#gate");
+      const offer = document.querySelector("#offer");
+      const gateMessage = document.querySelector("#gate-message");
+      const scarcity = document.querySelector("#scarcity");
+      const bar = document.querySelector("#scarcity-bar");
+      function paintCounter(payload) {
+        const claimed = Number(payload.claimed || 0);
+        const cap = Number(payload.cap || 50);
+        const remaining = Math.max(0, cap - claimed);
+        scarcity.textContent = remaining === 0
+          ? "All 50 Founding Member spots are claimed."
+          : `${claimed} of ${cap} claimed. ${remaining} left.`;
+        bar.style.width = `${Math.min(100, Math.round((claimed / cap) * 100))}%`;
+      }
+
+      async function loadStatus() {
+        const response = await fetch("/api/founding/status", { headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error("status");
+        paintCounter(await response.json());
+      }
+
+      document.querySelectorAll("[data-plan]").forEach((link) => {
+        const planId = link.dataset.plan;
+        link.href = `/signup?plan=${encodeURIComponent(planId)}&invite=${encodeURIComponent(token)}`;
+      });
+
+      (async () => {
+        if (!token) {
+          gate.hidden = false;
+          return;
+        }
+        try {
+          const response = await fetch(`/api/founding/validate?token=${encodeURIComponent(token)}`, { headers: { Accept: "application/json" } });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.valid) {
+            gate.hidden = false;
+            gateMessage.textContent = payload.message || "This invite link is not valid.";
+            return;
+          }
+          offer.hidden = false;
+          paintCounter(payload);
+          setInterval(() => { loadStatus().catch(() => {}); }, 30000);
+        } catch {
+          gate.hidden = false;
+          gateMessage.textContent = "The invite check did not respond. Try the link again in a moment.";
+        }
+      })();
+    </script>
+  </body>
+</html>

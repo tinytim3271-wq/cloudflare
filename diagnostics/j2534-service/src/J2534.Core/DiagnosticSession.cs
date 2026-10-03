@@ -264,6 +264,61 @@ public sealed class DiagnosticSession : IDisposable
         });
     }
 
+    static readonly Dictionary<string, (ushort Did, byte Option, string Label)> BidirectionalControls = new()
+    {
+        ["cooling_fan"] = (0xD100, 0x03, "Cooling fan"),
+        ["fuel_pump"] = (0xD101, 0x03, "Fuel pump"),
+        ["ac_clutch"] = (0xD102, 0x03, "A/C clutch"),
+        ["evap_purge"] = (0xD103, 0x03, "EVAP purge"),
+        ["return_control"] = (0xD100, 0x00, "Return control to ECU"),
+    };
+
+    public Task<object> BidirectionalControlAsync(string control, string state, string vin)
+    {
+        RequireConnected();
+        if (!BidirectionalControls.TryGetValue(control, out var spec))
+            throw new InvalidOperationException("Unsupported bidirectional control");
+        var option = state == "off" || control == "return_control" ? (byte)0x00 : spec.Option;
+        if (!_simulator)
+        {
+            var client = new UdsClient(CreateChannel());
+            client.DiagnosticSessionControl(0x03, "0x7E0", "0x7E8");
+            client.InputOutputControl(spec.Did, option, "0x7E0", "0x7E8");
+        }
+        Log("tx", "0x7E0", "1003", "Extended diagnostic session (0x10 0x03)");
+        Log("tx", "0x7E0", $"2F{spec.Did:X4}{option:X2}", $"InputOutputControl: {spec.Label}");
+        return Task.FromResult<object>(new
+        {
+            procedure = "bidirectional_control",
+            completed = true,
+            vin,
+            control,
+            state = option == 0 ? "released" : "active",
+        });
+    }
+
+    public Task<object> CodeModuleAsync(string target, ushort did, byte[] data, string vin)
+    {
+        RequireConnected();
+        RequireSecurity("flash");
+        if (!_simulator)
+        {
+            var client = new UdsClient(CreateChannel());
+            var rx = target.Replace("0x7E", "0x7E8", StringComparison.OrdinalIgnoreCase);
+            client.WriteDataByIdentifier(did, data, target, rx);
+        }
+        Log("tx", target, $"2E{did:X4}", "WriteDataByIdentifier");
+        return Task.FromResult<object>(new
+        {
+            procedure = "module_coding",
+            completed = true,
+            vin,
+            target,
+            did = $"0x{did:X4}",
+            bytes = data.Length,
+        });
+    }
+
     public object StartLiveLog()
     {
         RequireConnected();

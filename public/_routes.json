@@ -24,6 +24,8 @@
     "/terms",
     "/terms/*",
     "/privacy",
-    "/privacy/*"
+    "/privacy/*",
+    "/founding",
+    "/founding/*"
   ]
 }

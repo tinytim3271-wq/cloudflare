@@ -3,6 +3,8 @@ const path = require('node:path');
 const diagnostics = require('./diagnostics-bridge');
 const { resolveDesktopStart } = require('./start-url');
 const { resolveAuthDeepLink } = require('./auth-deep-link');
+const edition = require('./edition.json');
+const vault = require('./local-vault');
 
 let mainWindow = null;
 
@@ -21,6 +23,26 @@ function isTrustedUrl(rawUrl) {
   }
 }
 
+function registerOfflineIpc() {
+  if (edition.offline !== true) return;
+  const handlers = {
+    'local-auth:status': () => vault.accountStatus(app.getPath('userData')),
+    'local-auth:create': (_event, payload) => vault.createAccount(app.getPath('userData'), payload || {}),
+    'local-auth:sign-in': (_event, payload) => vault.signIn(app.getPath('userData'), payload || {}),
+    'local-shop:load': () => vault.loadShop(app.getPath('userData')),
+    'local-shop:save': (_event, snapshot) => vault.saveShop(app.getPath('userData'), snapshot || {}),
+  };
+  Object.entries(handlers).forEach(([channel, handler]) => {
+    ipcMain.handle(channel, async (_event, ...args) => {
+      try {
+        return { ok: true, result: await handler(_event, ...args) };
+      } catch (error) {
+        return { ok: false, error: error.message || 'Offline sign-in failed' };
+      }
+    });
+  });
+}
+
 function registerDiagnosticsIpc() {
   const handlers = {
     'diagnostics:listAdapters': () => diagnostics.listAdapters(),
@@ -33,6 +55,8 @@ function registerDiagnosticsIpc() {
     'diagnostics:clearDtcs': (_e, params) => diagnostics.clearDtcs(params || {}),
     'diagnostics:securityAccess': (_e, params) => diagnostics.securityAccess(params || {}),
     'diagnostics:programKey': (_e, params) => diagnostics.programKey(params || {}),
+    'diagnostics:codeModule': (_e, params) => diagnostics.codeModule(params || {}),
+    'diagnostics:bidirectionalControl': (_e, params) => diagnostics.bidirectionalControl(params || {}),
     'diagnostics:flashModule': (_e, params) => diagnostics.flashModule(params || {}),
     'diagnostics:startLiveLog': () => diagnostics.startLiveLog(),
     'diagnostics:stopLiveLog': () => diagnostics.stopLiveLog(),
@@ -105,12 +129,12 @@ function createWindow() {
   // Packaged desktop must use the hosted HTTPS origin so magic-link auth and /api
   // calls are same-origin. Loading index.html via file:// made fetch('/api/...') fail
   // with TypeError: Failed to fetch. Use --smoke-test / --local-assets for file://.
-  const start = resolveDesktopStart();
+  const start = resolveDesktopStart({ offline: edition.offline === true });
   mainWindow = window;
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
-  const initialDeepLink = process.argv.find(argument => String(argument).startsWith('mechpro://'));
+  const initialDeepLink = findAuthDeepLink(process.argv);
   if (handleAuthDeepLink(initialDeepLink)) {
     return;
   }
@@ -119,6 +143,10 @@ function createWindow() {
   } else {
     void window.loadURL(start.remoteUrl);
   }
+}
+
+function findAuthDeepLink(argv) {
+  return (argv || []).map(value => String(value).trim().replace(/^"|"$/g, '')).find(value => value.includes('mechpro://')) || '';
 }
 
 function handleAuthDeepLink(rawUrl) {
@@ -135,20 +163,33 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 app.on('second-instance', (_event, argv) => {
-  handleAuthDeepLink(argv.find(argument => String(argument).startsWith('mechpro://')));
+  handleAuthDeepLink(findAuthDeepLink(argv));
 });
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleAuthDeepLink(url);
 });
 
-if (process.defaultApp) {
-  app.setAsDefaultProtocolClient('mechpro', process.execPath, [path.resolve(process.argv[1] || '.')]);
-} else {
-  app.setAsDefaultProtocolClient('mechpro');
+function registerWindowsProtocol() {
+  if (process.platform !== 'win32' || edition.offline === true) return;
+  const { spawnSync } = require('node:child_process');
+  const command = `"${process.execPath}" "%1"`;
+  spawnSync('reg', ['add', 'HKCU\\Software\\Classes\\mechpro', '/ve', '/d', 'URL:MechPro authentication', '/f'], { windowsHide: true });
+  spawnSync('reg', ['add', 'HKCU\\Software\\Classes\\mechpro', '/v', 'URL Protocol', '/d', '', '/f'], { windowsHide: true });
+  spawnSync('reg', ['add', 'HKCU\\Software\\Classes\\mechpro\\shell\\open\\command', '/ve', '/d', command, '/f'], { windowsHide: true });
+}
+
+if (edition.offline !== true) {
+  if (process.defaultApp) {
+    app.setAsDefaultProtocolClient('mechpro', process.execPath, [path.resolve(process.argv[1] || '.')]);
+  } else {
+    app.setAsDefaultProtocolClient('mechpro');
+  }
+  registerWindowsProtocol();
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(() => {
+  registerOfflineIpc();
   registerDiagnosticsIpc();
   // Do not auto-start the J2534 host — start on first user-initiated diagnostics action.
   createWindow();
