@@ -108,11 +108,16 @@ public sealed class DiagnosticSession : IDisposable
                 dllPath = (string?)null,
             };
 
-    public async Task<object> ReadVinAsync()
+    public async Task<string> ReadConnectedVinAsync()
     {
         RequireConnected();
         var client = new UdsClient(CreateChannel());
-        var vin = await client.ReadVinAsync("0x7E0", "0x7E8");
+        return await client.ReadVinAsync("0x7E0", "0x7E8");
+    }
+
+    public async Task<object> ReadVinAsync()
+    {
+        var vin = await ReadConnectedVinAsync();
         return new { vin, source = "UDS_22_F190", raw = vin };
     }
 
