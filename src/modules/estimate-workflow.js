@@ -1,5 +1,13 @@
 const roundMoney = value => Math.round((Number(value) || 0) * 100) / 100;
 
+export function isDeclinedEstimateLine(line) {
+  return line?.approvalStatus === 'declined';
+}
+
+export function billableEstimateLines(lines = []) {
+  return lines.filter(line => !isDeclinedEstimateLine(line));
+}
+
 export function normalizeEstimateLine(line = {}, index = 0) {
   const type = line.type === 'part' ? 'part' : 'labor';
   const quantity = Math.max(0, Number(line.quantity ?? (type === 'part' ? 1 : line.hours)) || 0);
@@ -26,15 +34,17 @@ export function normalizeEstimateLine(line = {}, index = 0) {
 
 export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
   const normalizedLines = lines.map(normalizeEstimateLine);
+  // Declined lines stay visible for audit, but must not affect money totals.
+  const billableLines = billableEstimateLines(normalizedLines);
   const normalizedFees = fees.map(fee => ({
     ...fee,
     description: String(fee.description || 'Fee'),
     amount: roundMoney(Math.max(0, Number(fee.amount) || 0)),
   }));
-  const labor = roundMoney(normalizedLines
+  const labor = roundMoney(billableLines
     .filter(line => line.type === 'labor')
     .reduce((sum, line) => sum + line.total, 0));
-  const parts = roundMoney(normalizedLines
+  const parts = roundMoney(billableLines
     .filter(line => line.type === 'part')
     .reduce((sum, line) => sum + line.total, 0));
   const feeTotal = roundMoney(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
@@ -45,7 +55,7 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
     lines: normalizedLines,
     fees: normalizedFees,
     labor,
-    laborHours: roundMoney(normalizedLines.reduce((sum, line) => sum + line.hours, 0)),
+    laborHours: roundMoney(billableLines.reduce((sum, line) => sum + line.hours, 0)),
     parts,
     subtotal,
     taxRate: safeTaxRate,
@@ -74,24 +84,28 @@ export function approvedEstimate(estimate = {}, decisions = {}) {
 }
 
 export function invoiceRecordForOrder(order, issuedAt = new Date()) {
-  const estimate = order.estimate || calculateEstimate([], 0);
+  const source = order.estimate || {};
+  // Always recompute billable money from non-declined lines so stale/coherent
+  // full-card totals cannot inflate invoice subtotal/tax after partial approval.
+  const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
   const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, '').replace(/[^A-Za-z0-9-]/g, '')}`;
   const due = new Date(issuedAt);
   due.setDate(due.getDate() + 14);
+  const amount = roundMoney(order.total ?? estimate.total);
   return {
     id: number,
     number,
     ro: order.id,
     customer: order.customer,
     vehicle: order.vehicle,
-    amount: roundMoney(order.total ?? estimate.total),
-    subtotal: roundMoney(estimate.subtotal),
-    tax: roundMoney(estimate.tax),
+    amount,
+    subtotal: estimate.subtotal,
+    tax: estimate.tax,
     taxRate: Math.max(0, Number(estimate.taxRate) || 0),
     status: 'sent',
     date: issuedAt.toISOString().slice(0, 10),
     due: due.toISOString().slice(0, 10),
-    lines: (estimate.lines || []).filter(line => line.approvalStatus !== 'declined').map(normalizeEstimateLine),
+    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
     sourceEstimateApproval: order.estimateApproval || null,
     createdAt: issuedAt.toISOString(),
   };

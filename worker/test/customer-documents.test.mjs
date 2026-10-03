@@ -39,13 +39,19 @@ function mockEnvironment() {
                   consumed_at: null,
                   result: null,
                 });
+                return { success: true, meta: { changes: 1 } };
               } else if (/UPDATE entities SET/i.test(sql)) {
                 entities.set(key(args[2], args[3], args[4]), JSON.parse(args[0]));
+                return { success: true, meta: { changes: 1 } };
               } else if (/UPDATE customer_document_links SET/i.test(sql)) {
                 const link = links.find(item => item.id === args[2]);
-                if (link && !link.consumed_at) Object.assign(link, { consumed_at: args[0], result: args[1] });
+                if (link && !link.consumed_at) {
+                  Object.assign(link, { consumed_at: args[0], result: args[1] });
+                  return { success: true, meta: { changes: 1 } };
+                }
+                return { success: true, meta: { changes: 0 } };
               }
-              return { success: true };
+              return { success: true, meta: { changes: 0 } };
             },
           };
         },
@@ -221,4 +227,106 @@ test('invoice uses the same one-time mobile signature route', async () => {
   assert.equal(invoice.signature.authorizationName, 'Pat Customer');
   assert.equal(invoice.signature.source, 'remote');
   assert.equal(fixture.links[0].result, 'signed');
+});
+
+test('cannot create a new public estimate link after the estimate is locked', async () => {
+  const fixture = mockEnvironment();
+  const locked = estimateOrder();
+  locked.linesLockedAt = '2026-10-02T11:00:00.000Z';
+  locked.estimateApproval = { status: 'approved', signedAt: locked.linesLockedAt };
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), locked);
+
+  await assert.rejects(
+    () => issueLink(fixture, 'estimate', 'RO-1100'),
+    error => error.status === 409 && /already locked/i.test(error.message),
+  );
+});
+
+test('replayed or alternate public response cannot overwrite a locked estimate approval', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  const signatureDataUrl = `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`;
+
+  const first = await handleCustomerDocument(new Request(link.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'sign',
+      authorizationName: 'Pat Customer',
+      signatureDataUrl,
+      decisions: { labor: 'approved', part: 'declined' },
+    }),
+  }), fixture.env, token);
+  assert.equal(first.status, 200);
+
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Other Person',
+        signatureDataUrl,
+        decisions: { labor: 'declined', part: 'approved' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 409,
+  );
+
+  // Even if the one-time token flag were cleared, the locked estimate must still refuse mutation.
+  fixture.links[0].consumed_at = null;
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Other Person',
+        signatureDataUrl,
+        decisions: { labor: 'declined', part: 'approved' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 409 && /already been approved or declined/i.test(error.message),
+  );
+
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.equal(saved.estimateApproval.authorizationName, 'Pat Customer');
+  assert.equal(saved.estimate.lines.find(line => line.id === 'part').approvalStatus, 'declined');
+  assert.equal(saved.total, 165);
+});
+
+test('losing claim on an unused token returns 409 before writing the document', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'invoices', 'INV-1100'), {
+    id: 'INV-1100',
+    number: 'INV-1100',
+    ro: 'RO-1100',
+    customer: 'Pat Customer',
+    vehicle: '2020 Example Sedan',
+    amount: 165,
+    lines: [{ id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 165 }],
+    createdAt: '2026-10-02T10:00:00.000Z',
+  });
+  const link = await issueLink(fixture, 'invoice', 'INV-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  // Pre-consume as if a racing request already claimed the token.
+  fixture.links[0].consumed_at = '2026-10-02T12:00:00.000Z';
+  fixture.links[0].result = 'signed';
+
+  // Fresh handleCustomerDocument still loads consumed_at and rejects before body work.
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl: `data:image/png;base64,${Buffer.from('invoice-signature').toString('base64')}`,
+      }),
+    }), fixture.env, token),
+    error => error.status === 409,
+  );
+  assert.equal(fixture.entities.get(fixture.key('shop-1', 'invoices', 'INV-1100')).signature, undefined);
 });
