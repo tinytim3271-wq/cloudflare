@@ -2008,6 +2008,143 @@
     }
   });
 
+  // src/runtime/entity-persistence.js
+  function entityPath(type) {
+    return `/entities/${type}`;
+  }
+  function persistMutationQueue(storage, key, queue) {
+    const records = Array.isArray(queue) ? queue : [];
+    if (records.length === 0) {
+      storage.removeItem(key);
+      return "[]";
+    }
+    const raw = JSON.stringify(records);
+    storage.setItem(key, raw);
+    return raw;
+  }
+  function applyQueuedEntityMutations(type, remoteRecords, queue) {
+    const basePath = entityPath(type);
+    const records = new Map(
+      (Array.isArray(remoteRecords) ? remoteRecords : []).map((record, index) => [record?.id ? String(record.id) : `__local-${index}`, record])
+    );
+    for (const mutation of Array.isArray(queue) ? queue : []) {
+      const path = String(mutation?.path || "");
+      if (mutation?.conflict || path !== basePath && !path.startsWith(`${basePath}/`)) continue;
+      const method = String(mutation.method || "").toUpperCase();
+      let body = null;
+      try {
+        body = mutation.body ? JSON.parse(mutation.body) : null;
+      } catch {
+        continue;
+      }
+      const pathId = path.startsWith(`${basePath}/`) ? decodeURIComponent(path.slice(basePath.length + 1)) : "";
+      const id = String(body?.id || pathId || "");
+      if (!id) continue;
+      if (method === "DELETE") records.delete(id);
+      if (method === "POST" || method === "PUT") records.set(id, body);
+    }
+    return [...records.values()];
+  }
+  var init_entity_persistence = __esm({
+    "src/runtime/entity-persistence.js"() {
+    }
+  });
+
+  // src/modules/estimate-workflow.js
+  function normalizeEstimateLine(line = {}, index = 0) {
+    const type = line.type === "part" ? "part" : "labor";
+    const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
+    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : line.laborRate)) || 0);
+    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
+    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
+    const total = type === "labor" ? roundMoney(hours * laborRate) : roundMoney(quantity * unitPrice);
+    return {
+      ...line,
+      id: String(line.id || `line-${index + 1}`),
+      type,
+      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : "Labor")),
+      notes: String(line.notes || line.explanation || ""),
+      quantity,
+      unitPrice,
+      hours,
+      laborRate,
+      total,
+      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
+    };
+  }
+  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
+    const normalizedLines = lines.map(normalizeEstimateLine);
+    const normalizedFees = fees.map((fee) => ({
+      ...fee,
+      description: String(fee.description || "Fee"),
+      amount: roundMoney(Math.max(0, Number(fee.amount) || 0))
+    }));
+    const labor = roundMoney(normalizedLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney(normalizedLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const subtotal = roundMoney(labor + parts + feeTotal);
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
+    const tax = roundMoney(subtotal * safeTaxRate / 100);
+    return {
+      lines: normalizedLines,
+      fees: normalizedFees,
+      labor,
+      laborHours: roundMoney(normalizedLines.reduce((sum, line) => sum + line.hours, 0)),
+      parts,
+      subtotal,
+      taxRate: safeTaxRate,
+      tax,
+      total: roundMoney(subtotal + tax)
+    };
+  }
+  function approvedEstimate(estimate = {}, decisions = {}) {
+    const lines = (estimate.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      return {
+        ...normalized,
+        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
+      };
+    });
+    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
+    const totals = calculateEstimate(approvedLines, estimate.taxRate, estimate.fees);
+    return {
+      ...estimate,
+      ...totals,
+      lines,
+      approvedLineCount: approvedLines.length,
+      declinedLineCount: lines.length - approvedLines.length
+    };
+  }
+  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
+    const estimate = order.estimate || calculateEstimate([], 0);
+    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
+    const due = new Date(issuedAt);
+    due.setDate(due.getDate() + 14);
+    return {
+      id: number,
+      number,
+      ro: order.id,
+      customer: order.customer,
+      vehicle: order.vehicle,
+      amount: roundMoney(order.total ?? estimate.total),
+      subtotal: roundMoney(estimate.subtotal),
+      tax: roundMoney(estimate.tax),
+      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
+      status: "sent",
+      date: issuedAt.toISOString().slice(0, 10),
+      due: due.toISOString().slice(0, 10),
+      lines: (estimate.lines || []).filter((line) => line.approvalStatus !== "declined").map(normalizeEstimateLine),
+      sourceEstimateApproval: order.estimateApproval || null,
+      createdAt: issuedAt.toISOString()
+    };
+  }
+  var roundMoney;
+  var init_estimate_workflow = __esm({
+    "src/modules/estimate-workflow.js"() {
+      roundMoney = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
@@ -2523,6 +2660,21 @@
     sessionStorage.removeItem(storageKeys.session);
     localStorage.removeItem(storageKeys.session);
   }
+  function signOutApiRequest() {
+    if (isOfflineDesktop()) return;
+    fetch(`${cloudflareConfig2.apiUrl}/auth/logout`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }).catch(() => {
+    });
+  }
+  async function signOutEverywhere() {
+    state.currentUserId = null;
+    desktopEntitlementVerified = !isDesktopApp;
+    signOutApiRequest();
+    clearAuthSession();
+    closeModal();
+    save();
+    render();
+    toast("Signed out of MechPro");
+  }
   function readMutationQueue() {
     const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]";
     if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache;
@@ -2536,35 +2688,12 @@
     return mutationQueueCache;
   }
   function writeMutationQueue(queue) {
-    const raw = "[]";
-    if (raw === mutationQueueRaw) {
-      mutationQueueCache = queue;
-      return;
-    }
+    const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue);
     mutationQueueRaw = raw;
     mutationQueueCache = queue;
-    localStorage.removeItem(MUTATION_QUEUE_STORE);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-  function sanitizeSensitiveValue(value2) {
-    if (!value2 || typeof value2 !== "object") return value2;
-    if (Array.isArray(value2)) return value2.map(sanitizeSensitiveValue);
-    const out = {};
-    for (const [key, item] of Object.entries(value2)) {
-      if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]";
-      else out[key] = sanitizeSensitiveValue(item);
-    }
-    return out;
-  }
-  function sanitizeQueuedBody(rawBody) {
-    if (!rawBody) return rawBody;
-    try {
-      return JSON.stringify(sanitizeSensitiveValue(JSON.parse(rawBody)));
-    } catch {
-      return rawBody;
-    }
   }
   function prepareMutation(path, options) {
     return prepareEntityMutation(path, options, mutationId);
@@ -2576,7 +2705,7 @@
       writeMutationQueue(queue);
       return;
     }
-    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: sanitizeQueuedBody(mutation.options.body), expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
+    const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), conflict };
     if (existingIndex >= 0) queue.splice(existingIndex, 1, item);
     else queue.push(item);
     writeMutationQueue(queue);
@@ -3063,7 +3192,7 @@
   }
   function shell(content) {
     const user = currentUser(), profile = shopProfile(), shift = openShift(user.id);
-    return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>`;
+    return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden>${canAccess("settings") ? `<button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button>` : ""}<button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out \xB7 ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>`;
   }
   function heading(kicker, title, description, action = true) {
     return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>`;
@@ -4204,7 +4333,8 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       sendButton.disabled = true;
       append("user", message);
       try {
-        const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+        const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || void 0, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+        assistantSessionId = result.sessionId || assistantSessionId;
         const answer = result.message || "I could not answer that right now.";
         append("assistant", answer);
         if (!assistantPaused && "speechSynthesis" in window) {
@@ -4338,13 +4468,31 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.querySelectorAll("[data-order]").forEach((x) => x.onclick = () => openOrder(x.dataset.order));
     document.querySelector("#new-ro-button")?.addEventListener("click", openNew);
     document.querySelector("#new-employee")?.addEventListener("click", openEmployee);
-    document.querySelector("#sign-out")?.addEventListener("click", () => {
-      state.currentUserId = null;
-      clearAuthSession();
-      save();
-      if (!isLocalShell()) location.assign("/cdn-cgi/access/logout");
-      else render();
+    document.querySelector("#user-menu-toggle")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle");
+      if (!panel || !toggle) return;
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
     });
+    document.querySelector("#user-menu-settings")?.addEventListener("click", () => {
+      state.route = "settings";
+      save();
+      render();
+    });
+    document.querySelector("#sign-out")?.addEventListener("click", () => {
+      void signOutEverywhere();
+    });
+    if (!userMenuDismissBound) {
+      userMenuDismissBound = true;
+      document.addEventListener("click", (event) => {
+        const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle");
+        if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return;
+        openPanel.hidden = true;
+        openToggle?.setAttribute("aria-expanded", "false");
+      });
+    }
     document.querySelector("#global-clock")?.addEventListener("click", toggleShift);
     document.querySelector("#job-clock")?.addEventListener("click", (event) => {
       const id = event.currentTarget.dataset.workOrderId;
@@ -5347,8 +5495,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
     });
   }
-  function applyRemoteList(key, records) {
-    state[key] = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+  function applyRemoteList(key, records, entityType = key) {
+    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+    state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue());
     save();
   }
   function stampDemoAppointments() {
@@ -5358,6 +5507,357 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     tomorrow.setDate(today.getDate() + 1);
     const next = localIsoDate2(tomorrow);
     state.appointments = state.appointments.map((item) => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item);
+  }
+  async function loadEmployeesFromApi() {
+    if (isOfflineDesktop()) return;
+    try {
+      const employees2 = await apiFetch("/entities/employees");
+      if (Array.isArray(employees2)) {
+        state.users = sanitizeUsers(employees2);
+        save();
+      }
+    } catch (error) {
+      console.error("Failed to load employees from API; using local data", error);
+    }
+  }
+  function employeeFormValue(employee, field, fallback = "") {
+    return escapeAttr(employee?.[field] ?? fallback);
+  }
+  async function saveEmployeeRecord(existing, data) {
+    const record = {
+      ...existing || {},
+      id: existing?.id || `user-${Date.now()}`,
+      name: data.name.trim(),
+      email: String(existing?.email || data.email).trim().toLowerCase(),
+      role: data.role,
+      title: data.title.trim(),
+      techName: data.techName.trim(),
+      active: existing?.active !== false,
+      employeeId: data.employeeId.trim(),
+      phone: data.phone.trim(),
+      address: data.address.trim(),
+      startDate: data.startDate,
+      employmentType: data.employmentType,
+      payRate: Number(data.payRate),
+      payFrequency: data.payFrequency,
+      department: data.department.trim(),
+      emergencyContact: data.emergencyContact.trim(),
+      taxStatus: data.taxStatus,
+      createdAt: existing?.createdAt || now(),
+      updatedAt: existing?.updatedAt
+    };
+    let saved = record;
+    if (!isOfflineDesktop()) {
+      const path = existing ? `/entities/employees/${encodeURIComponent(record.id)}` : "/entities/employees";
+      const response = await apiFetch(path, {
+        method: existing ? "PUT" : "POST",
+        body: JSON.stringify(record)
+      });
+      if (response?.queued) throw new Error("Employee profiles require a live connection.");
+      saved = response;
+    }
+    const index = state.users.findIndex((user) => user.id === saved.id);
+    if (index >= 0) state.users[index] = saved;
+    else state.users.push(saved);
+    save();
+    return saved;
+  }
+  async function setEmployeeActive(user) {
+    const updated = { ...user, active: !user.active };
+    if (!isOfflineDesktop()) {
+      const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, {
+        method: "PUT",
+        body: JSON.stringify(updated)
+      });
+      if (saved?.queued) throw new Error("Employee access changes require a live connection.");
+      Object.assign(updated, saved);
+    }
+    state.users[state.users.indexOf(user)] = updated;
+    save();
+    return updated;
+  }
+  async function saveCustomerRecord(existing, data) {
+    const record = {
+      ...existing || {},
+      id: existing?.id || mutationId(),
+      name: data.name.trim(),
+      phone: data.phone.trim(),
+      email: data.email.trim(),
+      billingAddress: data.billingAddress.trim(),
+      billingNotes: data.billingNotes.trim(),
+      vehicles: Number(existing?.vehicles || 0),
+      visits: Number(existing?.visits || 0),
+      spend: Number(existing?.spend || 0),
+      createdAt: existing?.createdAt || now(),
+      updatedAt: existing?.updatedAt
+    };
+    let saved = record;
+    if (!isOfflineDesktop()) {
+      const response = await apiFetch(existing ? `/entities/customers/${encodeURIComponent(record.id)}` : "/entities/customers", {
+        method: existing ? "PUT" : "POST",
+        body: JSON.stringify(record)
+      });
+      saved = response?.queued ? record : response;
+    }
+    const index = existing ? state.customers.indexOf(existing) : -1;
+    if (index >= 0) state.customers[index] = saved;
+    else state.customers.unshift(saved);
+    save();
+    return saved;
+  }
+  function openCustomerForm(existing = null) {
+    showModal(`<form class="modal" id="customer-edit-form"><div class="modal-head"><h2>${existing ? "Edit customer" : "Add customer"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Name *<input name="name" value="${escapeAttr(existing?.name || "")}" required/></label><label>Phone<input name="phone" value="${escapeAttr(existing?.phone || "")}"/></label><label class="full">Email<input name="email" type="email" value="${escapeAttr(existing?.email === "Not provided" ? "" : existing?.email || "")}"/></label><label>Billing address<textarea name="billingAddress">${escapeHtml(existing?.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes">${escapeHtml(existing?.billingNotes || "")}</textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save customer</button></div></form>`);
+    document.querySelector("#customer-edit-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      if (state.customers.some((customer) => customer !== existing && customer.name.toLowerCase() === data.name.trim().toLowerCase())) return toast("A customer already uses that name");
+      const button = event.target.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        await saveCustomerRecord(existing, data);
+        closeModal();
+        toast("Customer saved");
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "Customer could not be saved");
+      }
+    };
+  }
+  function expandedEstimateLines(estimate = {}) {
+    return (estimate.lines || []).flatMap((line, index) => {
+      if (line.type) return [normalizeEstimateLine(line, index)];
+      const rows = [];
+      const labor = Math.max(0, Number(line.labor ?? Number(line.hours || 0) * Number(line.laborRate || 165)) || 0);
+      const hours = Math.max(0, Number(line.hours) || 0);
+      if (labor || hours) rows.push(normalizeEstimateLine({
+        ...line,
+        id: line.id || `labor-${index + 1}`,
+        type: "labor",
+        description: line.description || line.service,
+        notes: line.notes || line.explanation,
+        hours,
+        laborRate: hours ? labor / hours : Number(line.laborRate || 165)
+      }, index));
+      const parts = Math.max(0, Number(line.parts) || 0);
+      if (parts) rows.push(normalizeEstimateLine({
+        id: `part-${index + 1}`,
+        type: "part",
+        description: `${line.service || "Service"} parts & materials`,
+        notes: line.notes || line.explanation || "",
+        quantity: 1,
+        unitPrice: parts
+      }, index));
+      return rows.length ? rows : [normalizeEstimateLine(line, index)];
+    });
+  }
+  function coherentOrderEstimate(order) {
+    const source = order.estimate || {};
+    const estimate = calculateEstimate(expandedEstimateLines(source), source.taxRate ?? state.taxSettings.rate, source.fees || []);
+    estimate.summary = source.summary || `Estimate for ${order.vehicle}`;
+    estimate.generatedAt = source.generatedAt || now();
+    return estimate;
+  }
+  function inventoryPartOptions(selected = "") {
+    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money(item.price)}</option>`).join("")}`;
+  }
+  function estimateEditorLine(line = {}, index = 0, removable = true) {
+    const item = normalizeEstimateLine(line, index), part = item.type === "part";
+    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    <div class="form-grid">
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
+    </div>
+    <div class="job-line-total"><span>Line total</span><b>${money(item.total)}</b></div>
+  </article>`;
+  }
+  function estimateFromEditor(root) {
+    const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
+      const type = row.querySelector(".job-line-type").value;
+      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+      const inventory = type === "part" ? state.inventory.find((item) => item.id === row.querySelector(".job-line-inventory").value) : null;
+      return normalizeEstimateLine({
+        id: row.dataset.lineId || `line-${Date.now()}-${index}`,
+        type,
+        description: row.querySelector(".job-line-description").value.trim(),
+        notes: row.querySelector(".job-line-notes").value.trim(),
+        quantity,
+        unitPrice,
+        hours: type === "labor" ? quantity : 0,
+        laborRate: type === "labor" ? unitPrice : 0,
+        inventoryId: inventory?.id || null,
+        inventorySku: inventory?.sku || "",
+        committedQuantity: type === "part" && inventory ? quantity : 0
+      }, index);
+    }).filter((line) => line.description && line.quantity > 0);
+    return calculateEstimate(lines, state.taxSettings.rate, lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
+  }
+  function refreshEstimateEditor(root) {
+    root.querySelectorAll(".job-estimate-line").forEach((row) => {
+      const type = row.querySelector(".job-line-type").value;
+      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+      row.querySelector(".job-inventory-field").hidden = type !== "part";
+      row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+      row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+      row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
+      row.querySelector(".job-line-total b").textContent = money(quantity * rate);
+    });
+    const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
+    if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+    const total = document.querySelector("#new-estimate-total");
+    if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
+  }
+  function bindEstimateEditor(root) {
+    if (!root) return;
+    const bindRows = () => {
+      root.querySelectorAll("input,textarea,select").forEach((control) => control.oninput = () => refreshEstimateEditor(root));
+      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => refreshEstimateEditor(root));
+      root.querySelectorAll(".job-line-inventory").forEach((control) => control.onchange = () => {
+        const row = control.closest(".job-estimate-line"), item = state.inventory.find((entry) => entry.id === control.value);
+        if (item) {
+          row.querySelector(".job-line-description").value = item.name;
+          row.querySelector(".job-line-rate").value = Number(item.price || 0).toFixed(2);
+        }
+        refreshEstimateEditor(root);
+      });
+      root.querySelectorAll(".remove-job-line").forEach((button) => button.onclick = () => {
+        button.closest(".job-estimate-line").remove();
+        refreshEstimateEditor(root);
+      });
+    };
+    root._bindEstimateRows = bindRows;
+    bindRows();
+    refreshEstimateEditor(root);
+  }
+  async function ensureCustomerDocumentLink(documentType, documentId) {
+    return apiFetch("/document-links", {
+      method: "POST",
+      body: JSON.stringify({ documentType, documentId })
+    });
+  }
+  async function sendJobEstimate(order, channel) {
+    const customer = state.customers.find((item) => item.name === order.customer);
+    const to = channel === "email" ? customer?.email : customer?.phone || order.phone;
+    if (!to || to === "Not provided") return toast(`Add a customer ${channel === "email" ? "email address" : "phone number"} first`);
+    try {
+      const link = await ensureCustomerDocumentLink("estimate", order.id);
+      const subject = `Estimate ${order.id} \u2014 ${state.messagingSettings.shopName || "MechPro"}`;
+      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
+      const delivery = await deliverShopMessage({ channel, to, subject, body, metadata: { type: "estimate", workOrderId: order.id, approvalUrl: link.url } });
+      order.lastEstimateLink = { url: link.url, expiresAt: link.expiresAt, sentAt: now(), channel, deliveryMode: delivery.mode };
+      await updateOrderInApi(order);
+      save();
+      toast(`${order.id} approval link prepared by ${channel === "email" ? "email" : "text"}`);
+    } catch (error) {
+      toast(error.message || "Could not create the customer approval link");
+    }
+  }
+  function onsiteSignatureModal(kind, record) {
+    const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
+    const number = kind === "estimate" ? record.id : record.number;
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
+    let drawing = false, drawn = false;
+    const position = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
+    };
+    context.lineWidth = 3;
+    context.lineCap = "round";
+    context.strokeStyle = "#14201c";
+    canvas.onpointerdown = (event) => {
+      drawing = true;
+      drawn = true;
+      canvas.setPointerCapture(event.pointerId);
+      const point = position(event);
+      context.beginPath();
+      context.moveTo(point.x, point.y);
+    };
+    canvas.onpointermove = (event) => {
+      if (!drawing) return;
+      const point = position(event);
+      context.lineTo(point.x, point.y);
+      context.stroke();
+    };
+    canvas.onpointerup = () => {
+      drawing = false;
+    };
+    document.querySelector("#clear-signature").onclick = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      drawn = false;
+    };
+    document.querySelector("#document-signature-form").onsubmit = async (event) => {
+      event.preventDefault();
+      if (!drawn) return toast("Draw the customer signature first");
+      const approvedIds = new Set([...event.target.querySelectorAll('[name="approvedLine"]:checked')].map((input) => input.value));
+      if (kind === "estimate" && !approvedIds.size) return toast("Approve at least one line or close without signing");
+      const button = event.target.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        const signatureDataUrl = canvas.toDataURL("image/png");
+        const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
+        const signature = {
+          authorizationName: new FormData(event.target).get("authorizationName").trim(),
+          signatureKey: key,
+          signatureDataUrl: isLocalShell() ? signatureDataUrl : void 0,
+          signedAt: now(),
+          source: "on-site"
+        };
+        if (kind === "estimate") {
+          const decisions = Object.fromEntries(estimate.lines.map((line) => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
+          const approved = approvedEstimate(estimate, decisions);
+          record.estimate = approved;
+          record.total = approved.total;
+          record.labor = approved.labor;
+          record.laborHours = approved.laborHours;
+          record.parts = approved.parts;
+          record.tax = approved.tax;
+          record.status = "approved";
+          record.linesLockedAt = signature.signedAt;
+          record.estimateApproval = { status: "approved", ...signature, decisions };
+          await updateOrderInApi(record);
+        } else {
+          record.signature = signature;
+          await updateInvoiceInApi(record);
+        }
+        save();
+        closeModal();
+        toast(kind === "estimate" ? `${record.id} approved and signed` : `${record.number} signed`);
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "The signature could not be stored");
+      }
+    };
+  }
+  function jobCardLineTable(estimate) {
+    return `<div class="job-card-lines">${estimate.lines.map((line) => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}${line.inventorySku ? ` \xB7 ${escapeHtml(line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
+  }
+  function jobWorkflowSteps(order, invoice) {
+    const approval = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status);
+    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+  }
+  async function completeJobCard(order) {
+    const explicitlyApproved = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status);
+    if (!explicitlyApproved) return toast("Approve the estimate before completing this job");
+    if (!await commitLinkedInventory(order)) return;
+    order.status = "completed";
+    order.linesLockedAt || (order.linesLockedAt = now());
+    const saved = await updateOrderInApi(order);
+    state.orders[state.orders.indexOf(order)] = saved;
+    syncPayroll(saved);
+    save();
+    closeModal();
+    toast(`${saved.id} completed and invoice generated`);
+    render();
   }
   async function startApp() {
     if (isOfflineDesktop()) {
@@ -5380,6 +5880,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       if (user) {
         state.currentUserId = user.id;
         if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
+        if (user.role !== "super_admin") await reloadOperationalData();
       }
     } catch (error) {
       if (!authSession()) console.info("Cloudflare Access session not available", error.message);
@@ -5395,7 +5896,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, SENSITIVE_FIELD_PATTERN, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -5410,10 +5911,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_autozone_pro();
       init_offline_desktop();
       init_catalog_inspection_ui();
+      init_entity_persistence();
+      init_estimate_workflow();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
+      assistantSessionId = "";
       STORE = storageKeys.dispatch;
       seed = {
         route: "home",
@@ -5526,12 +6030,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       flushingMutationQueue = false;
       mutationQueueCache = null;
       mutationQueueRaw = null;
-      SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
       roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
       attentionDismissBound = false;
+      userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
       autozoneAccount = { connected: false, loaded: false };
@@ -5621,11 +6125,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         if (!original) {
           document.querySelector("#pending-sign-out")?.addEventListener("click", () => {
             pendingAuthProfile = null;
+            signOutApiRequest();
             clearAuthSession();
             state.currentUserId = null;
             save();
-            if (!isLocalShell()) location.assign("/cdn-cgi/access/logout");
-            else render();
+            render();
           });
           return;
         }
@@ -6064,13 +6568,349 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       loadShopEntities = async function() {
         try {
           const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
-          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index]));
+          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type));
         } catch (error) {
           console.error("Failed to load shop operations; using local data", error);
         }
         await ensureCannedMenu();
       };
       stampDemoAppointments();
+      employees = function() {
+        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+        return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
+      };
+      openEmployee = function(existing = null) {
+        showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label><label>Employee ID *<input name="employeeId" required value="${employeeFormValue(existing, "employeeId")}" placeholder="EMP-005"/></label><label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label><label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label><label class="full">Email address *<input type="email" name="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label><label>Role<select name="role">${["technician", "office", "service_writer", "admin"].map((role) => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role]}</option>`).join("")}</select></label><label class="full">Technician dispatch name<input name="techName" value="${employeeFormValue(existing, "techName")}" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType">${["Hourly", "Salary", "Contractor"].map((value2) => `<option ${existing?.employmentType === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label><label>Pay frequency<select name="payFrequency">${["Weekly", "Biweekly", "Monthly"].map((value2) => `<option ${existing?.payFrequency === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", (/* @__PURE__ */ new Date()).toISOString().slice(0, 10))}"/></label><label>Tax status<select name="taxStatus">${["W-2", "1099 Contractor"].map((value2) => `<option ${existing?.taxStatus === value2 ? "selected" : ""}>${value2}</option>`).join("")}</select></label><label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label><label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label><label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+        document.querySelector("#employee-form").onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(event.target));
+          const email = String(existing?.email || data.email).trim().toLowerCase();
+          if (!existing && state.users.some((user) => user.email.toLowerCase() === email)) return toast("An employee profile already uses that email");
+          if (state.users.some((user) => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) return toast("An employee already uses that employee ID");
+          if (data.role === "technician" && !data.techName.trim()) return toast("Add the technician dispatch name to save this profile");
+          const button = event.target.querySelector("button[type=submit]");
+          button.disabled = true;
+          try {
+            const saved = await saveEmployeeRecord(existing, data);
+            closeModal();
+            toast(`${saved.name} profile saved`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Could not save employee profile");
+          }
+        };
+      };
+      openCustomerEditor = function(key) {
+        const customer = state.customers.find((item) => customerRecordKey(item) === key);
+        if (customer) openCustomerForm(customer);
+      };
+      customers = function() {
+        const q = query.toLowerCase();
+        const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
+          const key = encodeURIComponent(customerRecordKey(item));
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+        }).join("");
+        return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
+      };
+      openNewCore = openNew;
+      openNew = function() {
+        openNewCore();
+        const form = document.querySelector("#new-form");
+        if (!form) return;
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form));
+          const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+          if (!customerName) return toast("Select or enter a customer name");
+          const button = form.querySelector("button[type=submit], button:not([type])");
+          button.disabled = true;
+          try {
+            let customer = state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
+            if (!customer) {
+              customer = await saveCustomerRecord(null, {
+                name: customerName,
+                phone: String(data.phone || ""),
+                email: "",
+                billingAddress: "",
+                billingNotes: ""
+              });
+            }
+            const estimate = readNewOrderEstimate();
+            const id = `RO-${Math.max(1040, ...state.orders.map((item) => Number(item.id.split("-")[1]) || 0)) + 1}`;
+            const order = {
+              id,
+              customer: customer.name,
+              phone: data.phone,
+              vehicle: data.vehicle,
+              vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
+              complaint: data.complaint,
+              status: data.status,
+              priority: data.priority,
+              tech: data.tech,
+              bay: data.bay,
+              mobile: data.bay === "Mobile",
+              promise: data.promise,
+              total: estimate.total,
+              scheduled: "Unscheduled",
+              notes: "New intake. Diagnosis pending.",
+              labor: estimate.labor,
+              laborHours: estimate.laborHours,
+              parts: estimate.parts,
+              tax: estimate.tax,
+              estimate: {
+                ...estimate,
+                generatedAt: now(),
+                summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.`
+              }
+            };
+            let saved = order;
+            if (!isOfflineDesktop() && !isLocalShell()) {
+              const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(order) });
+              saved = response?.queued ? order : response;
+            }
+            state.orders.unshift(saved);
+            save();
+            closeModal();
+            toast(`${id} created successfully`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Work order could not be saved");
+          }
+        };
+      };
+      orders = function() {
+        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+        return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
+      };
+      updateOrderInApi = async function(record) {
+        if (["completed", "invoiced"].includes(record.status)) await ensureInvoiceForOrder(record);
+        if (isOfflineDesktop()) return record;
+        const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, {
+          method: "PUT",
+          body: JSON.stringify(record)
+        });
+        return saved?.queued ? record : saved;
+      };
+      openOrder = function(id) {
+        const order = state.orders.find((item) => item.id === id);
+        if (!order) return;
+        const canManage = ["admin", "service_writer"].includes(currentUser().role);
+        if (!canManage) {
+          toast("Only an admin or service writer can edit this work order");
+          return;
+        }
+        showModal(`<form class="modal wide" id="work-order-edit-form"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Edit work order</h2></div><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input name="phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input name="vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input name="vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required>${escapeHtml(order.complaint || "")}</textarea></label><label>Status<select name="status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((status) => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select name="priority">${["normal", "high", "low"].map((priority) => `<option value="${priority}" ${order.priority === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select name="tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select name="bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map((bay) => `<option ${order.bay === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input name="promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input name="laborHours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label><label class="full">Technician / service notes<textarea name="notes">${escapeHtml(order.notes || "")}</textarea></label></div></div><div class="modal-actions"><button class="secondary danger" type="button" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" type="submit">${icon("save", 14)} Save work order</button></div></form>`);
+        const form = document.querySelector("#work-order-edit-form");
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form));
+          const next = {
+            ...order,
+            customer: data.customer,
+            phone: data.phone.trim(),
+            vehicle: data.vehicle.trim(),
+            vin: data.vin.trim().toUpperCase() || "VIN pending",
+            complaint: data.complaint.trim(),
+            status: data.status,
+            priority: data.priority,
+            tech: data.tech,
+            bay: data.bay,
+            mobile: data.bay === "Mobile",
+            promise: data.promise.trim(),
+            laborHours: Math.max(0, Number(data.laborHours) || 0),
+            notes: data.notes.trim(),
+            updatedAt: order.updatedAt
+          };
+          const firstCompletion = ["completed", "invoiced"].includes(next.status) && !["completed", "invoiced"].includes(order.status);
+          const button = form.querySelector("button[type=submit]");
+          button.disabled = true;
+          try {
+            if (firstCompletion && !await commitLinkedInventory(next)) return;
+            const saved = await updateOrderInApi(next);
+            state.orders[state.orders.indexOf(order)] = saved;
+            syncPayroll(saved);
+            save();
+            closeModal();
+            toast(`${saved.id} saved`);
+            render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message || "Work order could not be saved");
+          }
+        };
+        document.querySelector("#delete-order").onclick = async () => {
+          if (!confirm(`Delete ${order.id}?`)) return;
+          try {
+            if (!isOfflineDesktop()) await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+            state.orders = state.orders.filter((item) => item !== order);
+            save();
+            closeModal();
+            toast(`${order.id} deleted`);
+            render();
+          } catch (error) {
+            toast(error.message || "Work order could not be deleted");
+          }
+        };
+      };
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: 165 }) {
+        return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
+      };
+      readNewOrderEstimate = function() {
+        const root = document.querySelector("#new-estimate-lines");
+        return root ? estimateFromEditor(root) : calculateEstimate([], state.taxSettings.rate);
+      };
+      bindNewOrderEstimator = function() {
+        const form = document.querySelector("#new-form"), root = document.querySelector("#new-estimate-lines");
+        if (!form || !root) return;
+        form.elements.status.innerHTML = '<option value="estimate">Estimate \xB7 approval required before work</option>';
+        form.elements.status.value = "estimate";
+        const toolbar2 = root.previousElementSibling;
+        if (toolbar2 && !document.querySelector("#add-part-line")) {
+          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+        }
+        const append = (line) => {
+          root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
+          bindEstimateEditor(root);
+        };
+        document.querySelector("#generate-new-estimate").onclick = () => {
+          const vehicle = form.elements.vehicle.value.trim(), complaint = form.elements.complaint.value.trim(), requested = form.elements.requestedServices.value.trim();
+          if (!vehicle || !complaint) return toast("Enter the vehicle and customer complaint before generating an estimate");
+          const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
+          const generated = services.flatMap((service, index) => {
+            const source = estimateLocal(vehicle, service).lines[0];
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : 165 }, index);
+            const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
+            return [labor, ...parts];
+          });
+          root.innerHTML = generated.map((line, index) => estimateEditorLine(line, index)).join("");
+          bindEstimateEditor(root);
+          toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
+        };
+        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 });
+        document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
+        bindEstimateEditor(root);
+      };
+      ensureInvoiceForOrder = async function(order) {
+        if (!["completed", "invoiced"].includes(order.status)) return null;
+        const existing = state.invoices.find((invoice2) => invoice2.ro === order.id);
+        if (existing) return existing;
+        const invoice = invoiceRecordForOrder({ ...order, estimate: coherentOrderEstimate(order) });
+        if (isOfflineDesktop()) {
+          state.invoices.push(invoice);
+          return invoice;
+        }
+        const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) });
+        const value2 = saved?.queued ? invoice : saved;
+        state.invoices.push(value2);
+        return value2;
+      };
+      openOrder = function(id) {
+        const order = state.orders.find((item) => item.id === id);
+        if (!order) return;
+        order.estimate = coherentOrderEstimate(order);
+        const estimate = order.estimate, invoice = state.invoices.find((item) => item.ro === order.id);
+        const canManage = ["admin", "service_writer"].includes(currentUser().role);
+        const locked = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+        const editor = canManage && !locked ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit estimate lines</h3><p>Use typed parts or select current inventory. Stock is deducted only when the invoice is generated.</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="secondary" id="save-job-lines" type="button">${icon("save", 14)} Save estimate lines</button></section>` : "";
+        const approvalActions = order.status === "estimate" && canManage ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
+        const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
+        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
+        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} \xB7 <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} \xB7 ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate \xB7 parts + labor</h3><p>${locked ? "Lines locked after approval." : "Review and edit before approval."}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+        const editorRoot = document.querySelector("#job-estimate-editor");
+        if (editorRoot) {
+          bindEstimateEditor(editorRoot);
+          document.querySelector("#job-add-labor").onclick = () => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 }, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          };
+          document.querySelector("#job-add-part").onclick = () => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          };
+          document.querySelector("#save-job-lines").onclick = async (event) => {
+            const next = estimateFromEditor(editorRoot);
+            if (!next.lines.length) return toast("Add at least one labor or part line");
+            event.currentTarget.disabled = true;
+            order.estimate = { ...next, generatedAt: order.estimate.generatedAt || now(), summary: order.estimate.summary };
+            Object.assign(order, { labor: next.labor, laborHours: next.laborHours, parts: next.parts, tax: next.tax, total: next.total });
+            try {
+              await updateOrderInApi(order);
+              save();
+              closeModal();
+              toast(`${order.id} estimate updated`);
+              openOrder(order.id);
+            } catch (error) {
+              event.currentTarget.disabled = false;
+              toast(error.message || "Estimate could not be saved");
+            }
+          };
+        }
+        document.querySelectorAll("[data-send-job-estimate]").forEach((button) => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
+        document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
+        document.querySelector("#start-job-work")?.addEventListener("click", async () => {
+          order.status = "in_progress";
+          await updateOrderInApi(order);
+          save();
+          closeModal();
+          toast(`${order.id} moved to in progress`);
+          render();
+        });
+        document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
+        document.querySelector("#sign-job-invoice")?.addEventListener("click", () => {
+          if (!invoice.signature) onsiteSignatureModal("invoice", invoice);
+        });
+        document.querySelectorAll("[data-print-invoice]").forEach((button) => button.onclick = () => printInvoice(button.dataset.printInvoice));
+      };
+      invoices = function() {
+        const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
+          const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)}</small><small>Balance ${money(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+        }).join("");
+        return shell(`${heading("Accounts receivable", "Invoices", "Review the completed job, capture a mobile signature, and collect payment.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+      };
+      bindJobCardInvoiceCore = bindEstimateActions;
+      bindEstimateActions = function() {
+        bindJobCardInvoiceCore();
+        document.querySelectorAll("[data-sign-invoice]").forEach((button) => button.onclick = () => {
+          const invoice = state.invoices.find((item) => item.number === button.dataset.signInvoice);
+          if (invoice && !invoice.signature) onsiteSignatureModal("invoice", invoice);
+        });
+      };
+      bindDurableRecordsCore = bind;
+      bind = function() {
+        bindDurableRecordsCore();
+        document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
+        document.querySelectorAll("[data-edit-order]").forEach((button) => {
+          button.onclick = (event) => {
+            event.stopPropagation();
+            openOrder(button.dataset.editOrder);
+          };
+        });
+        document.querySelectorAll("[data-edit-employee]").forEach((button) => {
+          button.onclick = () => openEmployee(state.users.find((user) => user.id === button.dataset.editEmployee));
+        });
+        document.querySelectorAll("[data-toggle-user]").forEach((button) => {
+          button.onclick = async () => {
+            const user = state.users.find((item) => item.id === button.dataset.toggleUser);
+            if (!user) return;
+            button.disabled = true;
+            try {
+              const saved = await setEmployeeActive(user);
+              toast(`${saved.name} account ${saved.active ? "activated" : "deactivated"}`);
+              render();
+            } catch (error) {
+              button.disabled = false;
+              toast(error.message || "Employee access could not be changed");
+            }
+          };
+        });
+        document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
+          await loadEmployeesFromApi();
+          if (state.route === "employees") render();
+        });
+      };
       if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {
         if (!authSession()) return;
         try {
@@ -6082,6 +6922,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           render();
         }
       }, DESKTOP_ENTITLEMENT_INTERVAL);
+      SESSION_KEEPALIVE_MS = 6 * 60 * 60 * 1e3;
+      if (!isOfflineDesktop()) setInterval(async () => {
+        if (isLocalShell() || !authSession()) return;
+        try {
+          await cloudflareAccessSignIn();
+        } catch {
+        }
+      }, SESSION_KEEPALIVE_MS);
       saveCloudPreferences = save;
       offlineSaveTimer = 0;
       save = function() {

@@ -10,6 +10,13 @@ import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
 import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMarkup, offlineSession, snapshotShop } from '../modules/offline-desktop.js';
 import { presentCatalogInspection, printCatalogInspection } from './catalog-inspection-ui.js';
+import { applyQueuedEntityMutations, persistMutationQueue } from './entity-persistence.js';
+import {
+  approvedEstimate,
+  calculateEstimate,
+  invoiceRecordForOrder,
+  normalizeEstimateLine,
+} from '../modules/estimate-workflow.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
@@ -64,7 +71,7 @@ function scheduleChatRefresh() { clearTimeout(chatRefreshTimer); if (state.route
 function bindTeamChat() { document.querySelector("#new-direct-chat")?.addEventListener("click", openDirectChat); document.querySelector("#empty-new-direct")?.addEventListener("click", openDirectChat); document.querySelector("#new-group-chat")?.addEventListener("click", () => openGroupChat()); document.querySelector("#manage-chat-group")?.addEventListener("click", () => openGroupChat(state.conversations.find(item => item.id === chatConversationId))); document.querySelector("#refresh-chat")?.addEventListener("click", async () => { await loadChatFromApi(); toast("Team chat refreshed"); render() }); document.querySelectorAll("[data-chat-thread]").forEach(button => button.onclick = () => { chatConversationId = button.dataset.chatThread; markChatRead(chatConversationId); render() }); document.querySelector("#chat-message-form")?.addEventListener("submit", async event => { event.preventDefault(); const body = String(new FormData(event.target).get("body") || "").trim(), button = event.target.querySelector("button"); if (!body) return; button.disabled = true; try { await sendChatMessage(chatConversationId, body); render() } catch (error) { toast("Message could not be sent"); button.disabled = false } }) }
 function payments() { const config = state.billingSettings; return shell(`${heading("Online payments", "Payment service", "Enable shops to accept customer credit and debit card payments through a connected processing account.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "credit-card", 17)}<div><strong>${config.enabled ? "Online card payments active" : "Online card payments not connected"}</strong><span>${config.enabled ? `Connected account: ${config.accountLabel || "Stripe Connect"}` : "Connect the shop account through Stripe's hosted onboarding flow."}</span></div></div><div class="service-contract"><h2>Stripe Connect hosted onboarding</h2><p>The subscribing shop completes card-processing onboarding on a Stripe-hosted page. The platform endpoint keeps Stripe secret keys server-side, creates checkout sessions, and returns a hosted payment URL. MechPro never handles raw card data.</p><code>POST /checkout-sessions<br>{ invoiceId, amount, customer, description, successUrl, cancelUrl }<br>Response: { url: "https://checkout.stripe.com/..." }</code></div><form class="form-grid" id="billing-form"><label class="full">Stripe Connect onboarding URL *<input name="onboardingUrl" type="url" value="${config.onboardingUrl}" placeholder="https://connect.stripe.com/setup/..."/></label><label class="full">Secure checkout-session endpoint *<input name="checkoutEndpoint" type="url" value="${config.checkoutEndpoint}" placeholder="https://billing.yourshop.com/checkout-sessions"/></label><label>Connected account label<input name="accountLabel" value="${config.accountLabel}" placeholder="e.g. acct_... or Main Shop Stripe"/></label><label>Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this service to create hosted debit and credit card checkout links</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="open-stripe-onboarding">${icon("external-link", 14)} Connect Stripe account</button><button class="primary" type="submit">${icon("save", 14)} Save payment service</button></div></form></section>`) }
 function messaging() { const config = state.messagingSettings; return shell(`${heading("Delivery infrastructure", "Messaging service", "Connect this shop's own secure delivery service for automatic email and SMS.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "circle-alert", 17)}<div><strong>${config.enabled ? "Shop messaging service active" : "Native device messaging is active"}</strong><span>${config.enabled ? "Estimate and customer messages will post to the configured shop endpoint." : "Messages currently open the device email or SMS app."}</span></div></div><div class="service-contract"><h2>Shop-managed delivery endpoint</h2><p>Configure a secure endpoint owned by the subscribing shop. It stores SMTP and SMS provider credentials server-side; MechPro never stores or exposes those credentials in the browser.</p><code>POST /messages<br>{ channel: "email" | "sms", to, subject, body, metadata }</code></div><form class="form-grid" id="messaging-form"><label class="full">Secure service endpoint *<input name="endpoint" type="url" value="${config.endpoint}" placeholder="https://messaging.yourshop.com/messages"/></label><label>Sender email<input name="senderEmail" type="email" value="${config.senderEmail}" placeholder="service@yourshop.com"/></label><label>Sender phone<input name="senderPhone" type="tel" value="${config.senderPhone}" placeholder="+18065550100"/></label><label class="full">Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this endpoint for customer email and SMS delivery</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="test-messaging">${icon("send", 14)} Test configuration</button><button class="primary" type="submit">${icon("save", 14)} Save messaging service</button></div></form></section>`) }
-let assistantConversation = [], assistantPaused = false;
+let assistantConversation = [], assistantPaused = false, assistantSessionId = "";
 function openGlobalAssistant() { showModal(`<div class="modal wide global-assistant-modal"><div class="modal-head"><h2>MechPro Assistant</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">${liveAssistant()}</div></div>`); bindLiveAssistant(); }
 function toggleAssistantPause() { assistantPaused = !assistantPaused; if (assistantPaused) { window.speechSynthesis?.cancel(); toast("Assistant paused") } else toast("Assistant resumed"); document.querySelectorAll("[data-assistant-pause]").forEach(button => { button.title = assistantPaused ? "Resume assistant" : "Pause assistant"; button.innerHTML = icon(assistantPaused ? "play" : "pause", 15) }); document.querySelectorAll("#assistant-form textarea,#assistant-form button").forEach(control => { control.disabled = assistantPaused }) }
 function liveAssistant() { const rows = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); return `<section class="ai-panel live-assistant"><div class="statement-head"><div><div class="eyebrow">Live voice assistant</div><h2>Ask MechPro anything</h2><p>Talk or type questions about shop operations, vehicles, work orders, invoices, and repair decisions.</p></div>${icon("audio-lines", 20)}</div><div class="assistant-messages" id="assistant-messages">${rows || `<div class="assistant-empty">Your live assistant is ready. Ask a question to begin.</div>`}</div><form class="assistant-form" id="assistant-form"><textarea name="message" rows="2" maxlength="4000" placeholder="Ask about a customer, repair, invoice, or shop task..."></textarea><div class="assistant-actions"><button class="secondary" type="button" id="assistant-mic" title="Speak to MechPro">${icon("mic", 15)} Speak</button><button class="icon-button" type="button" id="assistant-stop" title="Stop speaking">${icon("volume-x", 15)}</button><button class="primary" type="submit">${icon("send", 14)} Ask assistant</button></div></form></section>` }
@@ -193,16 +200,18 @@ async function requestMagicLinkSignIn(email) { let response; try { response = aw
 const cloudflareSignIn = cloudflareAccessSignIn;
 function authSession() { try { const raw = sessionStorage.getItem(storageKeys.session) || localStorage.getItem(storageKeys.session); const session = JSON.parse(raw || "null"); if (!session?.claims) return null; const expiresAt = Number(session.expiresAt || session.claims.exp * 1000 || 0); if (!expiresAt || expiresAt <= Date.now()) { clearAuthSession(); return null } if (localStorage.getItem(storageKeys.session)) { sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); localStorage.removeItem(storageKeys.session) } return session } catch { clearAuthSession(); return null } }
 function clearAuthSession() { sessionStorage.removeItem(storageKeys.session); localStorage.removeItem(storageKeys.session) }
+// Best-effort server logout: revokes the D1 session and clears the HttpOnly
+// cookie (same-origin in the desktop shell). Skipped entirely for the offline
+// desktop edition, which keeps accounts in the local vault instead of D1.
+function signOutApiRequest() { if (isOfflineDesktop()) return; fetch(`${cloudflareConfig.apiUrl}/auth/logout`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }).catch(() => {}) }
+async function signOutEverywhere() { state.currentUserId = null; desktopEntitlementVerified = !isDesktopApp; signOutApiRequest(); clearAuthSession(); closeModal(); save(); render(); toast("Signed out of MechPro") }
 const MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
 let flushingMutationQueue = false, mutationQueueCache = null, mutationQueueRaw = null;
 function readMutationQueue() { const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]"; if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache; mutationQueueRaw = raw; try { mutationQueueCache = (JSON.parse(raw) || []).filter(item => item?.method === "DELETE" || item?.body) } catch { mutationQueueCache = [] }; return mutationQueueCache }
-function writeMutationQueue(queue) { const raw = "[]"; if (raw === mutationQueueRaw) { mutationQueueCache = queue; return } mutationQueueRaw = raw; mutationQueueCache = queue; localStorage.removeItem(MUTATION_QUEUE_STORE) }
+function writeMutationQueue(queue) { const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue); mutationQueueRaw = raw; mutationQueueCache = queue }
 function mutationId() { return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}` }
-const SENSITIVE_FIELD_PATTERN = /(api[-_]?key|token|secret|password|passphrase|authorization|auth|account(number)?|routing|ssn|salary|payrate|rate|amount)/i;
-function sanitizeSensitiveValue(value) { if (!value || typeof value !== "object") return value; if (Array.isArray(value)) return value.map(sanitizeSensitiveValue); const out = {}; for (const [key, item] of Object.entries(value)) { if (SENSITIVE_FIELD_PATTERN.test(String(key))) out[key] = "[REDACTED]"; else out[key] = sanitizeSensitiveValue(item) } return out }
-function sanitizeQueuedBody(rawBody) { if (!rawBody) return rawBody; try { return JSON.stringify(sanitizeSensitiveValue(JSON.parse(rawBody))) } catch { return rawBody } }
 function prepareMutation(path, options) { return prepareEntityMutation(path, options, mutationId) }
-function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: sanitizeQueuedBody(mutation.options.body), expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
+function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
 async function authorizedApiRequest(path, options = {}) { if (!authSession()) throw new Error("Not signed in"); return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } }) }
 async function verifyDesktopEntitlement() { if (!isDesktopApp || isOfflineDesktop() || (isLocalShell() && cloudflareConfig.apiUrl.startsWith("/"))) { desktopEntitlementVerified = true; return true } if (!navigator.onLine) throw new Error("MechPro Desktop requires an internet connection to verify your subscription."); let response; try { response = await authorizedApiRequest("/subscription/entitlement", { cache: "no-store" }) } catch { throw new Error("MechPro could not reach the subscription service. Check your internet connection and try again.") } const body = await response.json().catch(() => ({})); if (!response.ok || body.active !== true) throw new Error(body.status === "expired" ? "Your MechPro subscription has expired." : body.status === "suspended" ? "This MechPro subscription is suspended." : "An active MechPro subscription is required for the Windows app."); desktopEntitlementVerified = true; desktopLoginMessage = ""; return true }
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} }) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
@@ -264,12 +273,13 @@ function label(status) { return ({ estimate: "Estimate", approved: "Approved", i
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
 function toast(message) { const node = document.createElement("div"); node.className = "toast"; node.textContent = message; document.querySelector("#toast-region").append(node); setTimeout(() => node.remove(), 2600) }
 let attentionDismissBound = false;
+let userMenuDismissBound = false;
 function nav(route, iconName, text, count = "") { if (!canAccess(route)) return ""; const current = state.route === route; return `<button class="nav-button ${current ? "active" : ""}" data-route="${route}"${current ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${text}</span>${count !== "" && count !== "0" ? `<span class="count">${count}</span>` : ""}</button>` }
 function sidebarNavigation() { const counts = { active: visibleOrders().filter(x => !["completed", "invoiced"].includes(x.status)).length, orders: visibleOrders().length, overdue: state.invoices.filter(x => x.status === "overdue").length, unread: state.conversations.reduce((sum, item) => sum + chatUnread(item), 0) }; const oem = true; return visibleSidebar(canAccess, { oem }).map(section => `<div class="nav-label">${escapeHtml(section.label)}</div><nav class="nav" aria-label="${escapeHtml(section.label)}">${section.items.map(item => nav(item.route, item.icon, item.label, item.count ? String(counts[item.count] || "") : "")).join("")}</nav>`).join("") }
 function attentionMenu() { const model = buildHomeModel({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments || [], now: new Date() }); const count = model.attention.length; const rows = model.attention.slice(0, 6).map(item => { const detail = item.type === "overdue" ? `${String(item.detail || "").split(" · ")[0]} · ${money(item.amount || 0)}` : item.detail; return `<button type="button" class="attention-item" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail || "")}</small></button>` }).join(""); return `<div class="attention-menu"><button class="icon-button" id="attention-toggle" type="button" aria-label="Needs attention${count ? `, ${count} items` : ""}" aria-expanded="false" aria-controls="attention-panel" title="Needs attention">${icon("bell")}${count ? `<span class="attention-badge">${count}</span>` : ""}</button><div class="attention-panel" id="attention-panel" hidden role="dialog" aria-label="Needs attention"><div class="attention-panel-head"><strong>Needs attention</strong><span>${count ? `${count} open` : "All clear"}</span></div>${rows || `<p class="attention-empty">Nothing is waiting. Home shows the full shop snapshot.</p>`}<button class="mini-action attention-home" type="button" data-route="home">Open home</button></div></div>` }
 function bindAttentionPanel() { const toggle = document.querySelector("#attention-toggle"), panel = document.querySelector("#attention-panel"); if (!toggle || !panel) return; toggle.onclick = event => { event.stopPropagation(); const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }; if (attentionDismissBound) return; attentionDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#attention-panel"), openToggle = document.querySelector("#attention-toggle"); if (!openPanel || openPanel.hidden || event.target.closest(".attention-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) }
 function syncStatusBadge() { const pending = readMutationQueue().filter(item => !item.conflict).length, conflicts = readMutationQueue().filter(item => item.conflict).length, online = navigator.onLine; if (conflicts) return `<span class="sync-pill conflict" title="Offline edits conflict with newer server data">${icon("triangle-alert", 14)} ${conflicts} conflict${conflicts === 1 ? "" : "s"}</span>`; if (!online) return `<span class="sync-pill offline" title="Working offline">${icon("wifi-off", 14)} Offline${pending ? ` · ${pending} queued` : ""}</span>`; if (pending) return `<span class="sync-pill pending" title="Waiting to sync offline changes">${icon("refresh-cw", 14)} Syncing ${pending}</span>`; return `<span class="sync-pill online" title="Connected">${icon("cloud-check", 14)} Online</span>` }
-function shell(content) { const user = currentUser(), profile = shopProfile(), shift = openShift(user.id); return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out · ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>` }
+function shell(content) { const user = currentUser(), profile = shopProfile(), shift = openShift(user.id); return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden>${canAccess("settings") ? `<button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button>` : ""}<button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out · ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>` }
 function heading(kicker, title, description, action = true) { return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>` }
 function filtered() { const q = query.trim().toLowerCase(); return visibleOrders().filter(x => (filter === "all" || (filter === "active" ? !["completed", "invoiced"].includes(x.status) : ["completed", "invoiced"].includes(x.status))) && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some(v => String(v).toLowerCase().includes(q)))) }
 function stats() { const tech = currentUser()?.role === "technician", orders = visibleOrders(), openCount = orders.filter(x => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders.filter(x => x.status === "in_progress").length, waiting = orders.filter(x => x.status === "waiting_parts").length, paid = state.invoices.filter(x => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter(x => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders.filter(x => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map(x => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]]; return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map(x => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>` }
@@ -426,9 +436,9 @@ function openPasswordReset() { showModal(`<div class="modal"><div class="modal-h
 function render() { const root = document.querySelector("#root"); if (!currentUser()) { root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen(); lucide.createIcons(); bind(); return } if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0]; const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, reports, settings }; if (typeof accounting === "function") views.accounting = accounting; if (typeof payroll === "function") views.payroll = payroll; if (typeof imports === "function") views.imports = imports; if (typeof employees === "function") views.employees = employees; if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView; root.innerHTML = (views[state.route] || views.home || views.dispatch)(); const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0); if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) { const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav"); chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || "")) } if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) { const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav"); floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics")) } lucide.createIcons(); bind(); bindPlatformAdmin(); document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan); bindEstimateActions(); bindMessagingService(); bindPaymentService(); bindTeamChat(); if (typeof bindOemDiagnostics === "function") bindOemDiagnostics(); root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => { await loadChatFromApi(); render() }); scheduleChatRefresh() }
 function bindMessagingService() { document.querySelector("#messaging-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.messagingSettings = { enabled: data.enabled === "on", endpoint: data.endpoint.trim(), senderEmail: data.senderEmail.trim(), senderPhone: data.senderPhone.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.messagingSettings.enabled && !state.messagingSettings.endpoint) { toast("A secure service endpoint is required before enabling delivery"); return } save(); toast("Shop messaging service saved"); render() }); document.querySelector("#test-messaging")?.addEventListener("click", () => { const config = state.messagingSettings; if (!config.endpoint) { toast("Save a secure endpoint before testing"); return } toast("Endpoint saved. Use your shop service test endpoint to verify SMTP and SMS credentials.") }) }
 function bindPaymentService() { document.querySelector("#billing-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.billingSettings = { enabled: data.enabled === "on", provider: "stripe_connect", checkoutEndpoint: data.checkoutEndpoint.trim(), onboardingUrl: data.onboardingUrl.trim(), accountLabel: data.accountLabel.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.billingSettings.enabled && (!state.billingSettings.checkoutEndpoint || !state.billingSettings.onboardingUrl)) { toast("Stripe onboarding and checkout endpoints are required before enabling payments"); return } save(); toast("Stripe payment service saved"); render() }); document.querySelector("#open-stripe-onboarding")?.addEventListener("click", () => { const url = document.querySelector("#billing-form [name=onboardingUrl]").value; if (!url) { toast("Enter the Stripe Connect onboarding URL first"); return } window.open(url, "_blank", "noopener") }) }
-function bindLiveAssistant() { const form = document.querySelector("#assistant-form"); if (!form) return; const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), append = (role, content) => { assistantConversation.push({ role, content }); const list = document.querySelector("#assistant-messages"); list.innerHTML = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); list.scrollTop = list.scrollHeight }; form.onsubmit = async event => { event.preventDefault(); if (assistantPaused) return; const message = String(input.value || "").trim(); if (!message) return; input.value = ""; sendButton.disabled = true; append("user", message); try { const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) }); const answer = result.message || "I could not answer that right now."; append("assistant", answer); if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) } } catch (error) { append("assistant", error.message || "The live assistant is unavailable.") } finally { sendButton.disabled = assistantPaused } }; document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel()); document.querySelector("#assistant-mic")?.addEventListener("click", () => { if (assistantPaused) return; const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition; if (!Recognition) { toast("Voice input is not supported in this browser"); return } const recognition = new Recognition(); recognition.lang = "en-US"; recognition.interimResults = false; recognition.onstart = () => toast("Listening..."); recognition.onerror = () => toast("Microphone input could not be captured"); recognition.onresult = event => { input.value = event.results[0][0].transcript; form.requestSubmit() }; recognition.start() }) }
+function bindLiveAssistant() { const form = document.querySelector("#assistant-form"); if (!form) return; const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), append = (role, content) => { assistantConversation.push({ role, content }); const list = document.querySelector("#assistant-messages"); list.innerHTML = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); list.scrollTop = list.scrollHeight }; form.onsubmit = async event => { event.preventDefault(); if (assistantPaused) return; const message = String(input.value || "").trim(); if (!message) return; input.value = ""; sendButton.disabled = true; append("user", message); try { const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) }); assistantSessionId = result.sessionId || assistantSessionId; const answer = result.message || "I could not answer that right now."; append("assistant", answer); if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) } } catch (error) { append("assistant", error.message || "The live assistant is unavailable.") } finally { sendButton.disabled = assistantPaused } }; document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel()); document.querySelector("#assistant-mic")?.addEventListener("click", () => { if (assistantPaused) return; const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition; if (!Recognition) { toast("Voice input is not supported in this browser"); return } const recognition = new Recognition(); recognition.lang = "en-US"; recognition.interimResults = false; recognition.onstart = () => toast("Listening..."); recognition.onerror = () => toast("Microphone input could not be captured"); recognition.onresult = event => { input.value = event.results[0][0].transcript; form.requestSubmit() }; recognition.start() }) }
 function bindEstimateActions() { bindLiveAssistant(); document.querySelector("#save-ai-estimate")?.addEventListener("click", makeEstimate); document.querySelectorAll("[data-send-estimate]").forEach(button => button.onclick = () => sendEstimate(button.dataset.sendEstimate, button.dataset.channel)); document.querySelectorAll("[data-sign-estimate]").forEach(button => button.onclick = () => openSignature(button.dataset.signEstimate)); document.querySelectorAll("[data-message-customer]").forEach(button => button.onclick = event => { event.stopPropagation(); openCustomerMessage(decodeURIComponent(button.dataset.messageCustomer), decodeURIComponent(button.dataset.messagePhone), decodeURIComponent(button.dataset.messageEmail)) }); document.querySelectorAll("[data-open-customer]").forEach(el => { if (el.tagName === "BUTTON") el.onclick = event => { event.stopPropagation(); openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) }; else el.onclick = event => { if (event.target.closest("[data-message-customer]")) return; openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) } }); document.querySelectorAll("[data-pay-invoice]").forEach(button => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice)); document.querySelectorAll("[data-record-payment]").forEach(button => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method)); document.querySelectorAll("[data-edit-tax]").forEach(button => button.onclick = () => openInvoiceTax(button.dataset.editTax)) }
-function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; order.laborHours = aiResult.estimate.lines.reduce((sum, line) => sum + line.hours, 0); order.labor = aiResult.estimate.lines.reduce((sum, line) => sum + line.labor, 0); order.parts = aiResult.estimate.lines.reduce((sum, line) => sum + line.parts, 0); order.total = aiResult.estimate.total; order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#sign-out")?.addEventListener("click", () => { state.currentUserId = null; clearAuthSession(); save(); if (!isLocalShell()) location.assign("/cdn-cgi/access/logout"); else render() }); document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
+function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; order.laborHours = aiResult.estimate.lines.reduce((sum, line) => sum + line.hours, 0); order.labor = aiResult.estimate.lines.reduce((sum, line) => sum + line.labor, 0); order.parts = aiResult.estimate.lines.reduce((sum, line) => sum + line.parts, 0); order.total = aiResult.estimate.total; order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#user-menu-toggle")?.addEventListener("click", event => { event.stopPropagation(); const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle"); if (!panel || !toggle) return; const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }); document.querySelector("#user-menu-settings")?.addEventListener("click", () => { state.route = "settings"; save(); render() }); document.querySelector("#sign-out")?.addEventListener("click", () => { void signOutEverywhere() }); if (!userMenuDismissBound) { userMenuDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle"); if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) } document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
 function showModal(html) { closeModal(); const root = document.createElement("div"); root.id = "modal-root"; root.className = "modal-backdrop"; root.innerHTML = html; root.onclick = e => { if (e.target === root) closeModal() }; document.body.append(root); lucide.createIcons(); root.querySelectorAll("[data-close]").forEach(x => { if (!x.textContent.trim() && !x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close"); if (!x.getAttribute("title") && !x.textContent.trim()) x.setAttribute("title", "Close"); x.onclick = closeModal }); root.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) }) }
 function closeModal() { document.querySelector("#modal-root")?.remove() }
 function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) { return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>` }
@@ -478,7 +488,7 @@ render = function () { applyAppearance(shopProfile().themeMode); if (currentUser
 async function resolveAuthenticatedProfile(session) { const claims = session.claims, normalized = String(claims.email || "").trim().toLowerCase(), role = claims["custom:role"] || "technician"; sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); pendingAuthProfile = null; if (role === "super_admin") { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local) return Object.assign(local, { role: "super_admin", active: true }); const created = { id: `super-admin-${claims.sub}`, name: claims.name || "Platform Administrator", email: normalized, role: "super_admin", title: "Platform Administrator", active: true }; state.users.push(created); save(); return created } let employees = []; try { employees = await apiFetch("/entities/employees") } catch (error) { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local?.active) { state.users = sanitizeUsers(state.users); return local } if (error instanceof TypeError) throw new Error("Could not reach MechPro. Sign in from the online desktop window or check your internet connection."); throw error } const active = employees.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (active) { state.users = sanitizeUsers(employees); return active } const inactive = employees.find(user => !user.active && String(user.email || "").trim().toLowerCase() === normalized); if (inactive) { pendingAuthProfile = { email: normalized, role, reason: "deactivated", name: inactive.name || claims.name || normalized }; state.users = sanitizeUsers(employees); return null } if (role === "admin") { const profile = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify({ id: `owner-${claims["custom:shopId"]}`, name: claims.name || normalized.split("@")[0], email: normalized, role: "admin", title: "Owner", department: "Administration", active: true, createdAt: now() }) }); state.users = sanitizeUsers([...employees, profile]); return profile } const localSeed = state.users.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (localSeed) { state.users = sanitizeUsers([...employees.filter(item => String(item.email || "").trim().toLowerCase() !== normalized), localSeed]); return localSeed } pendingAuthProfile = { email: normalized, role, reason: "missing", name: claims.name || normalized.split("@")[0] }; state.users = sanitizeUsers(employees); return null }
 function pendingProfileScreen() { const pending = pendingAuthProfile || {}; return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Account almost ready</small></div></div><div class="eyebrow">Employee profile required</div><h1>${pending.reason === "deactivated" ? "Your shop profile is deactivated" : "Ask an admin to finish setup"}</h1><p>${pending.reason === "deactivated" ? `The Cloudflare Access identity <strong>${escapeHtml(pending.email || "")}</strong> works, but the matching employee profile is inactive.` : `You signed in as <strong>${escapeHtml(pending.email || "")}</strong> (${escapeHtml(roleLabel[pending.role] || pending.role || "team member")}), but this shop does not have an active employee profile for that email yet.`}</p><div class="service-contract"><p>Ask a shop administrator to open <b>Employees</b> and create (or reactivate) a profile using exactly this email:</p><code>${escapeHtml(pending.email || "")}</code></div><div class="modal-actions" style="justify-content:flex-start;margin-top:18px"><button class="primary" id="pending-sign-out">${icon("log-out", 14)} Sign out</button></div></section></main>` }
 const bindBeforeProfileSync = bind;
-bind = function () { bindBeforeProfileSync(); const original = document.querySelector("#login-form"); if (!original) { document.querySelector("#pending-sign-out")?.addEventListener("click", () => { pendingAuthProfile = null; clearAuthSession(); state.currentUserId = null; save(); if (!isLocalShell()) location.assign("/cdn-cgi/access/logout"); else render() }); return } const form = original.cloneNode(true); original.replaceWith(form); form.addEventListener("submit", async event => { event.preventDefault(); const errorEl = form.querySelector("#login-error"), sentEl = form.querySelector("#login-sent"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email"); errorEl.hidden = true; if (sentEl) sentEl.hidden = true; submitButton.disabled = true; desktopEntitlementVerified = !isDesktopApp; try { if (isOfflineDesktop()) { const data = Object.fromEntries(new FormData(form)); if (!offlineAccountReady && data.password !== data.confirm) throw new Error("Those passwords do not match."); const account = offlineAccountReady ? await window.mechproDesktop.localAuth.signIn({ email: data.email, password: data.password }) : await window.mechproDesktop.localAuth.create({ name: data.name, email: data.email, password: data.password }); const session = offlineSession(account); sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); const user = ensureOfflineOwner(state, account); pendingAuthProfile = null; state.currentUserId = user.id; desktopEntitlementVerified = true; offlineAccountReady = true; offlineAccountEmail = account.email; state.route = roleRoutes[user.role]?.[0] || "home"; query = ""; save(); render(); return } if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in."); if (isLocalShell()) { const session = await cloudflareSignIn(); if (isDesktopApp) await verifyDesktopEntitlement(); const user = await resolveAuthenticatedProfile(session); if (!user) { state.currentUserId = null; save(); render(); return } pendingAuthProfile = null; state.currentUserId = user.id; state.route = roleRoutes[user.role]?.[0] || "dispatch"; query = ""; save(); await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]); render(); return } const email = String(emailInput?.value || "").trim().toLowerCase(); if (!email) throw new Error("Enter your work email to continue."); const result = await requestMagicLinkSignIn(email); if (result?.redirecting) return; if (result?.sent) { if (sentEl) { sentEl.textContent = result.message || "Check your email for a sign-in link. It expires in 15 minutes."; sentEl.hidden = false } submitButton.disabled = false; submitButton.textContent = "Resend sign-in link"; return } throw new Error("Check your email for a sign-in link."); } catch (error) { clearAuthSession(); pendingAuthProfile = null; desktopEntitlementVerified = !isDesktopApp; desktopLoginMessage = isDesktopApp ? error.message : ""; errorEl.textContent = error.message || "Sign-in failed."; errorEl.hidden = false; submitButton.disabled = false } }) };
+bind = function () { bindBeforeProfileSync(); const original = document.querySelector("#login-form"); if (!original) { document.querySelector("#pending-sign-out")?.addEventListener("click", () => { pendingAuthProfile = null; signOutApiRequest(); clearAuthSession(); state.currentUserId = null; save(); render() }); return } const form = original.cloneNode(true); original.replaceWith(form); form.addEventListener("submit", async event => { event.preventDefault(); const errorEl = form.querySelector("#login-error"), sentEl = form.querySelector("#login-sent"), submitButton = form.querySelector("button[type=submit]"), emailInput = form.querySelector("#login-email"); errorEl.hidden = true; if (sentEl) sentEl.hidden = true; submitButton.disabled = true; desktopEntitlementVerified = !isDesktopApp; try { if (isOfflineDesktop()) { const data = Object.fromEntries(new FormData(form)); if (!offlineAccountReady && data.password !== data.confirm) throw new Error("Those passwords do not match."); const account = offlineAccountReady ? await window.mechproDesktop.localAuth.signIn({ email: data.email, password: data.password }) : await window.mechproDesktop.localAuth.create({ name: data.name, email: data.email, password: data.password }); const session = offlineSession(account); sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); const user = ensureOfflineOwner(state, account); pendingAuthProfile = null; state.currentUserId = user.id; desktopEntitlementVerified = true; offlineAccountReady = true; offlineAccountEmail = account.email; state.route = roleRoutes[user.role]?.[0] || "home"; query = ""; save(); render(); return } if (!navigator.onLine && !isLocalShell()) throw new Error("An internet connection is required to sign in."); if (isLocalShell()) { const session = await cloudflareSignIn(); if (isDesktopApp) await verifyDesktopEntitlement(); const user = await resolveAuthenticatedProfile(session); if (!user) { state.currentUserId = null; save(); render(); return } pendingAuthProfile = null; state.currentUserId = user.id; state.route = roleRoutes[user.role]?.[0] || "dispatch"; query = ""; save(); await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi(), loadEstimatesFromApi(), loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi(), loadShopEntities()]); render(); return } const email = String(emailInput?.value || "").trim().toLowerCase(); if (!email) throw new Error("Enter your work email to continue."); const result = await requestMagicLinkSignIn(email); if (result?.redirecting) return; if (result?.sent) { if (sentEl) { sentEl.textContent = result.message || "Check your email for a sign-in link. It expires in 15 minutes."; sentEl.hidden = false } submitButton.disabled = false; submitButton.textContent = "Resend sign-in link"; return } throw new Error("Check your email for a sign-in link."); } catch (error) { clearAuthSession(); pendingAuthProfile = null; desktopEntitlementVerified = !isDesktopApp; desktopLoginMessage = isDesktopApp ? error.message : ""; errorEl.textContent = error.message || "Sign-in failed."; errorEl.hidden = false; submitButton.disabled = false } }) };
 
 const shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
 function safeHexColor(value, fallback) { const color = String(value || "").trim(); return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback }
@@ -627,14 +637,692 @@ function homeDashboard() {
 function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
 render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = homeDashboard(); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
-function applyRemoteList(key, records) { state[key] = mergeRemoteCollection(key, records, state[key], localSampleRecord); save() }
+function applyRemoteList(key, records, entityType = key) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
 loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
 loadExpensesFromApi = async function () { try { applyRemoteList("expenses", await apiFetch("/entities/expenses")) } catch (error) { console.error("Failed to load expenses from API; using local data", error) } };
-loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])) } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
+loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type)) } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
+
+async function loadEmployeesFromApi() {
+  if (isOfflineDesktop()) return;
+  try {
+    const employees = await apiFetch("/entities/employees");
+    if (Array.isArray(employees)) {
+      state.users = sanitizeUsers(employees);
+      save();
+    }
+  } catch (error) {
+    console.error("Failed to load employees from API; using local data", error);
+  }
+}
+
+function employeeFormValue(employee, field, fallback = "") {
+  return escapeAttr(employee?.[field] ?? fallback);
+}
+
+async function saveEmployeeRecord(existing, data) {
+  const record = {
+    ...(existing || {}),
+    id: existing?.id || `user-${Date.now()}`,
+    name: data.name.trim(),
+    email: String(existing?.email || data.email).trim().toLowerCase(),
+    role: data.role,
+    title: data.title.trim(),
+    techName: data.techName.trim(),
+    active: existing?.active !== false,
+    employeeId: data.employeeId.trim(),
+    phone: data.phone.trim(),
+    address: data.address.trim(),
+    startDate: data.startDate,
+    employmentType: data.employmentType,
+    payRate: Number(data.payRate),
+    payFrequency: data.payFrequency,
+    department: data.department.trim(),
+    emergencyContact: data.emergencyContact.trim(),
+    taxStatus: data.taxStatus,
+    createdAt: existing?.createdAt || now(),
+    updatedAt: existing?.updatedAt,
+  };
+  let saved = record;
+  if (!isOfflineDesktop()) {
+    const path = existing
+      ? `/entities/employees/${encodeURIComponent(record.id)}`
+      : "/entities/employees";
+    const response = await apiFetch(path, {
+      method: existing ? "PUT" : "POST",
+      body: JSON.stringify(record),
+    });
+    if (response?.queued) throw new Error("Employee profiles require a live connection.");
+    saved = response;
+  }
+  const index = state.users.findIndex(user => user.id === saved.id);
+  if (index >= 0) state.users[index] = saved;
+  else state.users.push(saved);
+  save();
+  return saved;
+}
+
+employees = function () {
+  const rows = state.users.map(user => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} · ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} · ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "—")}<small>${escapeHtml(user.payFrequency || "—")} · ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "—")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+  return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
+};
+
+openEmployee = function (existing = null) {
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label><label>Employee ID *<input name="employeeId" required value="${employeeFormValue(existing, "employeeId")}" placeholder="EMP-005"/></label><label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label><label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label><label class="full">Email address *<input type="email" name="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label><label>Role<select name="role">${["technician", "office", "service_writer", "admin"].map(role => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role]}</option>`).join("")}</select></label><label class="full">Technician dispatch name<input name="techName" value="${employeeFormValue(existing, "techName")}" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType">${["Hourly", "Salary", "Contractor"].map(value => `<option ${existing?.employmentType === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label><label>Pay frequency<select name="payFrequency">${["Weekly", "Biweekly", "Monthly"].map(value => `<option ${existing?.payFrequency === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", new Date().toISOString().slice(0, 10))}"/></label><label>Tax status<select name="taxStatus">${["W-2", "1099 Contractor"].map(value => `<option ${existing?.taxStatus === value ? "selected" : ""}>${value}</option>`).join("")}</select></label><label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label><label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label><label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+  document.querySelector("#employee-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const email = String(existing?.email || data.email).trim().toLowerCase();
+    if (!existing && state.users.some(user => user.email.toLowerCase() === email)) return toast("An employee profile already uses that email");
+    if (state.users.some(user => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) return toast("An employee already uses that employee ID");
+    if (data.role === "technician" && !data.techName.trim()) return toast("Add the technician dispatch name to save this profile");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const saved = await saveEmployeeRecord(existing, data);
+      closeModal();
+      toast(`${saved.name} profile saved`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Could not save employee profile");
+    }
+  };
+};
+
+async function setEmployeeActive(user) {
+  const updated = { ...user, active: !user.active };
+  if (!isOfflineDesktop()) {
+    const saved = await apiFetch(`/entities/employees/${encodeURIComponent(user.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    if (saved?.queued) throw new Error("Employee access changes require a live connection.");
+    Object.assign(updated, saved);
+  }
+  state.users[state.users.indexOf(user)] = updated;
+  save();
+  return updated;
+}
+
+async function saveCustomerRecord(existing, data) {
+  const record = {
+    ...(existing || {}),
+    id: existing?.id || mutationId(),
+    name: data.name.trim(),
+    phone: data.phone.trim(),
+    email: data.email.trim(),
+    billingAddress: data.billingAddress.trim(),
+    billingNotes: data.billingNotes.trim(),
+    vehicles: Number(existing?.vehicles || 0),
+    visits: Number(existing?.visits || 0),
+    spend: Number(existing?.spend || 0),
+    createdAt: existing?.createdAt || now(),
+    updatedAt: existing?.updatedAt,
+  };
+  let saved = record;
+  if (!isOfflineDesktop()) {
+    const response = await apiFetch(existing ? `/entities/customers/${encodeURIComponent(record.id)}` : "/entities/customers", {
+      method: existing ? "PUT" : "POST",
+      body: JSON.stringify(record),
+    });
+    saved = response?.queued ? record : response;
+  }
+  const index = existing ? state.customers.indexOf(existing) : -1;
+  if (index >= 0) state.customers[index] = saved;
+  else state.customers.unshift(saved);
+  save();
+  return saved;
+}
+
+function openCustomerForm(existing = null) {
+  showModal(`<form class="modal" id="customer-edit-form"><div class="modal-head"><h2>${existing ? "Edit customer" : "Add customer"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Name *<input name="name" value="${escapeAttr(existing?.name || "")}" required/></label><label>Phone<input name="phone" value="${escapeAttr(existing?.phone || "")}"/></label><label class="full">Email<input name="email" type="email" value="${escapeAttr(existing?.email === "Not provided" ? "" : existing?.email || "")}"/></label><label>Billing address<textarea name="billingAddress">${escapeHtml(existing?.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes">${escapeHtml(existing?.billingNotes || "")}</textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save customer</button></div></form>`);
+  document.querySelector("#customer-edit-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    if (state.customers.some(customer => customer !== existing && customer.name.toLowerCase() === data.name.trim().toLowerCase())) return toast("A customer already uses that name");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      await saveCustomerRecord(existing, data);
+      closeModal();
+      toast("Customer saved");
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Customer could not be saved");
+    }
+  };
+}
+
+openCustomerEditor = function (key) {
+  const customer = state.customers.find(item => customerRecordKey(item) === key);
+  if (customer) openCustomerForm(customer);
+};
+
+customers = function () {
+  const q = query.toLowerCase();
+  const cards = state.customers.filter(item => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map(item => {
+    const key = encodeURIComponent(customerRecordKey(item));
+    return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} · ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter(vehicle => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+  }).join("");
+  return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
+};
+
+const openNewCore = openNew;
+openNew = function () {
+  openNewCore();
+  const form = document.querySelector("#new-form");
+  if (!form) return;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+    if (!customerName) return toast("Select or enter a customer name");
+    const button = form.querySelector("button[type=submit], button:not([type])");
+    button.disabled = true;
+    try {
+      let customer = state.customers.find(item => item.name.toLowerCase() === customerName.toLowerCase());
+      if (!customer) {
+        customer = await saveCustomerRecord(null, {
+          name: customerName,
+          phone: String(data.phone || ""),
+          email: "",
+          billingAddress: "",
+          billingNotes: "",
+        });
+      }
+      const estimate = readNewOrderEstimate();
+      const id = `RO-${Math.max(1040, ...state.orders.map(item => Number(item.id.split("-")[1]) || 0)) + 1}`;
+      const order = {
+        id,
+        customer: customer.name,
+        phone: data.phone,
+        vehicle: data.vehicle,
+        vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
+        complaint: data.complaint,
+        status: data.status,
+        priority: data.priority,
+        tech: data.tech,
+        bay: data.bay,
+        mobile: data.bay === "Mobile",
+        promise: data.promise,
+        total: estimate.total,
+        scheduled: "Unscheduled",
+        notes: "New intake. Diagnosis pending.",
+        labor: estimate.labor,
+        laborHours: estimate.laborHours,
+        parts: estimate.parts,
+        tax: estimate.tax,
+        estimate: {
+          ...estimate,
+          generatedAt: now(),
+          summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.`,
+        },
+      };
+      let saved = order;
+      if (!isOfflineDesktop() && !isLocalShell()) {
+        const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(order) });
+        saved = response?.queued ? order : response;
+      }
+      state.orders.unshift(saved);
+      save();
+      closeModal();
+      toast(`${id} created successfully`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Work order could not be saved");
+    }
+  };
+};
+
+orders = function () {
+  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+  return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
+};
+
+updateOrderInApi = async function (record) {
+  if (["completed", "invoiced"].includes(record.status)) await ensureInvoiceForOrder(record);
+  if (isOfflineDesktop()) return record;
+  const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, {
+    method: "PUT",
+    body: JSON.stringify(record),
+  });
+  return saved?.queued ? record : saved;
+};
+
+openOrder = function (id) {
+  const order = state.orders.find(item => item.id === id);
+  if (!order) return;
+  const canManage = ["admin", "service_writer"].includes(currentUser().role);
+  if (!canManage) {
+    toast("Only an admin or service writer can edit this work order");
+    return;
+  }
+  showModal(`<form class="modal wide" id="work-order-edit-form"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Edit work order</h2></div><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input name="phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input name="vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input name="vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required>${escapeHtml(order.complaint || "")}</textarea></label><label>Status<select name="status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(status => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select name="priority">${["normal", "high", "low"].map(priority => `<option value="${priority}" ${order.priority === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select name="tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select name="bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map(bay => `<option ${order.bay === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input name="promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input name="laborHours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label><label class="full">Technician / service notes<textarea name="notes">${escapeHtml(order.notes || "")}</textarea></label></div></div><div class="modal-actions"><button class="secondary danger" type="button" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" type="submit">${icon("save", 14)} Save work order</button></div></form>`);
+  const form = document.querySelector("#work-order-edit-form");
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const next = {
+      ...order,
+      customer: data.customer,
+      phone: data.phone.trim(),
+      vehicle: data.vehicle.trim(),
+      vin: data.vin.trim().toUpperCase() || "VIN pending",
+      complaint: data.complaint.trim(),
+      status: data.status,
+      priority: data.priority,
+      tech: data.tech,
+      bay: data.bay,
+      mobile: data.bay === "Mobile",
+      promise: data.promise.trim(),
+      laborHours: Math.max(0, Number(data.laborHours) || 0),
+      notes: data.notes.trim(),
+      updatedAt: order.updatedAt,
+    };
+    const firstCompletion = ["completed", "invoiced"].includes(next.status) && !["completed", "invoiced"].includes(order.status);
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      if (firstCompletion && !await commitLinkedInventory(next)) return;
+      const saved = await updateOrderInApi(next);
+      state.orders[state.orders.indexOf(order)] = saved;
+      syncPayroll(saved);
+      save();
+      closeModal();
+      toast(`${saved.id} saved`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Work order could not be saved");
+    }
+  };
+  document.querySelector("#delete-order").onclick = async () => {
+    if (!confirm(`Delete ${order.id}?`)) return;
+    try {
+      if (!isOfflineDesktop()) await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+      state.orders = state.orders.filter(item => item !== order);
+      save();
+      closeModal();
+      toast(`${order.id} deleted`);
+      render();
+    } catch (error) {
+      toast(error.message || "Work order could not be deleted");
+    }
+  };
+};
+
+function expandedEstimateLines(estimate = {}) {
+  return (estimate.lines || []).flatMap((line, index) => {
+    if (line.type) return [normalizeEstimateLine(line, index)];
+    const rows = [];
+    const labor = Math.max(0, Number(line.labor ?? (Number(line.hours || 0) * Number(line.laborRate || 165))) || 0);
+    const hours = Math.max(0, Number(line.hours) || 0);
+    if (labor || hours) rows.push(normalizeEstimateLine({
+      ...line,
+      id: line.id || `labor-${index + 1}`,
+      type: "labor",
+      description: line.description || line.service,
+      notes: line.notes || line.explanation,
+      hours,
+      laborRate: hours ? labor / hours : Number(line.laborRate || 165),
+    }, index));
+    const parts = Math.max(0, Number(line.parts) || 0);
+    if (parts) rows.push(normalizeEstimateLine({
+      id: `part-${index + 1}`,
+      type: "part",
+      description: `${line.service || "Service"} parts & materials`,
+      notes: line.notes || line.explanation || "",
+      quantity: 1,
+      unitPrice: parts,
+    }, index));
+    return rows.length ? rows : [normalizeEstimateLine(line, index)];
+  });
+}
+
+function coherentOrderEstimate(order) {
+  const source = order.estimate || {};
+  const estimate = calculateEstimate(expandedEstimateLines(source), source.taxRate ?? state.taxSettings.rate, source.fees || []);
+  estimate.summary = source.summary || `Estimate for ${order.vehicle}`;
+  estimate.generatedAt = source.generatedAt || now();
+  return estimate;
+}
+
+function inventoryPartOptions(selected = "") {
+  return `<option value="">Typed / non-stock part</option>${state.inventory.map(item => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} · ${escapeHtml(item.name)} · ${money(item.price)}</option>`).join("")}`;
+}
+
+function estimateEditorLine(line = {}, index = 0, removable = true) {
+  const item = normalizeEstimateLine(line, index), part = item.type === "part";
+  return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    <div class="form-grid">
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
+    </div>
+    <div class="job-line-total"><span>Line total</span><b>${money(item.total)}</b></div>
+  </article>`;
+}
+
+function estimateFromEditor(root) {
+  const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
+    const type = row.querySelector(".job-line-type").value;
+    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    const inventory = type === "part" ? state.inventory.find(item => item.id === row.querySelector(".job-line-inventory").value) : null;
+    return normalizeEstimateLine({
+      id: row.dataset.lineId || `line-${Date.now()}-${index}`,
+      type,
+      description: row.querySelector(".job-line-description").value.trim(),
+      notes: row.querySelector(".job-line-notes").value.trim(),
+      quantity,
+      unitPrice,
+      hours: type === "labor" ? quantity : 0,
+      laborRate: type === "labor" ? unitPrice : 0,
+      inventoryId: inventory?.id || null,
+      inventorySku: inventory?.sku || "",
+      committedQuantity: type === "part" && inventory ? quantity : 0,
+    }, index);
+  }).filter(line => line.description && line.quantity > 0);
+  return calculateEstimate(lines, state.taxSettings.rate, lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
+}
+
+function refreshEstimateEditor(root) {
+  root.querySelectorAll(".job-estimate-line").forEach(row => {
+    const type = row.querySelector(".job-line-type").value;
+    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    row.querySelector(".job-inventory-field").hidden = type !== "part";
+    row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+    row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+    row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
+    row.querySelector(".job-line-total b").textContent = money(quantity * rate);
+  });
+  const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
+  if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+  const total = document.querySelector("#new-estimate-total");
+  if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
+}
+
+function bindEstimateEditor(root) {
+  if (!root) return;
+  const bindRows = () => {
+    root.querySelectorAll("input,textarea,select").forEach(control => control.oninput = () => refreshEstimateEditor(root));
+    root.querySelectorAll(".job-line-type").forEach(control => control.onchange = () => refreshEstimateEditor(root));
+    root.querySelectorAll(".job-line-inventory").forEach(control => control.onchange = () => {
+      const row = control.closest(".job-estimate-line"), item = state.inventory.find(entry => entry.id === control.value);
+      if (item) {
+        row.querySelector(".job-line-description").value = item.name;
+        row.querySelector(".job-line-rate").value = Number(item.price || 0).toFixed(2);
+      }
+      refreshEstimateEditor(root);
+    });
+    root.querySelectorAll(".remove-job-line").forEach(button => button.onclick = () => {
+      button.closest(".job-estimate-line").remove();
+      refreshEstimateEditor(root);
+    });
+  };
+  root._bindEstimateRows = bindRows;
+  bindRows();
+  refreshEstimateEditor(root);
+}
+
+newOrderEstimateRow = function (line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: 165 }) {
+  return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
+};
+
+readNewOrderEstimate = function () {
+  const root = document.querySelector("#new-estimate-lines");
+  return root ? estimateFromEditor(root) : calculateEstimate([], state.taxSettings.rate);
+};
+
+bindNewOrderEstimator = function () {
+  const form = document.querySelector("#new-form"), root = document.querySelector("#new-estimate-lines");
+  if (!form || !root) return;
+  form.elements.status.innerHTML = '<option value="estimate">Estimate · approval required before work</option>';
+  form.elements.status.value = "estimate";
+  const toolbar = root.previousElementSibling;
+  if (toolbar && !document.querySelector("#add-part-line")) {
+    toolbar.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+  }
+  const append = line => {
+    root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
+    bindEstimateEditor(root);
+  };
+  document.querySelector("#generate-new-estimate").onclick = () => {
+    const vehicle = form.elements.vehicle.value.trim(), complaint = form.elements.complaint.value.trim(), requested = form.elements.requestedServices.value.trim();
+    if (!vehicle || !complaint) return toast("Enter the vehicle and customer complaint before generating an estimate");
+    const services = (requested || complaint).split(/\n|,|;/).map(value => value.trim()).filter(Boolean);
+    const generated = services.flatMap((service, index) => {
+      const source = estimateLocal(vehicle, service).lines[0];
+      const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : 165 }, index);
+      const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
+      return [labor, ...parts];
+    });
+    root.innerHTML = generated.map((line, index) => estimateEditorLine(line, index)).join("");
+    bindEstimateEditor(root);
+    toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
+  };
+  document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 });
+  document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
+  bindEstimateEditor(root);
+};
+
+async function ensureCustomerDocumentLink(documentType, documentId) {
+  return apiFetch("/document-links", {
+    method: "POST",
+    body: JSON.stringify({ documentType, documentId }),
+  });
+}
+
+async function sendJobEstimate(order, channel) {
+  const customer = state.customers.find(item => item.name === order.customer);
+  const to = channel === "email" ? customer?.email : customer?.phone || order.phone;
+  if (!to || to === "Not provided") return toast(`Add a customer ${channel === "email" ? "email address" : "phone number"} first`);
+  try {
+    const link = await ensureCustomerDocumentLink("estimate", order.id);
+    const subject = `Estimate ${order.id} — ${state.messagingSettings.shopName || "MechPro"}`;
+    const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
+    const delivery = await deliverShopMessage({ channel, to, subject, body, metadata: { type: "estimate", workOrderId: order.id, approvalUrl: link.url } });
+    order.lastEstimateLink = { url: link.url, expiresAt: link.expiresAt, sentAt: now(), channel, deliveryMode: delivery.mode };
+    await updateOrderInApi(order);
+    save();
+    toast(`${order.id} approval link prepared by ${channel === "email" ? "email" : "text"}`);
+  } catch (error) {
+    toast(error.message || "Could not create the customer approval link");
+  }
+}
+
+function onsiteSignatureModal(kind, record) {
+  const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
+  const number = kind === "estimate" ? record.id : record.number;
+  const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map(line => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+  showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} · ${escapeHtml(record.vehicle || "")}</span><strong>${money(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+  const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
+  let drawing = false, drawn = false;
+  const position = event => { const rect = canvas.getBoundingClientRect(); return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height } };
+  context.lineWidth = 3; context.lineCap = "round"; context.strokeStyle = "#14201c";
+  canvas.onpointerdown = event => { drawing = true; drawn = true; canvas.setPointerCapture(event.pointerId); const point = position(event); context.beginPath(); context.moveTo(point.x, point.y) };
+  canvas.onpointermove = event => { if (!drawing) return; const point = position(event); context.lineTo(point.x, point.y); context.stroke() };
+  canvas.onpointerup = () => { drawing = false };
+  document.querySelector("#clear-signature").onclick = () => { context.clearRect(0, 0, canvas.width, canvas.height); drawn = false };
+  document.querySelector("#document-signature-form").onsubmit = async event => {
+    event.preventDefault();
+    if (!drawn) return toast("Draw the customer signature first");
+    const approvedIds = new Set([...event.target.querySelectorAll('[name="approvedLine"]:checked')].map(input => input.value));
+    if (kind === "estimate" && !approvedIds.size) return toast("Approve at least one line or close without signing");
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const signatureDataUrl = canvas.toDataURL("image/png");
+      const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
+      const signature = {
+        authorizationName: new FormData(event.target).get("authorizationName").trim(),
+        signatureKey: key,
+        signatureDataUrl: isLocalShell() ? signatureDataUrl : undefined,
+        signedAt: now(),
+        source: "on-site",
+      };
+      if (kind === "estimate") {
+        const decisions = Object.fromEntries(estimate.lines.map(line => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
+        const approved = approvedEstimate(estimate, decisions);
+        record.estimate = approved;
+        record.total = approved.total;
+        record.labor = approved.labor;
+        record.laborHours = approved.laborHours;
+        record.parts = approved.parts;
+        record.tax = approved.tax;
+        record.status = "approved";
+        record.linesLockedAt = signature.signedAt;
+        record.estimateApproval = { status: "approved", ...signature, decisions };
+        await updateOrderInApi(record);
+      } else {
+        record.signature = signature;
+        await updateInvoiceInApi(record);
+      }
+      save();
+      closeModal();
+      toast(kind === "estimate" ? `${record.id} approved and signed` : `${record.number} signed`);
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "The signature could not be stored");
+    }
+  };
+}
+
+function jobCardLineTable(estimate) {
+  return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.inventorySku ? ` · ${escapeHtml(line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
+}
+
+function jobWorkflowSteps(order, invoice) {
+  const approval = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status);
+  return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+}
+
+async function completeJobCard(order) {
+  const explicitlyApproved = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status);
+  if (!explicitlyApproved) return toast("Approve the estimate before completing this job");
+  if (!await commitLinkedInventory(order)) return;
+  order.status = "completed";
+  order.linesLockedAt ||= now();
+  const saved = await updateOrderInApi(order);
+  state.orders[state.orders.indexOf(order)] = saved;
+  syncPayroll(saved);
+  save();
+  closeModal();
+  toast(`${saved.id} completed and invoice generated`);
+  render();
+}
+
+ensureInvoiceForOrder = async function (order) {
+  if (!["completed", "invoiced"].includes(order.status)) return null;
+  const existing = state.invoices.find(invoice => invoice.ro === order.id);
+  if (existing) return existing;
+  const invoice = invoiceRecordForOrder({ ...order, estimate: coherentOrderEstimate(order) });
+  if (isOfflineDesktop()) {
+    state.invoices.push(invoice);
+    return invoice;
+  }
+  const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) });
+  const value = saved?.queued ? invoice : saved;
+  state.invoices.push(value);
+  return value;
+};
+
+openOrder = function (id) {
+  const order = state.orders.find(item => item.id === id);
+  if (!order) return;
+  order.estimate = coherentOrderEstimate(order);
+  const estimate = order.estimate, invoice = state.invoices.find(item => item.ro === order.id);
+  const canManage = ["admin", "service_writer"].includes(currentUser().role);
+  const locked = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+  const editor = canManage && !locked ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit estimate lines</h3><p>Use typed parts or select current inventory. Stock is deducted only when the invoice is generated.</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="secondary" id="save-job-lines" type="button">${icon("save", 14)} Save estimate lines</button></section>` : "";
+  const approvalActions = order.status === "estimate" && canManage ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
+  const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
+  const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} · <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} · ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate · parts + labor</h3><p>${locked ? "Lines locked after approval." : "Review and edit before approval."}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+  const editorRoot = document.querySelector("#job-estimate-editor");
+  if (editorRoot) {
+    bindEstimateEditor(editorRoot);
+    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
+    document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
+    document.querySelector("#save-job-lines").onclick = async event => {
+      const next = estimateFromEditor(editorRoot);
+      if (!next.lines.length) return toast("Add at least one labor or part line");
+      event.currentTarget.disabled = true;
+      order.estimate = { ...next, generatedAt: order.estimate.generatedAt || now(), summary: order.estimate.summary };
+      Object.assign(order, { labor: next.labor, laborHours: next.laborHours, parts: next.parts, tax: next.tax, total: next.total });
+      try { await updateOrderInApi(order); save(); closeModal(); toast(`${order.id} estimate updated`); openOrder(order.id) } catch (error) { event.currentTarget.disabled = false; toast(error.message || "Estimate could not be saved") }
+    };
+  }
+  document.querySelectorAll("[data-send-job-estimate]").forEach(button => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
+  document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
+  document.querySelector("#start-job-work")?.addEventListener("click", async () => { order.status = "in_progress"; await updateOrderInApi(order); save(); closeModal(); toast(`${order.id} moved to in progress`); render() });
+  document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
+  document.querySelector("#sign-job-invoice")?.addEventListener("click", () => { if (!invoice.signature) onsiteSignatureModal("invoice", invoice) });
+  document.querySelectorAll("[data-print-invoice]").forEach(button => button.onclick = () => printInvoice(button.dataset.printInvoice));
+};
+
+invoices = function () {
+  const q = query.toLowerCase(), rows = state.invoices.filter(invoice => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map(invoice => {
+    const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
+    return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} · Tax ${money(bd.tax)}</small><small>Balance ${money(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+  }).join("");
+  return shell(`${heading("Accounts receivable", "Invoices", "Review the completed job, capture a mobile signature, and collect payment.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+};
+
+const bindJobCardInvoiceCore = bindEstimateActions;
+bindEstimateActions = function () {
+  bindJobCardInvoiceCore();
+  document.querySelectorAll("[data-sign-invoice]").forEach(button => button.onclick = () => {
+    const invoice = state.invoices.find(item => item.number === button.dataset.signInvoice);
+    if (invoice && !invoice.signature) onsiteSignatureModal("invoice", invoice);
+  });
+};
+
+const bindDurableRecordsCore = bind;
+bind = function () {
+  bindDurableRecordsCore();
+  document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
+  document.querySelectorAll("[data-edit-order]").forEach(button => {
+    button.onclick = event => {
+      event.stopPropagation();
+      openOrder(button.dataset.editOrder);
+    };
+  });
+  document.querySelectorAll("[data-edit-employee]").forEach(button => {
+    button.onclick = () => openEmployee(state.users.find(user => user.id === button.dataset.editEmployee));
+  });
+  document.querySelectorAll("[data-toggle-user]").forEach(button => {
+    button.onclick = async () => {
+      const user = state.users.find(item => item.id === button.dataset.toggleUser);
+      if (!user) return;
+      button.disabled = true;
+      try {
+        const saved = await setEmployeeActive(user);
+        toast(`${saved.name} account ${saved.active ? "activated" : "deactivated"}`);
+        render();
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || "Employee access could not be changed");
+      }
+    };
+  });
+  document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
+    await loadEmployeesFromApi();
+    if (state.route === "employees") render();
+  });
+};
 
 async function startApp() {
   if (isOfflineDesktop()) {
@@ -659,6 +1347,7 @@ async function startApp() {
     if (user) {
       state.currentUserId = user.id;
       if (user.role === "super_admin" && !canAccess(state.route)) state.route = "superadmin";
+      if (user.role !== "super_admin") await reloadOperationalData();
     }
   } catch (error) {
     if (!authSession()) console.info("Cloudflare Access session not available", error.message);
@@ -671,6 +1360,14 @@ async function startApp() {
   render();
 }
 if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => { if (!authSession()) return; try { await verifyDesktopEntitlement() } catch (error) { desktopLoginMessage = error.message; desktopEntitlementVerified = false; clearAuthSession(); render() } }, DESKTOP_ENTITLEMENT_INTERVAL);
+// Keep the HttpOnly cookie + sessionStorage expiresAt rolling for always-open
+// dispatch tabs. Without this, Max-Age from the last /auth/session would expire
+// even though D1 may still be extended by other API traffic.
+const SESSION_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
+if (!isOfflineDesktop()) setInterval(async () => {
+  if (isLocalShell() || !authSession()) return;
+  try { await cloudflareAccessSignIn() } catch { /* leave authSession() to clear on the next probe */ }
+}, SESSION_KEEPALIVE_MS);
 const saveCloudPreferences = save;
 let offlineSaveTimer = 0;
 save = function () { saveCloudPreferences(); if (!isOfflineDesktop() || !window.mechproDesktop?.localShop) return; clearTimeout(offlineSaveTimer); offlineSaveTimer = setTimeout(() => { void window.mechproDesktop.localShop.save(snapshotShop(state)).catch(error => console.error("Offline save failed", error)) }, 200) };
