@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   approvedEstimate,
+  billableEstimateLines,
   calculateEstimate,
   invoiceRecordForOrder,
   normalizeEstimateLine,
@@ -54,8 +55,51 @@ test('invoice carries approved estimate lines and signature provenance forward',
   assert.equal(invoice.number, 'INV-1100');
   assert.equal(invoice.lines.length, 1);
   assert.equal(invoice.lines[0].description, 'Diagnosis');
+  assert.equal(invoice.amount, estimate.total);
+  assert.equal(invoice.subtotal, estimate.subtotal);
+  assert.equal(invoice.tax, estimate.tax);
   assert.equal(invoice.sourceEstimateApproval.status, 'approved');
   assert.equal(invoice.due, '2026-10-16');
+});
+
+test('invoice money ignores declined lines even when estimate totals were recomputed from the full card', () => {
+  const approved = approvedEstimate(calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 165 },
+    { id: 'part', type: 'part', description: 'Optional sensor', quantity: 1, unitPrice: 100 },
+  ], 8.25), { labor: 'approved', part: 'declined' });
+  // Simulate coherentOrderEstimate / openOrder which recalculates from all lines.
+  const inflated = calculateEstimate(approved.lines, approved.taxRate, approved.fees);
+  assert.equal(inflated.lines.length, 2);
+  assert.equal(inflated.subtotal, approved.subtotal);
+  assert.equal(inflated.tax, approved.tax);
+  assert.equal(inflated.total, approved.total);
+
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1100',
+    customer: 'Customer',
+    vehicle: '2020 Example',
+    total: approved.total,
+    estimate: inflated,
+  }, new Date('2026-10-02T12:00:00.000Z'));
+
+  assert.equal(invoice.amount, 178.61);
+  assert.equal(invoice.subtotal, 165);
+  assert.equal(invoice.tax, 13.61);
+  assert.equal(invoice.lines.length, 1);
+  assert.equal(roundMoneySafe(invoice.subtotal + invoice.tax), invoice.amount);
+});
+
+function roundMoneySafe(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+test('billableEstimateLines drops declined inventory commitments', () => {
+  const lines = [
+    { id: 'keep', approvalStatus: 'approved', committedQuantity: 2, inventoryId: 'pad' },
+    { id: 'skip', approvalStatus: 'declined', committedQuantity: 4, inventoryId: 'rotor' },
+    { id: 'pending', approvalStatus: 'pending', committedQuantity: 1, inventoryId: 'fluid' },
+  ];
+  assert.deepEqual(billableEstimateLines(lines).map(line => line.id), ['keep', 'pending']);
 });
 
 test('line normalization uses quantity pricing for parts', () => {
