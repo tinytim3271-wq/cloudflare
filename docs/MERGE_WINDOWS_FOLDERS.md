@@ -1,6 +1,6 @@
 # Merging Windows MechPro folders into this repo
 
-This guide consolidates local MechPro copies on a Windows PC into the Cloudflare-only repository.
+This guide consolidates local MechPro copies on a Windows PC into this Cloudflare repository.
 
 ## Layout (source of truth)
 
@@ -8,10 +8,10 @@ This guide consolidates local MechPro copies on a Windows PC into the Cloudflare
 | --- | --- | --- |
 | Frontend PWA | `src/` → bundled `app.js` | Modular entry at `src/main.js` |
 | Windows desktop | `desktop/`, root `package.json` | Electron; `npm run desktop`, `npm run build:windows` |
-| Cloudflare backend | `worker/`, `wrangler.jsonc` | D1, R2, Workers AI — **not** AWS |
+| Cloudflare backend | `worker/`, `wrangler.jsonc` | D1, R2, Workers AI |
 | Historical zips | `zip/` | Old static PWA bundles only |
 
-Do **not** import `infra/`, `lambda/`, `cdk.out`, Cognito config, or Amplify artifacts. Those AWS paths are obsolete.
+Only copy Cloudflare app surfaces (`src/`, `desktop/`, `worker/`, `public/`). Skip obsolete backend stacks from older folders.
 
 ## One-command merge (Windows)
 
@@ -37,5 +37,3 @@ The script inventories known Windows paths, runs `compare-folders.mjs --deep`, c
 node scripts/compare-folders.mjs C:\MechPro-work
 node scripts/compare-folders.mjs C:\MechPro-work --deep
 ```
-
-If an external folder still contains `infra/` or Cognito config, treat it as legacy and skip those paths.

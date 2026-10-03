@@ -1,9 +1,8 @@
 # MechPro Dispatch
 
 MechPro is a local-first shop dispatch and work-order PWA with cloud
-synchronization on **Cloudflare only** (Pages, Workers, D1, R2, Workers AI).
-There is no AWS / Cognito / Amplify path in this product.
-The target SaaS architecture is documented in
+synchronization on **Cloudflare** (Pages, Workers, D1, R2, Workers AI).
+The SaaS architecture is documented in
 [`docs/cloudflare-saas-architecture.md`](docs/cloudflare-saas-architecture.md).
 The app supports a public customer-auth path using the `mechpro_session`
 HTTP-only cookie, with magic-link and Google sign-in endpoints at
@@ -30,7 +29,7 @@ queues non-sensitive entity mutations until connectivity returns.
 | Android APK | Builds Android package from Capacitor wrapper | `.github/workflows/android-apk.yml`, `android/` |
 | Windows Desktop | Builds desktop installer and release artifacts | `.github/workflows/windows-desktop.yml`, `desktop/` |
 
-`amplify.yml` and the former AWS CDK/`infra/` tree are gone. Active deployment paths are Cloudflare workflows and `wrangler.jsonc` only.
+Active deployment paths are Cloudflare workflows and `wrangler.jsonc` only.
 
 ## Local Development
 

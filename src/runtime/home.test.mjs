@@ -90,3 +90,12 @@ test('mergeRemoteCollection keeps local demo rows when the API is empty', () => 
   assert.deepEqual(mergeRemoteCollection('orders', [{ id: 'RO-2000' }], local, isSample), [{ id: 'RO-2000' }]);
   assert.deepEqual(mergeRemoteCollection('orders', [], [], isSample), []);
 });
+
+test('mergeRemoteCollection keeps local-only non-demo rows while remote data loads', () => {
+  const local = [{ id: 'RO-1048' }, { id: 'RO-3001', customer: 'Pending sync' }];
+  const isSample = (type, record) => type === 'orders' && record.id === 'RO-1048';
+  assert.deepEqual(
+    mergeRemoteCollection('orders', [{ id: 'RO-2000' }], local, isSample),
+    [{ id: 'RO-3001', customer: 'Pending sync' }, { id: 'RO-2000' }],
+  );
+});

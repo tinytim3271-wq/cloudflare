@@ -116,12 +116,21 @@ export function buildHomeModel({
 
 export function mergeRemoteCollection(key, remote, local, isSampleRecord) {
   if (!Array.isArray(remote)) return Array.isArray(local) ? local : [];
-  if (remote.length) return remote;
   const current = Array.isArray(local) ? local : [];
-  if (current.length && typeof isSampleRecord === 'function' && current.every((record) => isSampleRecord(key, record))) {
-    return current;
+  if (!remote.length) {
+    if (current.length && typeof isSampleRecord === 'function' && current.every((record) => isSampleRecord(key, record))) {
+      return current;
+    }
+    return remote;
   }
-  return remote;
+  // Keep local-only rows that are not seed/demo data (e.g. offline-queued creates).
+  const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
+  const localOnly = current.filter((record) => (
+    record?.id
+    && !remoteIds.has(record.id)
+    && !(typeof isSampleRecord === 'function' && isSampleRecord(key, record))
+  ));
+  return localOnly.length ? [...localOnly, ...remote] : remote;
 }
 
 /** Plain-language navigation. Order is the shop day: today, counter, floor, office. */

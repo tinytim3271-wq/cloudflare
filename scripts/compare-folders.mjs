@@ -127,7 +127,7 @@ function suggestSurface(relPath) {
     return 'Frontend (likely merge into src/ or root static files)';
   }
   if (top === 'lambda' || top === 'cdk.out' || top === 'infra') {
-    return 'Obsolete AWS tree — do not merge; backend is worker/';
+    return 'Obsolete backend tree — do not merge; backend is worker/';
   }
   if (top === 'electron' || top === 'main.js') return 'Desktop (desktop/)';
   return 'Review manually — map to src/, desktop/, or worker/';
@@ -333,7 +333,7 @@ function printReport(report, deep) {
   console.log(`  src/       ${report.layout.hasSrc ? 'present' : 'missing'}`);
   console.log(`  desktop/   ${report.layout.hasDesktop ? 'present' : 'missing'}`);
   console.log(`  worker/    ${report.layout.hasWorker ? 'present' : 'missing'}`);
-  console.log(`  legacy AWS ${report.layout.hasLegacyAws ? 'present (ignore — obsolete infra/)' : 'absent'}`);
+  console.log(`  legacy infra ${report.layout.hasLegacyAws ? 'present (ignore — obsolete infra/)' : 'absent'}`);
   console.log(`  legacy PWA ${report.layout.hasLegacyRoot ? 'yes (root app.js, pre-modular)' : 'no'}`);
 
   if (deep && report.deep) {

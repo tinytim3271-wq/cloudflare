@@ -1,5 +1,4 @@
-# Wave 1 merge notes — obsolete
+# Merge notes — obsolete
 
-Wave 1 originally mapped legacy `MechPro-aws` (Cognito / DynamoDB / Lambda) entities into this product.
-
-**As of 2026-09-29 the product is Cloudflare-only.** AWS handlers, CDK stacks, and Cognito are not part of this repository. Active backend code lives under `worker/`.
+This note is retained only as a historical filename. MechPro is Cloudflare-only.
+Active backend code lives under `worker/`; the PWA is built from `src/` to `app.js`.

@@ -655,8 +655,8 @@ async function handleAuthSession(context, analytics) {
       sub: context.userId,
       email: context.email,
       name: context.name,
-      'custom:shopId': context.shopId,
-      'custom:role': context.role,
+      shopId: context.shopId,
+      role: context.role,
       exp: expires,
     },
     expiresAt: expires * 1000,
@@ -1978,6 +1978,25 @@ async function proxyPagesRequest(request, env) {
     statusText: response.statusText,
     headers: nextHeaders,
   });
+}
+
+/** Kept so Worker deploys stay compatible with unused legacy Durable Object classes. */
+export class AiChatSession {
+  async fetch() {
+    return new Response(JSON.stringify({ message: 'Removed' }), {
+      status: 410,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+export class AiVoiceSession {
+  async fetch() {
+    return new Response(JSON.stringify({ message: 'Removed' }), {
+      status: 410,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 }
 
 export default {
