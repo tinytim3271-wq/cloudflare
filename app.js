@@ -2051,6 +2051,12 @@
   });
 
   // src/modules/estimate-workflow.js
+  function isDeclinedEstimateLine(line) {
+    return line?.approvalStatus === "declined";
+  }
+  function billableEstimateLines(lines = []) {
+    return lines.filter((line) => !isDeclinedEstimateLine(line));
+  }
   function normalizeEstimateLine(line = {}, index = 0) {
     const type = line.type === "part" ? "part" : "labor";
     const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
@@ -2074,13 +2080,14 @@
   }
   function calculateEstimate(lines = [], taxRate = 0, fees = []) {
     const normalizedLines = lines.map(normalizeEstimateLine);
+    const billableLines = billableEstimateLines(normalizedLines);
     const normalizedFees = fees.map((fee) => ({
       ...fee,
       description: String(fee.description || "Fee"),
       amount: roundMoney(Math.max(0, Number(fee.amount) || 0))
     }));
-    const labor = roundMoney(normalizedLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
-    const parts = roundMoney(normalizedLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const labor = roundMoney(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
     const feeTotal = roundMoney(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
     const subtotal = roundMoney(labor + parts + feeTotal);
     const safeTaxRate = Math.max(0, Number(taxRate) || 0);
@@ -2089,7 +2096,7 @@
       lines: normalizedLines,
       fees: normalizedFees,
       labor,
-      laborHours: roundMoney(normalizedLines.reduce((sum, line) => sum + line.hours, 0)),
+      laborHours: roundMoney(billableLines.reduce((sum, line) => sum + line.hours, 0)),
       parts,
       subtotal,
       taxRate: safeTaxRate,
@@ -2116,24 +2123,26 @@
     };
   }
   function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
-    const estimate = order.estimate || calculateEstimate([], 0);
+    const source = order.estimate || {};
+    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
     const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
     const due = new Date(issuedAt);
     due.setDate(due.getDate() + 14);
+    const amount = roundMoney(order.total ?? estimate.total);
     return {
       id: number,
       number,
       ro: order.id,
       customer: order.customer,
       vehicle: order.vehicle,
-      amount: roundMoney(order.total ?? estimate.total),
-      subtotal: roundMoney(estimate.subtotal),
-      tax: roundMoney(estimate.tax),
+      amount,
+      subtotal: estimate.subtotal,
+      tax: estimate.tax,
       taxRate: Math.max(0, Number(estimate.taxRate) || 0),
       status: "sent",
       date: issuedAt.toISOString().slice(0, 10),
       due: due.toISOString().slice(0, 10),
-      lines: (estimate.lines || []).filter((line) => line.approvalStatus !== "declined").map(normalizeEstimateLine),
+      lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
       sourceEstimateApproval: order.estimateApproval || null,
       createdAt: issuedAt.toISOString()
     };
@@ -4739,7 +4748,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   async function commitLinkedInventory(order) {
     if (order.inventoryDeducted || order.inventoryCommittedAt) return true;
     const commitments = /* @__PURE__ */ new Map(), missing = [];
-    for (const line of order.estimate?.lines || []) {
+    for (const line of billableEstimateLines(order.estimate?.lines || [])) {
       const quantity = Number(line.committedQuantity || 0);
       if (!Number.isFinite(quantity) || quantity <= 0) continue;
       const item = state.inventory.find((record) => record.id === line.inventoryId || line.inventorySku && record.sku === line.inventorySku);
@@ -5896,7 +5905,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();

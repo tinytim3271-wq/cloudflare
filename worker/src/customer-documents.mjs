@@ -50,6 +50,19 @@ function parseEntity(row) {
   }
 }
 
+function estimateAlreadyLocked(document) {
+  return Boolean(document?.linesLockedAt || ['approved', 'declined'].includes(document?.estimateApproval?.status));
+}
+
+async function claimDocumentLink(env, linkId, result, timestamp) {
+  const outcome = await env.DB.prepare(
+    'UPDATE customer_document_links SET consumed_at = ?, result = ? WHERE id = ? AND consumed_at IS NULL',
+  ).bind(timestamp, result, linkId).run();
+  if (!outcome?.meta?.changes) {
+    throw new HttpError(409, 'This link has already been used');
+  }
+}
+
 export async function createCustomerDocumentLink(request, env, context) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   if (!['admin', 'office', 'service_writer'].includes(context.role)) {
@@ -64,6 +77,9 @@ export async function createCustomerDocumentLink(request, env, context) {
   if (!document) throw new HttpError(404, 'Document not found');
   if (documentType === 'estimate' && !(document.estimate?.lines || []).length) {
     throw new HttpError(409, 'Add estimate lines before sending this job card');
+  }
+  if (documentType === 'estimate' && estimateAlreadyLocked(document)) {
+    throw new HttpError(409, 'This estimate is already locked after customer approval');
   }
 
   const token = randomToken();
@@ -229,25 +245,31 @@ async function saveEntity(env, link, row, document) {
 async function recordResponse(request, env, link, row, document) {
   if (link.consumed_at) throw new HttpError(409, 'This link has already been used');
   if (new Date(link.expires_at).getTime() <= Date.now()) throw new HttpError(410, 'This link has expired');
+  if (link.document_type === 'estimate' && estimateAlreadyLocked(document)) {
+    throw new HttpError(409, 'This estimate has already been approved or declined');
+  }
   const body = await limitedResponseJson(request);
   const action = String(body.action || '');
   if (action === 'decline' && link.document_type === 'estimate') {
     const timestamp = new Date().toISOString();
+    // Claim the one-time link before mutating the order so concurrent POSTs cannot both win.
+    await claimDocumentLink(env, link.id, 'declined', timestamp);
     document.estimateApproval = { status: 'declined', source: 'remote', respondedAt: timestamp };
     await saveEntity(env, link, row, document);
-    await env.DB.prepare('UPDATE customer_document_links SET consumed_at = ?, result = ? WHERE id = ? AND consumed_at IS NULL')
-      .bind(timestamp, 'declined', link.id).run();
     return json({ ok: true, status: 'declined' });
   }
   if (action !== 'sign') throw new HttpError(400, 'Choose sign or decline');
   const authorizationName = String(body.authorizationName || '').trim().slice(0, 100);
   if (!authorizationName) throw new HttpError(400, 'Full name is required');
   const decisions = body.decisions && typeof body.decisions === 'object' ? body.decisions : {};
+  let nextEstimate = null;
   if (link.document_type === 'estimate') {
     const missingDecision = (document.estimate?.lines || [])
       .map((line, index) => normalizeEstimateLine(line, index))
       .some(line => !['approved', 'declined'].includes(decisions[line.id]));
     if (missingDecision) throw new HttpError(400, 'Approve or decline every estimate line');
+    nextEstimate = approvedEstimate(document.estimate || {}, decisions);
+    if (!nextEstimate.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
   }
   const signatureKey = await storeSignature(env, link, body.signatureDataUrl);
   const timestamp = new Date().toISOString();
@@ -257,15 +279,16 @@ async function recordResponse(request, env, link, row, document) {
     signedAt: timestamp,
     source: 'remote',
   };
+  const result = link.document_type === 'estimate' ? 'approved' : 'signed';
+  // Claim before write: only the winning request may mutate the document.
+  await claimDocumentLink(env, link.id, result, timestamp);
   if (link.document_type === 'estimate') {
-    const next = approvedEstimate(document.estimate || {}, decisions);
-    if (!next.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
-    document.estimate = next;
-    document.total = next.total;
-    document.labor = next.labor;
-    document.laborHours = next.laborHours;
-    document.parts = next.parts;
-    document.tax = next.tax;
+    document.estimate = nextEstimate;
+    document.total = nextEstimate.total;
+    document.labor = nextEstimate.labor;
+    document.laborHours = nextEstimate.laborHours;
+    document.parts = nextEstimate.parts;
+    document.tax = nextEstimate.tax;
     document.status = 'approved';
     document.linesLockedAt = timestamp;
     document.estimateApproval = { status: 'approved', ...signature, decisions };
@@ -273,9 +296,7 @@ async function recordResponse(request, env, link, row, document) {
     document.signature = signature;
   }
   await saveEntity(env, link, row, document);
-  await env.DB.prepare('UPDATE customer_document_links SET consumed_at = ?, result = ? WHERE id = ? AND consumed_at IS NULL')
-    .bind(timestamp, link.document_type === 'estimate' ? 'approved' : 'signed', link.id).run();
-  return json({ ok: true, status: link.document_type === 'estimate' ? 'approved' : 'signed' });
+  return json({ ok: true, status: result });
 }
 
 export async function handleCustomerDocument(request, env, token) {
