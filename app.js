@@ -5495,9 +5495,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
     });
   }
-  function applyRemoteList(key, records) {
+  function applyRemoteList(key, records, entityType = key) {
     const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
-    state[key] = applyQueuedEntityMutations(key, remote, readMutationQueue());
+    state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue());
     save();
   }
   function stampDemoAppointments() {
@@ -6568,7 +6568,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       loadShopEntities = async function() {
         try {
           const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
-          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index]));
+          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type));
         } catch (error) {
           console.error("Failed to load shop operations; using local data", error);
         }
@@ -6922,6 +6922,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           render();
         }
       }, DESKTOP_ENTITLEMENT_INTERVAL);
+      SESSION_KEEPALIVE_MS = 6 * 60 * 60 * 1e3;
+      if (!isOfflineDesktop()) setInterval(async () => {
+        if (isLocalShell() || !authSession()) return;
+        try {
+          await cloudflareAccessSignIn();
+        } catch {
+        }
+      }, SESSION_KEEPALIVE_MS);
       saveCloudPreferences = save;
       offlineSaveTimer = 0;
       save = function() {
