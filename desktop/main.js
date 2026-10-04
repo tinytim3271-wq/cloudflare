@@ -1,10 +1,18 @@
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const path = require('node:path');
 const diagnostics = require('./diagnostics-bridge');
 const { resolveDesktopStart } = require('./start-url');
 const { resolveAuthDeepLink } = require('./auth-deep-link');
 const edition = require('./edition.json');
 const vault = require('./local-vault');
+const { configurePortableData } = require('./portable-data');
+
+try {
+  configurePortableData(app, edition);
+} catch {
+  dialog.showErrorBox('MechPro Demo needs a writable drive', 'Extract the entire demo ZIP to a writable folder on your flash drive. MechPro cannot create its data folder beside the executable.');
+  app.exit(1);
+}
 
 let mainWindow = null;
 
@@ -17,7 +25,7 @@ const trustedOrigins = new Set([
 function isTrustedUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
-    return url.protocol === 'file:' || trustedOrigins.has(url.origin);
+    return url.protocol === 'file:' || (edition.demo !== true && trustedOrigins.has(url.origin));
   } catch {
     return false;
   }
@@ -66,6 +74,7 @@ function registerDiagnosticsIpc() {
   Object.entries(handlers).forEach(([channel, handler]) => {
     ipcMain.handle(channel, async (event, ...args) => {
       try {
+        if (edition.demo === true) throw new Error('Live vehicle diagnostics are not available in the USB demo.');
         return { ok: true, result: await handler(event, ...args) };
       } catch (error) {
         return { ok: false, error: error.message || 'Diagnostic operation failed' };
@@ -88,11 +97,22 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: [
+        ...(edition.offline === true ? ['--mechpro-offline'] : []),
+        ...(edition.portable === true ? ['--mechpro-portable'] : []),
+        ...(edition.demo === true ? ['--mechpro-demo'] : []),
+      ],
     },
   });
 
+  if (edition.demo === true) {
+    window.webContents.session.webRequest.onBeforeRequest(
+      { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+      (_details, callback) => callback({ cancel: true }),
+    );
+  }
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (isTrustedUrl(url)) void shell.openExternal(url);
+    if (edition.demo !== true && isTrustedUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
@@ -104,6 +124,15 @@ function createWindow() {
   if (smokeTest) {
     window.webContents.once('did-finish-load', async () => {
       try {
+        await window.webContents.executeJavaScript(`new Promise(resolve => {
+          const ready = () => document.querySelector('.app-shell, .login-panel');
+          if (ready()) return resolve();
+          const observer = new MutationObserver(() => {
+            if (ready()) { observer.disconnect(); clearTimeout(timeout); resolve(); }
+          });
+          const timeout = setTimeout(() => { observer.disconnect(); resolve(); }, 15000);
+          observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+        })`);
         const result = await window.webContents.executeJavaScript(`({
           desktop: Boolean(window.mechproDesktop),
           diagnostics: Boolean(window.mechproDiagnostics),
@@ -111,12 +140,13 @@ function createWindow() {
           authenticated: Boolean(document.querySelector('.app-shell')),
           loginText: document.querySelector('.login-panel')?.innerText || ''
         })`);
-        const passed = result.desktop
+        const portableData = !edition.portable || app.getPath('userData') === path.join(path.dirname(process.execPath), 'MechPro Demo Data');
+        const passed = portableData && result.desktop
           && result.diagnostics
           && result.title.includes('MechPro')
           && (result.authenticated
             || /work email|continue securely|sign in/i.test(result.loginText));
-        console.log(JSON.stringify({ smokeTest: passed ? 'passed' : 'failed', ...result }));
+        console.log(JSON.stringify({ smokeTest: passed ? 'passed' : 'failed', portableData, ...result }));
         app.exit(passed ? 0 : 1);
       } catch (error) {
         console.error(error);
@@ -150,7 +180,7 @@ function findAuthDeepLink(argv) {
 }
 
 function handleAuthDeepLink(rawUrl) {
-  if (!rawUrl || !mainWindow) return false;
+  if (edition.offline === true || !rawUrl || !mainWindow) return false;
   const callbackUrl = resolveAuthDeepLink(rawUrl, resolveDesktopStart().remoteUrl);
   if (!callbackUrl) return false;
   void mainWindow.loadURL(callbackUrl);

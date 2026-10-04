@@ -1,20 +1,26 @@
 import { spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const editionPath = new URL('../desktop/edition.json', import.meta.url);
-const onlineEdition = `${JSON.stringify({ offline: false }, null, 2)}\n`;
+const originalEdition = readFileSync(editionPath);
+const demo = process.argv.includes('--demo');
+const root = fileURLToPath(new URL('../', import.meta.url));
 
 function run(command, args) {
-  const result = spawnSync(command, args, { stdio: 'inherit', shell: true });
-  if (result.status !== 0) process.exit(result.status || 1);
+  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${command} failed (${result.status ?? result.signal})`);
 }
 
-writeFileSync(editionPath, `${JSON.stringify({ offline: true }, null, 2)}\n`);
 try {
+  writeFileSync(editionPath, `${JSON.stringify({ offline: true, ...(demo ? { portable: true, demo: true } : {}) }, null, 2)}\n`);
   run('npm', ['run', 'build:web']);
-  run('npm', ['run', 'build:j2534']);
-  run('node', ['scripts/bake-diagnostics-secret.mjs']);
-  run('npx', ['electron-builder', '--win', 'nsis', '--publish', 'never', '--config', 'desktop/builder-offline.json']);
+  if (!demo) {
+    run('npm', ['run', 'build:j2534']);
+    run('node', ['scripts/bake-diagnostics-secret.mjs']);
+  }
+  run('npx', ['--no-install', 'electron-builder', '--win', demo ? 'zip' : 'nsis', '--x64', '--publish', 'never', '--config', demo ? 'desktop/builder-demo.json' : 'desktop/builder-offline.json']);
 } finally {
-  writeFileSync(editionPath, onlineEdition);
+  writeFileSync(editionPath, originalEdition);
 }

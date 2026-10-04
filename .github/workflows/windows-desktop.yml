@@ -95,9 +95,47 @@ jobs:
             dist/windows/*.exe
             dist/windows/*.zip
 
+  build-demo:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:desktop && npm run test:offline
+      - name: Build offline flash-drive demo (no credentials or native host)
+        run: npm run build:windows:demo
+      - name: Smoke test extracted demo from a folder with spaces
+        shell: pwsh
+        run: |
+          $zip = Get-Item dist/windows-demo/MechPro-Demo-USB-*.zip
+          $demo = Join-Path $env:RUNNER_TEMP "USB Demo"
+          Expand-Archive -Path $zip.FullName -DestinationPath $demo
+          if (!(Test-Path (Join-Path $demo "START-HERE.txt"))) { throw "Demo instructions missing" }
+          if (Test-Path (Join-Path $demo "resources/diagnostics-secrets")) { throw "Demo must not bundle credentials" }
+          $exe = Join-Path $demo "MechPro Demo.exe"
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -PassThru
+          if (!$process.WaitForExit(60000)) { $process.Kill(); throw "Demo smoke test timed out" }
+          if ($process.ExitCode -ne 0) { throw "Demo smoke test failed: $($process.ExitCode)" }
+          if (!(Test-Path (Join-Path $demo "MechPro Demo Data"))) { throw "Drive-local profile missing" }
+          # Run again after relocating the entire folder, as when the drive letter changes.
+          $moved = Join-Path $env:RUNNER_TEMP "Moved USB Demo"
+          Move-Item $demo $moved
+          $process = Start-Process -FilePath (Join-Path $moved "MechPro Demo.exe") -ArgumentList "--smoke-test" -PassThru
+          if (!$process.WaitForExit(60000)) { $process.Kill(); throw "Relocated demo timed out" }
+          if ($process.ExitCode -ne 0) { throw "Relocated demo failed: $($process.ExitCode)" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mechpro-usb-demo
+          path: dist/windows-demo/MechPro-Demo-USB-*.zip
+          if-no-files-found: error
+
   publish-github-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-installer
+    needs: [build-installer, build-demo]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -108,6 +146,10 @@ jobs:
         with:
           name: mechpro-windows-installer
           path: dist/windows
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mechpro-usb-demo
+          path: dist/windows
       - name: Upload installer to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,7 +158,7 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           TAG="desktop-v${VERSION}"
           REPO="${{ github.repository }}"
-          NOTES="Automated Windows build from ${GITHUB_SHA}. Includes J2534 OEM Diagnostics and 64-bit Windows adapter detection (WOW6432Node)."
+          NOTES="Automated Windows build from ${GITHUB_SHA}. Includes the production installer/ZIP plus MechPro-Demo-USB-${VERSION}.zip: extract the entire demo ZIP to a writable flash drive and run MechPro Demo.exe offline."
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/windows/*.exe dist/windows/*.zip --clobber --repo "$REPO"
           else
@@ -150,7 +192,7 @@ jobs:
       - name: Check Cloudflare credentials
         id: creds
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
@@ -162,7 +204,7 @@ jobs:
       - name: Publish Windows installer to R2
         if: steps.creds.outputs.present == 'true'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.YOUR_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET || 'mechpro-files' }}
         run: |

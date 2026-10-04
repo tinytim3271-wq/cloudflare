@@ -21,6 +21,7 @@ test('shop snapshots drop passwords and the owner profile matches the local acco
     orders: [{ id: 'RO-9' }],
     users: [{ id: 'user-1', email: 'lee@shop.test', password: 'secret-value' }],
   });
+
   assert.equal(snapshot.users[0].password, undefined);
   assert.equal(snapshot.orders[0].id, 'RO-9');
   const state = { users: [], currentUserId: null };
@@ -28,4 +29,14 @@ test('shop snapshots drop passwords and the owner profile matches the local acco
   assert.equal(user.email, 'lee@shop.test');
   assert.equal(user.role, 'admin');
   assert.equal(state.currentUserId, user.id);
+});
+
+test('portable login explains drive-local storage without changing installed editions', () => {
+  const markup = offlineLoginMarkup({ hasAccount: false, email: '', icon, portable: true });
+  assert.match(markup, /MechPro Demo/);
+  assert.match(markup, /Save sign-in on this drive/);
+  assert.match(markup, /MechPro Demo Data folder beside the executable on this drive/);
+  assert.doesNotMatch(markup, /this PC|this computer/);
+  const returning = offlineLoginMarkup({ hasAccount: true, email: 'demo@shop.test', icon, portable: true });
+  assert.match(returning, /Sign in on this drive/);
 });
