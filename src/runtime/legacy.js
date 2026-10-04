@@ -1785,7 +1785,8 @@ bindLiveAssistant = function () {
     sendButton.disabled = true;
     append("user", message);
     try {
-      const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+      const history = assistantConversation.slice(0, -1).slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] }));
+      const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history }) });
       assistantSessionId = result.sessionId || assistantSessionId;
       const answer = result.message || "The assistant did not return an answer.";
       append("assistant", answer, result.actions || []);
