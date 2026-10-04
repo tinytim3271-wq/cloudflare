@@ -20,7 +20,9 @@ import {
   calculateEstimate,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
+  laborLinePrintRows,
   normalizeEstimateLine,
+  normalizeTechnicianIds,
   workOrderWithEditedEstimate,
 } from '../modules/estimate-workflow.js';
 import {
@@ -1267,6 +1269,45 @@ function jobCardLineTable(estimate) {
   return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.partNumber || line.inventorySku ? ` · #${escapeHtml(line.partNumber || line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
 }
 
+function laborTechnicians() {
+  return state.users.filter(user => user.active && user.techName);
+}
+
+function technicianName(id) {
+  const user = state.users.find(item => item.id === id);
+  return user?.techName || user?.name || "Technician unavailable";
+}
+
+function technicianCheckboxes(selectedIds, className, prefix) {
+  const selected = new Set(selectedIds);
+  const technicians = laborTechnicians();
+  if (!technicians.length) return `<p class="labor-assignment-empty">No active technician profiles are available.</p>`;
+  return technicians.map(user => `<label><input type="checkbox" class="${className}" value="${escapeAttr(user.id)}" id="${escapeAttr(`${prefix}-${user.id}`)}" ${selected.has(user.id) ? "checked" : ""}/><span>${escapeHtml(user.techName)}</span></label>`).join("");
+}
+
+function laborAssignmentPanel(order, estimate) {
+  const laborLines = estimate.lines.filter(line => line.type === "labor");
+  if (!laborLines.length) return "";
+  const rows = laborLines.map((line, index) => {
+    const ids = normalizeTechnicianIds(line);
+    return `<article class="labor-assignment-row" data-assignment-line="${escapeAttr(line.id)}"><div><strong>${escapeHtml(line.description)}</strong><small>${Number(line.hours).toFixed(2)} hr · ${ids.length ? ids.map(technicianName).map(escapeHtml).join(", ") : "Unassigned"}</small></div><fieldset><legend>Assigned technicians</legend>${technicianCheckboxes(ids, "line-technician", `line-${index}`)}</fieldset></article>`;
+  }).join("");
+  return `<section class="labor-assignment-panel"><div class="job-section-head"><div><h3>Labor-line technicians</h3><p>Assign none, one, or several technicians to each labor operation.</p></div></div><div class="labor-assignment-bulk"><fieldset><legend>Apply these technicians to every labor line</legend>${technicianCheckboxes([], "bulk-technician", "bulk")}</fieldset><button class="secondary" type="button" id="apply-bulk-technicians">${icon("users", 14)} Apply to all labor lines</button></div><div class="labor-assignment-list">${rows}</div><button class="primary" type="button" id="save-labor-assignments">${icon("save", 14)} Save technician assignments</button></section>`;
+}
+
+function printJobCard(order) {
+  const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
+  const technicianRows = laborLinePrintRows(estimate.lines, state.users.map(user => ({ id: user.id, name: user.techName || user.name })));
+  const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.laborRate)}</td><td>${money(line.total)}</td></tr>`).join("");
+  const partRows = estimate.lines.filter(line => line.type === "part").map(line => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
+  const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
+  const win = window.open("", "_blank");
+  if (!win) return toast("Allow pop-ups to print the job card");
+  win.opener = null;
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money(estimate.parts)}</b></div><div><span>Labor</span><b>${money(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money(supplies)}</b></div><div><span>Discount</span><b>-${money(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())</script></body></html>`);
+  win.document.close();
+}
+
 function jobWorkflowSteps(order, invoice) {
   const approval = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
   return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
@@ -1322,7 +1363,8 @@ openOrder = function (id) {
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
-  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+  const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
   const editorRoot = document.querySelector("#job-estimate-editor");
   if (editorRoot) {
     bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
@@ -1359,6 +1401,35 @@ openOrder = function (id) {
   document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
   document.querySelector("#sign-job-invoice")?.addEventListener("click", () => { if (!invoice.signature) onsiteSignatureModal("invoice", invoice) });
   document.querySelectorAll("[data-print-invoice]").forEach(button => button.onclick = () => printInvoice(button.dataset.printInvoice));
+  document.querySelector("#print-job-card")?.addEventListener("click", () => printJobCard(order));
+  document.querySelector("#apply-bulk-technicians")?.addEventListener("click", () => {
+    const selected = new Set([...document.querySelectorAll(".bulk-technician:checked")].map(input => input.value));
+    document.querySelectorAll(".labor-assignment-row").forEach(row => {
+      row.querySelectorAll(".line-technician").forEach(input => { input.checked = selected.has(input.value) });
+    });
+    toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line. Save to persist.`);
+  });
+  document.querySelector("#save-labor-assignments")?.addEventListener("click", async event => {
+    const assignmentsByLine = new Map([...document.querySelectorAll(".labor-assignment-row")].map(row => [
+      row.dataset.assignmentLine,
+      [...row.querySelectorAll(".line-technician:checked")].map(input => input.value),
+    ]));
+    order.estimate.lines = order.estimate.lines.map(line => line.type === "labor"
+      ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] }
+      : line);
+    event.currentTarget.disabled = true;
+    try {
+      const saved = await updateOrderInApi(order);
+      state.orders[state.orders.indexOf(order)] = saved;
+      save();
+      closeModal();
+      toast(`${order.id} technician assignments saved`);
+      openOrder(order.id);
+    } catch (error) {
+      event.currentTarget.disabled = false;
+      toast(error.message || "Technician assignments could not be saved");
+    }
+  });
 };
 
 invoices = function () {
@@ -1423,7 +1494,10 @@ function estimateLinePresentation(line) {
   const meta = line.type === "part"
     ? `${Number(line.quantity || 0)} × ${money(line.unitPrice)}${line.partNumber ? ` · ${escapeHtml(line.partNumber)}` : ""}`
     : `${Number(line.hours || 0).toFixed(2)} hr × ${money(line.laborRate)}`;
-  return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money(line.total)}</b></article>`;
+  const assigned = line.type === "labor"
+    ? normalizeTechnicianIds(line).map(technicianName)
+    : [];
+  return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money(line.total)}</b></article>`;
 }
 
 function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
@@ -1486,7 +1560,7 @@ function showEstimatePreview(estimate) {
 
 estimateEditorLine = function (line = {}, index = 0, removable = true) {
   const item = normalizeEstimateLine(line, index), part = item.type === "part";
-  return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}">
+  return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
     <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
       <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
@@ -1520,6 +1594,7 @@ estimateFromEditor = function (root) {
       committedQuantity: type === "part" && inventory ? quantity : 0,
       priceStatus: row.dataset.priceStatus || "priced",
       laborSource: row.dataset.laborSource || "",
+      technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
     }, index);
   }).filter(line => line.description && line.quantity > 0);
   const form = root.closest("form");

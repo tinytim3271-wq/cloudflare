@@ -15,6 +15,10 @@ test('reference estimate matches the authoritative shop figures', () => {
   assert.equal(REFERENCE_ESTIMATE.discountAmount, 212.68);
   assert.equal(REFERENCE_ESTIMATE.tax, 157.91);
   assert.equal(REFERENCE_ESTIMATE.total, 2072.02);
+  assert.deepEqual(
+    REFERENCE_ESTIMATE.lines.find(line => line.type === 'labor').technicianIds,
+    [],
+  );
 });
 
 test('shop rules apply supplies at three percent of labor capped at twenty dollars', () => {

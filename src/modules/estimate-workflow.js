@@ -8,6 +8,13 @@ export function billableEstimateLines(lines = []) {
   return lines.filter(line => !isDeclinedEstimateLine(line));
 }
 
+export function normalizeTechnicianIds(line = {}) {
+  const source = Array.isArray(line.technicianIds)
+    ? line.technicianIds
+    : line.technicianId ? [line.technicianId] : [];
+  return [...new Set(source.map(value => String(value || '').trim()).filter(Boolean))];
+}
+
 export function normalizeEstimateLine(line = {}, index = 0) {
   const type = line.type === 'part' ? 'part' : 'labor';
   const quantity = Math.max(0, Number(line.quantity ?? (type === 'part' ? 1 : line.hours)) || 0);
@@ -29,8 +36,28 @@ export function normalizeEstimateLine(line = {}, index = 0) {
     hours,
     laborRate,
     total,
+    technicianIds: type === 'labor' ? normalizeTechnicianIds(line) : [],
     approvalStatus: ['approved', 'declined'].includes(line.approvalStatus) ? line.approvalStatus : 'pending',
   };
+}
+
+export function laborLinePrintRows(lines = [], technicians = []) {
+  const names = new Map(technicians.map(technician => [
+    String(technician.id || ''),
+    String(technician.name || technician.techName || technician.id || 'Technician unavailable'),
+  ]));
+  return lines
+    .map(normalizeEstimateLine)
+    .filter(line => line.type === 'labor')
+    .flatMap(line => {
+      const technicianIds = normalizeTechnicianIds(line);
+      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: 'Unassigned' }];
+      return technicianIds.map(technicianId => ({
+        line,
+        technicianId,
+        technicianName: names.get(technicianId) || 'Technician unavailable',
+      }));
+    });
 }
 
 export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
