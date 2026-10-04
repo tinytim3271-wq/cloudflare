@@ -2012,16 +2012,6 @@
   function entityPath(type) {
     return `/entities/${type}`;
   }
-  function persistMutationQueue(storage, key, queue) {
-    const records = Array.isArray(queue) ? queue : [];
-    if (records.length === 0) {
-      storage.removeItem(key);
-      return "[]";
-    }
-    const raw = JSON.stringify(records);
-    storage.setItem(key, raw);
-    return raw;
-  }
   function applyQueuedEntityMutations(type, remoteRecords, queue) {
     const basePath = entityPath(type);
     const records = new Map(
@@ -2047,6 +2037,46 @@
   }
   var init_entity_persistence = __esm({
     "src/runtime/entity-persistence.js"() {
+    }
+  });
+
+  // src/runtime/mutation-queue-store.js
+  function createMutationQueueStore({
+    storage,
+    storeKey = "mechpro-mutation-queue-v1"
+  } = {}) {
+    if (!storage || typeof storage.getItem !== "function" || typeof storage.setItem !== "function") {
+      throw new TypeError("createMutationQueueStore requires a Web Storage-compatible storage");
+    }
+    let cache = null;
+    let rawCache = null;
+    function read() {
+      const raw = storage.getItem(storeKey) || "[]";
+      if (rawCache === raw && Array.isArray(cache)) return cache;
+      rawCache = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        cache = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        cache = [];
+      }
+      return cache;
+    }
+    function write(queue) {
+      const next = Array.isArray(queue) ? queue : [];
+      const raw = JSON.stringify(next);
+      if (raw === rawCache) {
+        cache = next;
+        return;
+      }
+      rawCache = raw;
+      cache = next;
+      storage.setItem(storeKey, raw);
+    }
+    return { read, write };
+  }
+  var init_mutation_queue_store = __esm({
+    "src/runtime/mutation-queue-store.js"() {
     }
   });
 
@@ -2685,12 +2715,10 @@
     toast("Signed out of MechPro");
   }
   function readMutationQueue() {
-    return mutationQueueStore.read();
+    return mutationQueueStore.read().filter((item) => item?.method === "DELETE" || item?.body);
   }
   function writeMutationQueue(queue) {
-    const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue);
-    mutationQueueRaw = raw;
-    mutationQueueCache = queue;
+    mutationQueueStore.write(queue);
   }
   function mutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -5896,7 +5924,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -5912,6 +5940,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
+      init_mutation_queue_store();
       init_estimate_workflow();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
@@ -6027,9 +6056,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       offlineAccountEmail = "";
       cloudflareSignIn = cloudflareAccessSignIn;
       MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
+      mutationQueueStore = createMutationQueueStore({ storage: localStorage, storeKey: MUTATION_QUEUE_STORE });
       flushingMutationQueue = false;
-      mutationQueueCache = null;
-      mutationQueueRaw = null;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
