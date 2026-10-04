@@ -1300,9 +1300,10 @@ function laborAssignmentPanel(order, estimate) {
 
 function printJobCard(order) {
   const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
-  const technicianRows = laborLinePrintRows(estimate.lines, state.users.map(user => ({ id: user.id, name: user.techName || user.name })));
+  const billableLines = billableEstimateLines(estimate.lines);
+  const technicianRows = laborLinePrintRows(billableLines, state.users.map(user => ({ id: user.id, name: user.techName || user.name })));
   const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.laborRate)}</td><td>${money(line.total)}</td></tr>`).join("");
-  const partRows = estimate.lines.filter(line => line.type === "part").map(line => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
+  const partRows = billableLines.filter(line => line.type === "part").map(line => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
   const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
   const win = window.open("", "_blank");
   if (!win) return toast("Allow pop-ups to print the job card");
