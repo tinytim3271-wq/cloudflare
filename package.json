@@ -23,6 +23,7 @@
     "deploy:worker": "wrangler deploy",
     "stage:pages": "node scripts/stage-pages.mjs",
     "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch",
+    "deploy:r2": "bash scripts/deploy-r2.sh",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
     "validate": "npm run build:web && npm run test:config && npm run validate:worker && npm run test:j2534",
     "sync": "npm run build:web && npm run copy:web && npx cap sync android",

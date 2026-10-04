@@ -1,0 +1,33 @@
+name: Deploy R2 artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'downloads/**'
+      - 'scripts/deploy-r2.sh'
+      - '.github/workflows/deploy-r2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: vars.CLOUDFLARE_DEPLOY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish downloads/ to R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ]; then
+            echo "R2 credentials not configured; skipping publish."
+            exit 0
+          fi
+          npm run deploy:r2
