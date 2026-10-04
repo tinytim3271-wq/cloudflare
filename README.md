@@ -223,10 +223,9 @@ repository secrets:
   `CLOUDFLARE_D1_DATABASE_ID`, optional `CLOUDFLARE_PAGES_PROJECT`, and optional
   `CLOUDFLARE_ALLOWED_ORIGINS`
 
-Publish runs on pushes to `main` and on manual **Run workflow** when
-`CLOUDFLARE_API_TOKEN` is set, unless `CLOUDFLARE_DEPLOY_ENABLED` is `false`.
-If the token is missing, validate still runs and publish is skipped instead of
-failing the workflow. Worker runtime secrets are configured with
+Publish runs only on pushes to `main` when `CLOUDFLARE_DEPLOY_ENABLED` is
+exactly `true`; manual runs perform validation only. Missing credentials cause
+an enabled publish job to fail. Worker runtime secrets are configured with
 `wrangler secret put`, not GitHub variables.
 
 `.github/workflows/deploy-r2.yml` publishes `downloads/` to R2 via the
