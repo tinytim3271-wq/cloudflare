@@ -1424,9 +1424,9 @@ openOrder = function (id) {
     event.currentTarget.disabled = true;
     try {
       const saved = !isOfflineDesktop() && !isLocalShell()
-        ? await updateOrderInApi(order)
+        ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) })
         : order;
-      state.orders[state.orders.indexOf(order)] = saved;
+      state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
       save();
       closeModal();
       toast(`${order.id} technician assignments saved`);
