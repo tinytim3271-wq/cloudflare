@@ -4,6 +4,7 @@ import {
   approvedEstimate,
   billableEstimateLines,
   calculateEstimate,
+  declinedEstimate,
   invoiceRecordForOrder,
   normalizeEstimateLine,
 } from './estimate-workflow.js';
@@ -100,6 +101,34 @@ test('billableEstimateLines drops declined inventory commitments', () => {
     { id: 'pending', approvalStatus: 'pending', committedQuantity: 1, inventoryId: 'fluid' },
   ];
   assert.deepEqual(billableEstimateLines(lines).map(line => line.id), ['keep', 'pending']);
+});
+
+test('full-card decline marks every line declined and zeros money including fees', () => {
+  const estimate = calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 165 },
+    { id: 'part', type: 'part', description: 'Sensor', quantity: 1, unitPrice: 100 },
+  ], 8.25, [{ description: 'Shop supplies', amount: 12 }]);
+  const { estimate: declined, decisions } = declinedEstimate(estimate);
+
+  assert.equal(declined.approvedLineCount, 0);
+  assert.equal(declined.declinedLineCount, 2);
+  assert.ok(declined.lines.every(line => line.approvalStatus === 'declined'));
+  assert.equal(declined.total, 0);
+  assert.equal(declined.subtotal, 0);
+  assert.equal(declined.tax, 0);
+  assert.equal(declined.fees[0].amount, 12);
+  assert.deepEqual(decisions, { labor: 'declined', part: 'declined' });
+
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1100',
+    customer: 'Customer',
+    vehicle: '2020 Example',
+    total: declined.total,
+    estimate: declined,
+    estimateApproval: { status: 'declined' },
+  }, new Date('2026-10-02T12:00:00.000Z'));
+  assert.equal(invoice.amount, 0);
+  assert.equal(invoice.lines.length, 0);
 });
 
 test('line normalization uses quantity pricing for parts', () => {

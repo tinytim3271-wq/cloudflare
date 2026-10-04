@@ -1,4 +1,9 @@
-import { approvedEstimate, calculateEstimate, normalizeEstimateLine } from '../../src/modules/estimate-workflow.js';
+import {
+  approvedEstimate,
+  calculateEstimate,
+  declinedEstimate,
+  normalizeEstimateLine,
+} from '../../src/modules/estimate-workflow.js';
 import { HttpError, json, requestJson } from './http.mjs';
 
 const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -254,7 +259,22 @@ async function recordResponse(request, env, link, row, document) {
     const timestamp = new Date().toISOString();
     // Claim the one-time link before mutating the order so concurrent POSTs cannot both win.
     await claimDocumentLink(env, link.id, 'declined', timestamp);
-    document.estimateApproval = { status: 'declined', source: 'remote', respondedAt: timestamp };
+    // Decline-all must mark every line declined and zero money; otherwise
+    // pending lines stay billable and staff completion still invoices the full card.
+    const declined = declinedEstimate(document.estimate || {});
+    document.estimate = declined.estimate;
+    document.total = declined.estimate.total;
+    document.labor = declined.estimate.labor;
+    document.laborHours = declined.estimate.laborHours;
+    document.parts = declined.estimate.parts;
+    document.tax = declined.estimate.tax;
+    document.linesLockedAt = timestamp;
+    document.estimateApproval = {
+      status: 'declined',
+      source: 'remote',
+      respondedAt: timestamp,
+      decisions: declined.decisions,
+    };
     await saveEntity(env, link, row, document);
     return json({ ok: true, status: 'declined' });
   }
