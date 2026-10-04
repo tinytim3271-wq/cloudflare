@@ -1,21 +1,61 @@
 /**
- * HMAC-signed diagnostics capability tokens (clear_dtcs).
- * Must stay compatible with infra/lambda/diagnostics/capability-token.ts
+ * ECDSA P-256 diagnostics capability tokens (clear_dtcs).
+ *
+ * The Cloudflare Worker (`worker/src/index.js`) signs tokens with the private
+ * key `DIAGNOSTICS_SIGNING_PRIVATE_KEY`. This host verifies them with the
+ * matching PUBLIC key only — it never needs the private key in production.
+ *
+ * Token format: `v1.<base64url(payloadJson)>.<base64url(IEEE-P1363 signature)>`
  */
-const { createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
+const {
+  createPublicKey,
+  createPrivateKey,
+  randomBytes,
+  sign,
+  verify,
+} = require('node:crypto');
 
 const consumedJti = new Set();
 
-function secret() {
-  return String(
-    process.env.MECHPRO_DIAG_CAPABILITY_SECRET
-    || process.env.DIAGNOSTICS_CAPABILITY_SECRET
-    || 'mechpro-dev-diagnostics-capability-v1',
-  ).trim();
+function publicKey() {
+  const pem = process.env.MECHPRO_DIAG_SIGNING_PUBLIC_KEY_PEM;
+  if (pem && pem.includes('BEGIN')) {
+    return createPublicKey({ key: pem, format: 'pem' });
+  }
+  const der = process.env.MECHPRO_DIAG_SIGNING_PUBLIC_KEY;
+  if (der) {
+    return createPublicKey({ key: Buffer.from(der.trim(), 'base64'), format: 'der', type: 'spki' });
+  }
+  throw new Error('Diagnostics signing public key is not configured (set MECHPRO_DIAG_SIGNING_PUBLIC_KEY)');
 }
 
-function signPayload(payloadJson) {
-  return createHmac('sha256', secret()).update(payloadJson).digest('base64url');
+function privateKey() {
+  const pem = process.env.MECHPRO_DIAG_SIGNING_PRIVATE_KEY_PEM;
+  if (pem && pem.includes('BEGIN')) {
+    return createPrivateKey({ key: pem, format: 'pem' });
+  }
+  const der = process.env.MECHPRO_DIAG_SIGNING_PRIVATE_KEY;
+  if (der) {
+    return createPrivateKey({ key: Buffer.from(der.trim(), 'base64'), format: 'der', type: 'pkcs8' });
+  }
+  throw new Error('Diagnostics signing private key is not configured (set MECHPRO_DIAG_SIGNING_PRIVATE_KEY)');
+}
+
+function verifySignature(payloadJson, signatureB64Url) {
+  let valid = false;
+  try {
+    valid = verify(
+      'sha256',
+      Buffer.from(payloadJson, 'utf8'),
+      { key: publicKey(), dsaEncoding: 'ieee-p1363' },
+      Buffer.from(signatureB64Url, 'base64url'),
+    );
+  } catch {
+    valid = false;
+  }
+  if (!valid) {
+    throw new Error('Invalid diagnostics capability token signature');
+  }
 }
 
 function verifyClearDtcsToken(token, expected = {}) {
@@ -25,13 +65,7 @@ function verifyClearDtcsToken(token, expected = {}) {
     throw new Error('Invalid diagnostics capability token');
   }
   const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
-  const expectedSig = signPayload(payloadJson);
-  const providedSig = parts[2];
-  const expectedBuf = Buffer.from(expectedSig, 'base64url');
-  const providedBuf = Buffer.from(providedSig, 'base64url');
-  if (expectedBuf.length !== providedBuf.length || !timingSafeEqual(expectedBuf, providedBuf)) {
-    throw new Error('Invalid diagnostics capability token signature');
-  }
+  verifySignature(payloadJson, parts[2]);
   const payload = JSON.parse(payloadJson);
   if (payload.v !== 1 || payload.procedure !== 'clear_dtcs') {
     throw new Error('Capability token is not valid for clearDtcs');
@@ -58,6 +92,11 @@ function verifyClearDtcsToken(token, expected = {}) {
   return payload;
 }
 
+/**
+ * Dev/test helper that mints a signed token the way the Worker does.
+ * Requires a private key (MECHPRO_DIAG_SIGNING_PRIVATE_KEY); never used in
+ * production hosts, which only ever verify.
+ */
 function mintClearDtcsToken(input, ttlMs = 5 * 60 * 1000) {
   const payload = {
     v: 1,
@@ -68,7 +107,12 @@ function mintClearDtcsToken(input, ttlMs = 5 * 60 * 1000) {
     jti: randomBytes(12).toString('hex'),
   };
   const payloadJson = JSON.stringify(payload);
-  const token = `v1.${Buffer.from(payloadJson).toString('base64url')}.${signPayload(payloadJson)}`;
+  const signature = sign(
+    'sha256',
+    Buffer.from(payloadJson, 'utf8'),
+    { key: privateKey(), dsaEncoding: 'ieee-p1363' },
+  ).toString('base64url');
+  const token = `v1.${Buffer.from(payloadJson).toString('base64url')}.${signature}`;
   return { token, expiresAt: new Date(payload.exp).toISOString(), payload };
 }
 

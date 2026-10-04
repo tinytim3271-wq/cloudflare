@@ -16,8 +16,8 @@ import {
   constantTimeEqual,
   decryptSecret,
   encryptSecret,
-  hmacBase64Url,
   hmacHex,
+  signDiagnosticsToken,
   verifyAccessJwt,
 } from './security.mjs';
 
@@ -378,13 +378,19 @@ async function handleDiagnostics(request, env, context, segments) {
       return json({ message: 'OEM AutoAuth integration is not configured.', authorized: false }, 501);
     }
     if (!['clear_dtcs', 'clearDtcs'].includes(procedure)) throw new HttpError(400, 'Unsupported procedure for local authorization');
-    if (!env.DIAGNOSTICS_CAPABILITY_SECRET) throw new HttpError(503, 'Diagnostics capability signing is not configured');
+    if (!env.DIAGNOSTICS_SIGNING_PRIVATE_KEY) throw new HttpError(503, 'Diagnostics signing is not configured');
     const payload = {
       v: 1, procedure: 'clear_dtcs', vin, shopId: context.shopId,
       exp: Date.now() + 5 * 60 * 1000, jti: crypto.randomUUID().replaceAll('-', ''),
     };
     const payloadJson = JSON.stringify(payload);
-    const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${await hmacBase64Url(env.DIAGNOSTICS_CAPABILITY_SECRET, payloadJson)}`;
+    let signature;
+    try {
+      signature = await signDiagnosticsToken(env.DIAGNOSTICS_SIGNING_PRIVATE_KEY, payloadJson);
+    } catch {
+      throw new HttpError(503, 'Diagnostics signing key is invalid');
+    }
+    const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${signature}`;
     return json({ authorized: true, procedure: 'clear_dtcs', vin, token, expiresAt: new Date(payload.exp).toISOString(), shopId: context.shopId });
   }
   throw new HttpError(405, 'Method not allowed');
