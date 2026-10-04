@@ -10,7 +10,8 @@ import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
 import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMarkup, offlineSession, snapshotShop } from '../modules/offline-desktop.js';
 import { presentCatalogInspection, printCatalogInspection } from './catalog-inspection-ui.js';
-import { applyQueuedEntityMutations, persistMutationQueue } from './entity-persistence.js';
+import { applyQueuedEntityMutations } from './entity-persistence.js';
+import { createMutationQueueStore } from './mutation-queue-store.js';
 import {
   approvedEstimate,
   billableEstimateLines,
@@ -207,9 +208,10 @@ function clearAuthSession() { sessionStorage.removeItem(storageKeys.session); lo
 function signOutApiRequest() { if (isOfflineDesktop()) return; fetch(`${cloudflareConfig.apiUrl}/auth/logout`, { method: "POST", credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }).catch(() => {}) }
 async function signOutEverywhere() { state.currentUserId = null; desktopEntitlementVerified = !isDesktopApp; signOutApiRequest(); clearAuthSession(); closeModal(); save(); render(); toast("Signed out of MechPro") }
 const MUTATION_QUEUE_STORE = "mechpro-mutation-queue-v1";
-let flushingMutationQueue = false, mutationQueueCache = null, mutationQueueRaw = null;
-function readMutationQueue() { const raw = localStorage.getItem(MUTATION_QUEUE_STORE) || "[]"; if (mutationQueueRaw === raw && Array.isArray(mutationQueueCache)) return mutationQueueCache; mutationQueueRaw = raw; try { mutationQueueCache = (JSON.parse(raw) || []).filter(item => item?.method === "DELETE" || item?.body) } catch { mutationQueueCache = [] }; return mutationQueueCache }
-function writeMutationQueue(queue) { const raw = persistMutationQueue(localStorage, MUTATION_QUEUE_STORE, queue); mutationQueueRaw = raw; mutationQueueCache = queue }
+const mutationQueueStore = createMutationQueueStore({ storage: localStorage, storeKey: MUTATION_QUEUE_STORE });
+let flushingMutationQueue = false;
+function readMutationQueue() { return mutationQueueStore.read().filter(item => item?.method === "DELETE" || item?.body) }
+function writeMutationQueue(queue) { mutationQueueStore.write(queue) }
 function mutationId() { return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}` }
 function prepareMutation(path, options) { return prepareEntityMutation(path, options, mutationId) }
 function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
