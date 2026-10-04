@@ -232,7 +232,10 @@ an enabled publish job to fail. Worker runtime secrets are configured with
 S3-compatible API (`scripts/deploy-r2.sh`) using `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_R2_BUCKET`; it
 skips cleanly when credentials are absent. The Windows workflow publishes
-installers to the configured `CLOUDFLARE_R2_BUCKET` when the token is set.
+installers to R2 on pushes to `main` and requires the
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets; publishing fails if
+either is missing. `CLOUDFLARE_R2_BUCKET` is optional and defaults to
+`mechpro-files`.
 
 Cloudflare API errors `10000` or `9109` mean the configured token is invalid or
 lacks access to the account. Rotate both Actions secrets in the scope consumed by
