@@ -19,11 +19,12 @@ export function calculateShopEstimate(lines = [], {
   const labor = normalizedLines
     .filter(line => line.type === 'labor' && line.approvalStatus !== 'declined')
     .reduce((sum, line) => sum + line.total, 0);
+  const automaticSupplies = Math.min(
+    SHOP_ESTIMATE_RULES.shopSuppliesCap,
+    labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
+  );
   const supplies = labor > 0
-    ? money(shopSupplies ?? Math.min(
-      SHOP_ESTIMATE_RULES.shopSuppliesCap,
-      labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
-    ))
+    ? money(Math.min(SHOP_ESTIMATE_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies)))
     : 0;
   const base = calculateEstimate(
     normalizedLines,
