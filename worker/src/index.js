@@ -1101,6 +1101,7 @@ async function handleVoiceSession(request, env, context) {
 async function handleVoiceTranscription(request, env, context) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  await enforceAiRateLimit(env, context);
   const contentType = request.headers.get('Content-Type') || 'audio/webm';
   if (!contentType.toLowerCase().startsWith('audio/')) {
     throw new HttpError(415, 'An audio recording is required');
