@@ -220,7 +220,7 @@ export function estimateFromAssistantDraft(action = {}) {
     type: 'part',
     description: String(part.description || 'Part'),
     notes: String(part.notes || ''),
-    quantity: Math.max(0, Number(part.quantity) || 1),
+    quantity: Math.max(0, Number(part.quantity) || 0),
     unitPrice: Math.max(0, Number(part.unitPrice) || 0),
     partNumber: String(part.partNumber || ''),
     priceStatus: part.priceStatus === 'pending' ? 'pending' : 'priced',
