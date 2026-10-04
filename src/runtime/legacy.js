@@ -1281,6 +1281,9 @@ function technicianName(id) {
 function technicianCheckboxes(selectedIds, className, prefix) {
   const selected = new Set(selectedIds);
   const technicians = laborTechnicians();
+  for (const id of selected) {
+    if (!technicians.some(user => user.id === id)) technicians.push({ id, techName: technicianName(id) });
+  }
   if (!technicians.length) return `<p class="labor-assignment-empty">No active technician profiles are available.</p>`;
   return technicians.map(user => `<label><input type="checkbox" class="${className}" value="${escapeAttr(user.id)}" id="${escapeAttr(`${prefix}-${user.id}`)}" ${selected.has(user.id) ? "checked" : ""}/><span>${escapeHtml(user.techName)}</span></label>`).join("");
 }
