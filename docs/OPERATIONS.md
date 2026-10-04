@@ -39,9 +39,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://www.yourcarguy806.com/
 # Expected: 200
 ```
 
-If `/api/healthz` returns an HTML "Just a moment..." challenge, Access or Bot
-Fight Mode is in front of the public hostname — remove it (reserve Access for an
-internal admin hostname) and keep the Worker on the `/api/*` route only.
+If `/api/healthz` returns an HTML "Just a moment..." challenge, configure that
+health endpoint as public/bypassed and disable Bot Fight challenges that block
+API clients. Keep Access on authenticated API routes until replacement auth exists.
 
 ## Secrets and rotation
 
