@@ -1419,7 +1419,9 @@ openOrder = function (id) {
       : line);
     event.currentTarget.disabled = true;
     try {
-      const saved = await updateOrderInApi(order);
+      const saved = !isOfflineDesktop() && !isLocalShell()
+        ? await updateOrderInApi(order)
+        : order;
       state.orders[state.orders.indexOf(order)] = saved;
       save();
       closeModal();
