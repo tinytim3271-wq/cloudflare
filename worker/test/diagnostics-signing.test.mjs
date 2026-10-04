@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { base64UrlEncode, signDiagnosticsToken } from '../src/security.mjs';
 
 const require = createRequire(import.meta.url);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function toBase64(arrayBuffer) {
   return Buffer.from(new Uint8Array(arrayBuffer)).toString('base64');
@@ -40,6 +44,33 @@ test('worker-signed ECDSA capability token verifies on the J2534 host', async ()
   assert.equal(verified.procedure, 'clear_dtcs');
   assert.equal(verified.vin, payload.vin);
   assert.equal(verified.shopId, 'cross-test-shop');
+
+  const dotnet = spawnSync('dotnet', ['--version'], { encoding: 'utf8' });
+  if (dotnet.error?.code !== 'ENOENT') {
+    assert.equal(dotnet.status, 0, `Unable to run dotnet:\n${dotnet.stderr}`);
+    const csharpVerification = spawnSync('dotnet', [
+      'run',
+      '--project',
+      path.join(repoRoot, 'diagnostics/j2534-service/test/J2534.Host.TokenCompatibility/J2534.Host.TokenCompatibility.csproj'),
+      '--configuration',
+      'Release',
+      '--no-launch-profile',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: {
+        ...process.env,
+        MECHPRO_DIAG_SIGNING_PUBLIC_KEY: publicKeyB64,
+        WORKER_COMPATIBILITY_TOKEN: token,
+      },
+    });
+    assert.equal(
+      csharpVerification.status,
+      0,
+      `C# host token verification failed:\n${csharpVerification.stdout}\n${csharpVerification.stderr}`,
+    );
+  }
 
   // A tampered payload must fail verification.
   const tampered = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson.replace('cross-test-shop', 'evil-shop')))}.${signature}`;
