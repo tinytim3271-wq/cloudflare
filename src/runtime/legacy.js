@@ -1486,8 +1486,12 @@ bind = function () {
 };
 
 function estimateParty(estimate, fallback = {}) {
-  const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer || fallback.customer };
-  const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle || fallback.vehicle, vin: estimate.vin || fallback.vin };
+  const customer = typeof estimate.customer === "object"
+    ? estimate.customer
+    : { ...(estimate.customerDetails || {}), name: estimate.customer || estimate.customerDetails?.name || fallback.customer, phone: estimate.phone || estimate.customerDetails?.phone || fallback.phone, email: estimate.email || estimate.customerDetails?.email, address: estimate.address || estimate.customerDetails?.address };
+  const vehicle = typeof estimate.vehicle === "object"
+    ? estimate.vehicle
+    : { ...(estimate.vehicleDetails || {}), description: estimate.vehicle || estimate.vehicleDetails?.description || fallback.vehicle, vin: estimate.vin || estimate.vehicleDetails?.vin || fallback.vin, plate: estimate.plate || estimate.vehicleDetails?.plate || fallback.plate };
   return { customer, vehicle };
 }
 
