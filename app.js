@@ -2502,17 +2502,261 @@
     }
   });
 
+  // src/modules/estimate-templates.js
+  function calculateShopEstimate(lines = [], {
+    taxRate = SHOP_ESTIMATE_RULES.taxRate,
+    discountPercent = 0,
+    discountReason = "",
+    shopSupplies
+  } = {}) {
+    const normalizedLines = lines.map(normalizeEstimateLine);
+    const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
+    const supplies = labor > 0 ? money(shopSupplies ?? Math.min(
+      SHOP_ESTIMATE_RULES.shopSuppliesCap,
+      labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
+    )) : 0;
+    const base = calculateEstimate(
+      normalizedLines,
+      0,
+      supplies ? [{ description: "Shop supplies", amount: supplies }] : []
+    );
+    const safeDiscountPercent = Math.min(100, Math.max(0, Number(discountPercent) || 0));
+    const discountAmount = money(base.subtotal * safeDiscountPercent / 100);
+    const subtotal = money(base.subtotal - discountAmount);
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
+    const tax = money(subtotal * safeTaxRate / 100);
+    return {
+      ...base,
+      grossSubtotal: base.subtotal,
+      discountPercent: safeDiscountPercent,
+      discountReason: String(discountReason || ""),
+      discountAmount,
+      subtotal,
+      taxRate: safeTaxRate,
+      tax,
+      total: money(subtotal + tax)
+    };
+  }
+  function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
+    const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer };
+    const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle };
+    const insurance = estimate.insurance || {};
+    const laborSource = (estimate.lines || []).filter((line) => line.type === "labor").map((line) => line.notes || line.laborSource).filter(Boolean).join(" ");
+    const complaintParts = [
+      `Claimant: ${customer.name || "Not provided"}.`,
+      estimate.complaint,
+      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number not yet assigned.` : "",
+      laborSource ? `Labor source: ${laborSource}` : "",
+      ...(estimate.shopNotes || []).map((note) => `Shop note: ${note}`)
+    ].filter(Boolean);
+    return {
+      sourceEstimateNumber: estimate.number || "",
+      customer: customer.name || "",
+      phone: customer.phone || estimate.phone || "",
+      email: customer.email || estimate.email || "",
+      address: customer.address || "",
+      vehicle: vehicle.description || "",
+      vin: vehicle.vin || estimate.vin || "",
+      complaint: complaintParts.join("\n"),
+      requestedServices: (estimate.requestedServices || (estimate.lines || []).map((line) => line.description)).join("\n"),
+      estimate: calculateShopEstimate(estimate.lines || [], {
+        taxRate: estimate.taxRate,
+        discountPercent: estimate.discountPercent,
+        discountReason: estimate.discountReason,
+        shopSupplies: estimate.fees?.find((fee) => fee.description === "Shop supplies")?.amount
+      }),
+      exclusions: estimate.exclusions || [],
+      insurance,
+      plate: vehicle.plate || ""
+    };
+  }
+  function estimateFromAssistantDraft(action = {}) {
+    const draft = action.draft || action;
+    const partLines = (draft.parts || []).map((part, index) => ({
+      id: `assistant-part-${index + 1}`,
+      type: "part",
+      description: String(part.description || "Part"),
+      notes: String(part.notes || ""),
+      quantity: Math.max(0, Number(part.quantity) || 1),
+      unitPrice: Math.max(0, Number(part.unitPrice) || 0),
+      partNumber: String(part.partNumber || ""),
+      priceStatus: part.priceStatus === "pending" ? "pending" : "priced"
+    }));
+    const laborLines = (draft.labor || []).map((labor, index) => ({
+      id: `assistant-labor-${index + 1}`,
+      type: "labor",
+      description: String(labor.description || "Labor"),
+      notes: String(labor.notes || labor.source || ""),
+      hours: Math.max(0, Number(labor.hours) || 0),
+      laborRate: SHOP_ESTIMATE_RULES.laborRate,
+      laborSource: String(labor.source || "Customer conversation; verify before authorization")
+    }));
+    const totals = calculateShopEstimate([...partLines, ...laborLines], {
+      discountPercent: draft.discountPercent,
+      discountReason: draft.discountReason
+    });
+    return {
+      id: `assistant-estimate-${Date.now()}`,
+      number: "",
+      status: "draft",
+      customer: {
+        name: String(draft.customer?.name || ""),
+        phone: String(draft.customer?.phone || ""),
+        email: String(draft.customer?.email || ""),
+        address: String(draft.customer?.address || "")
+      },
+      vehicle: {
+        description: String(draft.vehicle?.description || ""),
+        vin: String(draft.vehicle?.vin || ""),
+        plate: String(draft.vehicle?.plate || "")
+      },
+      complaint: String(draft.complaint || ""),
+      requestedServices: (draft.requestedServices || []).map(String),
+      exclusions: (draft.exclusions || []).map(String),
+      shopNotes: (draft.shopNotes || []).map(String),
+      lines: totals.lines,
+      ...totals
+    };
+  }
+  var SHOP_ESTIMATE_RULES, money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
+  var init_estimate_templates = __esm({
+    "src/modules/estimate-templates.js"() {
+      init_estimate_workflow();
+      SHOP_ESTIMATE_RULES = Object.freeze({
+        laborRate: 140,
+        taxRate: 8.25,
+        shopSuppliesRate: 3,
+        shopSuppliesCap: 20
+      });
+      money = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      referenceLines = [
+        {
+          id: "part-headlamp",
+          type: "part",
+          description: "Passenger xenon headlamp",
+          notes: "Right side, xenon without adaptive. DEPO 3401157RMUSHM2.",
+          quantity: 1,
+          unitPrice: 493.79,
+          partNumber: "3401157RMUSHM2",
+          brand: "DEPO"
+        },
+        {
+          id: "part-fog-lamp",
+          type: "part",
+          description: "Passenger fog lamp",
+          notes: "Right side, without AMG styling package. TYC 19042100.",
+          quantity: 1,
+          unitPrice: 17.02,
+          partNumber: "19042100",
+          brand: "TYC"
+        },
+        {
+          id: "part-xenon-module",
+          type: "part",
+          description: "Xenon headlamp control module",
+          notes: "Listed as 222-900-33-00; confirm the module number before ordering.",
+          quantity: 1,
+          unitPrice: 116.4,
+          partNumber: "222-900-33-00"
+        },
+        {
+          id: "part-bumper",
+          type: "part",
+          description: "Front bumper cover",
+          notes: "Without AMG, without Parktronic, CAPA, primed. TECHPRO MB1000458.",
+          quantity: 1,
+          unitPrice: 362.79,
+          partNumber: "MB1000458",
+          brand: "TECHPRO"
+        },
+        {
+          id: "part-fender",
+          type: "part",
+          description: "Passenger front fender",
+          notes: "Front right, CAPA. TECHPRO MB1241149. Beyond repair.",
+          quantity: 1,
+          unitPrice: 374.79,
+          partNumber: "MB1241149",
+          brand: "TECHPRO"
+        },
+        {
+          id: "part-fender-covers",
+          type: "part",
+          description: "Upper and lower passenger fender covers",
+          notes: "Damaged; parts have not been matched to a listing and remain unpriced.",
+          quantity: 1,
+          unitPrice: 0,
+          priceStatus: "pending"
+        },
+        {
+          id: "labor-collision-repair",
+          type: "labor",
+          description: "Collision component replacement labor",
+          notes: "5.3 hours from Open Labor Project estimates for this vehicle: fender 3.7, headlamp 0.9, and one fender liner 0.7. These are not ALLDATA or Mitchell times, are not copied from a labor guide, and are not expert-verified.",
+          hours: 5.3,
+          laborRate: SHOP_ESTIMATE_RULES.laborRate,
+          laborSource: "Open Labor Project estimate"
+        }
+      ];
+      referenceTotals = calculateShopEstimate(referenceLines, {
+        discountPercent: 10,
+        discountReason: "Tech-student discount",
+        shopSupplies: 20
+      });
+      REFERENCE_ESTIMATE = Object.freeze({
+        id: "reference-estimate-est-2026-1004-01",
+        number: "EST-2026-1004-01",
+        date: "2026-10-04",
+        validThrough: "2026-10-18",
+        status: "draft",
+        template: true,
+        customer: {
+          name: "Adrianna Nichole Montemayor",
+          phone: "806-472-8455",
+          email: "adriannamontemayordsi@gmail.com",
+          address: "2801 Amherst Street, Lubbock, Texas 79415",
+          role: "Claimant"
+        },
+        vehicle: {
+          description: "2016 Mercedes-Benz GLA250",
+          vin: "WDCTG4EB8GJ232287",
+          plate: "XDH0971"
+        },
+        insurance: {
+          company: "Westlake Specialty Insurance Company",
+          policy: "FSTX00012637",
+          claimNumber: ""
+        },
+        complaint: "Deer collision. Claimant was not injured. No structural damage was found.",
+        inspectionNotes: "Passenger-side lighting, bumper, fender, and upper/lower fender covers are damaged.",
+        requestedServices: [
+          "Replace passenger xenon headlamp",
+          "Replace passenger fog lamp",
+          "Replace xenon headlamp control module",
+          "Replace front bumper cover",
+          "Replace passenger front fender",
+          "Replace upper and lower passenger fender covers (parts remain unpriced)"
+        ],
+        exclusions: [
+          "Paint is not included.",
+          "Upper and lower fender covers remain unpriced.",
+          "Hidden damage and any additional work require a revised estimate and customer authorization."
+        ],
+        shopNotes: [
+          "Unsent Gmail draft from lee@yourcarguy806.com to Fransan Insurance at fransanins13@gmail.com has the current PDF attached. Do not send without instruction.",
+          "The handwritten insurance-photo sticky address 916 Main St #102 is not the claimant address and must not appear on the customer estimate."
+        ],
+        lines: referenceTotals.lines,
+        fees: referenceTotals.fees,
+        ...referenceTotals
+      });
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
     return emptyState2(message);
-  }
-  function localAssistantReply(message) {
-    const source = aiKeywords(message), order = state.orders.find((item) => [item.id, item.customer, item.vehicle].some((value2) => source.includes(String(value2 || "").toLowerCase())));
-    if (order) return `${order.id} is ${statusLabel[order.status] || order.status} for ${order.customer}. Vehicle: ${order.vehicle}. Concern: ${order.complaint}. Technician: ${order.tech || "Unassigned"}. Promise: ${order.promise || "Not scheduled"}. Verify the record before acting.`;
-    if (/diagnos|check engine|misfire|brake|rough idle|warning light/.test(source)) return "The cloud assistant is temporarily unavailable. Record the exact symptoms, DTCs, freeze-frame data, and vehicle VIN, then verify tests and specifications with current manufacturer service information.";
-    if (/schedule|appointment|available|book/.test(source)) return `There are ${state.appointments.length} appointments loaded locally. Confirm the date, time, customer, and technician before booking.`;
-    return "The cloud assistant is temporarily unavailable because the AI provider is rate-limited. Loaded work orders and local workflow guidance remain available; try again after the provider quota resets.";
   }
   function chatUser(email) {
     return state.users.find((user) => cleanEmail(user.email) === cleanEmail(email));
@@ -2744,9 +2988,9 @@
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = 165, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
-    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), subtotal = detail.reduce((sum, line) => sum + line.total, 0) + 12, tax = Math.round(subtotal * 0.0825 * 100) / 100;
-    return { kind: "estimate", vehicle, lines: detail, fees: [{ description: "Shop supplies", amount: 12 }], subtotal, tax, total: subtotal + tax, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
+    const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]));
+    return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
   function guideLocal(vehicle, repair) {
     return buildRepairGuide(vehicle, repair);
@@ -2775,17 +3019,17 @@
     return `<li><span class="print-check">&#9633;</span><div><b>${escapeHtml(label2)}</b><p>${escapeHtml(text)}</p></div></li>`;
   }
   function workflowResult(result) {
-    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
-    return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
+    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money2(line.parts)}</td><td><b>${money2(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
+    return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money2(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
   }
   function diagnosticsResult(result) {
     return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Diagnostic report</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} priority \xB7 ${result.hours.toFixed(2)} labor hours estimated</p></div></div><div class="ai-result-grid"><section><h3>Probable causes</h3><ul class="ai-causes">${result.causes.map((c) => `<li><b>${escapeHtml(c.cause)}</b><span class="ai-tag ${escapeAttr(c.likelihood.toLowerCase())}">${escapeHtml(c.likelihood)}</span><small>${escapeHtml(c.explanation)}</small></li>`).join("")}</ul></section><section><h3>Recommended tests</h3><ul class="ai-checklist">${result.tests.map((test) => `<li>${icon("check-circle-2", 13)}${escapeHtml(test)}</li>`).join("")}</ul><p class="ai-disclaimer">${escapeHtml(result.notes)}</p></section></div></section>`;
   }
   function estimateResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.summary)}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money(line.labor)}</td><td>${money(line.parts)}</td><td><b>${money(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money(result.subtotal)}</span><span>Tax ${money(result.tax)}</span><b>Total ${money(result.total)}</b></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.summary)}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money2(line.labor)}</td><td>${money2(line.parts)}</td><td><b>${money2(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money2(result.subtotal)}</span><span>Tax ${money2(result.tax)}</span><b>Total ${money2(result.total)}</b></div></section>`;
   }
   function savedEstimates() {
-    const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td>${estimate.status === "approved" ? `<span class="badge paid">Approved</span>` : `<span class="badge estimate">Pending</span>`}</td><td><b>${money(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
+    const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td>${estimate.status === "approved" ? `<span class="badge paid">Approved</span>` : `<span class="badge estimate">Pending</span>`}</td><td><b>${money2(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
     return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Send itemized estimates through the device email or messaging apps and record authorization.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Delivery & approval</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates. Generate one from the Estimator tab.</td></tr>`}</tbody></table></div></section>`;
   }
   function makeEstimate() {
@@ -2800,8 +3044,8 @@
     render();
   }
   function estimateMessage(estimate) {
-    const lines = estimate.lines.map((line) => `${line.service}: ${money(line.total)}`).join("; ");
-    return `Your Car Guy estimate ${estimate.number} for ${estimate.vehicle}. ${lines}. Total ${money(estimate.total)}. Please contact us to approve or sign in person.`;
+    const lines = estimate.lines.map((line) => `${line.service}: ${money2(line.total)}`).join("; ");
+    return `Your Car Guy estimate ${estimate.number} for ${estimate.vehicle}. ${lines}. Total ${money2(estimate.total)}. Please contact us to approve or sign in person.`;
   }
   async function deliverShopMessage({ channel, to, subject, body, metadata }) {
     const config = state.messagingSettings;
@@ -2832,7 +3076,7 @@
   function openSignature(id) {
     const estimate = state.estimates.find((item) => item.id === id);
     if (!estimate) return;
-    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
+    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money2(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
     initSignaturePad(estimate);
   }
   function canvasToBlob(canvas) {
@@ -3134,7 +3378,7 @@
     try {
       const response = await authorizedApiRequest(path, mutation.options);
       if (!response.ok) {
-        const error = new Error(`API request failed: ${response.status}`);
+        const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`);
         error.retryable = response.status >= 500;
         throw error;
       }
@@ -3365,7 +3609,7 @@
   function icon(name, size = 18) {
     return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
   }
-  function money(value2) {
+  function money2(value2) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value2);
   }
   function initials(name) {
@@ -3520,7 +3764,7 @@
     const model = buildHomeModel2({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments || [], now: /* @__PURE__ */ new Date() });
     const count = model.attention.length;
     const rows = model.attention.slice(0, 6).map((item) => {
-      const detail = item.type === "overdue" ? `${String(item.detail || "").split(" \xB7 ")[0]} \xB7 ${money(item.amount || 0)}` : item.detail;
+      const detail = item.type === "overdue" ? `${String(item.detail || "").split(" \xB7 ")[0]} \xB7 ${money2(item.amount || 0)}` : item.detail;
       return `<button type="button" class="attention-item" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail || "")}</small></button>`;
     }).join("");
     return `<div class="attention-menu"><button class="icon-button" id="attention-toggle" type="button" aria-label="Needs attention${count ? `, ${count} items` : ""}" aria-expanded="false" aria-controls="attention-panel" title="Needs attention">${icon("bell")}${count ? `<span class="attention-badge">${count}</span>` : ""}</button><div class="attention-panel" id="attention-panel" hidden role="dialog" aria-label="Needs attention"><div class="attention-panel-head"><strong>Needs attention</strong><span>${count ? `${count} open` : "All clear"}</span></div>${rows || `<p class="attention-empty">Nothing is waiting. Home shows the full shop snapshot.</p>`}<button class="mini-action attention-home" type="button" data-route="home">Open home</button></div></div>`;
@@ -3562,7 +3806,7 @@
     return visibleOrders().filter((x) => (filter === "all" || (filter === "active" ? !["completed", "invoiced"].includes(x.status) : ["completed", "invoiced"].includes(x.status))) && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some((v) => String(v).toLowerCase().includes(q))));
   }
   function stats() {
-    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]];
+    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money2(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money2(overdueTotal)} outstanding` : "None overdue", "warn"]];
     return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map((x) => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>`;
   }
   function toolbar() {
@@ -3579,7 +3823,7 @@
     return shell(`${heading(shopDayLabel(), "Dispatch board", "Live shop workload, technician assignments, and promise times.")}${stats()}${toolbar()}<div class="board">${lanes}</div>`);
   }
   function orders() {
-    const rows = filtered().map((x) => `<tr data-order="${x.id}"><td class="mono strong">${x.id}</td><td><b>${escapeHtml(x.customer)}</b><small>${escapeHtml(x.phone)}</small></td><td><b>${escapeHtml(x.vehicle)}</b><small class="mono">${escapeHtml(x.vin)}</small></td><td>${badge(x.status)}</td><td>${escapeHtml(x.tech)}<small>${escapeHtml(x.bay)}</small></td><td>${escapeHtml(x.promise)}</td><td><b>${money(x.total)}</b></td></tr>`).join("");
+    const rows = filtered().map((x) => `<tr data-order="${x.id}"><td class="mono strong">${x.id}</td><td><b>${escapeHtml(x.customer)}</b><small>${escapeHtml(x.phone)}</small></td><td><b>${escapeHtml(x.vehicle)}</b><small class="mono">${escapeHtml(x.vin)}</small></td><td>${badge(x.status)}</td><td>${escapeHtml(x.tech)}<small>${escapeHtml(x.bay)}</small></td><td>${escapeHtml(x.promise)}</td><td><b>${money2(x.total)}</b></td></tr>`).join("");
     return shell(`${heading("Operations", "Work orders", "Every estimate, repair, and completed job in one searchable queue.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
   }
   function schedule() {
@@ -3588,7 +3832,7 @@
   function customers() {
     const q = query.toLowerCase(), cards = state.customers.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const visitCount = state.orders.filter((o) => o.customer === x.name).length;
-      return `<article class="customer-card" data-open-customer="${encodeURIComponent(x.name)}"><div class="customer-top"><div class="avatar">${initials(x.name)}</div><div><h3>${escapeHtml(x.name)}</h3><p>${escapeHtml(x.phone)} \xB7 ${escapeHtml(x.email)}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${x.vehicles}</b></div><div><span>Lifetime spend</span><b>${money(x.spend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(x.visits) || 0, visitCount)}</b></div><div><span>Linked ROs</span><b>${visitCount || "None"}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(x.name)}" data-message-phone="${encodeURIComponent(x.phone || "")}" data-message-email="${encodeURIComponent(x.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-open-customer="${encodeURIComponent(x.name)}">${icon("user", 14)} Details</button></div></article>`;
+      return `<article class="customer-card" data-open-customer="${encodeURIComponent(x.name)}"><div class="customer-top"><div class="avatar">${initials(x.name)}</div><div><h3>${escapeHtml(x.name)}</h3><p>${escapeHtml(x.phone)} \xB7 ${escapeHtml(x.email)}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${x.vehicles}</b></div><div><span>Lifetime spend</span><b>${money2(x.spend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(x.visits) || 0, visitCount)}</b></div><div><span>Linked ROs</span><b>${visitCount || "None"}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(x.name)}" data-message-phone="${encodeURIComponent(x.phone || "")}" data-message-email="${encodeURIComponent(x.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-open-customer="${encodeURIComponent(x.name)}">${icon("user", 14)} Details</button></div></article>`;
     }).join("");
     return shell(`${heading("Relationships", "Customers", "Customer contact details, vehicles, and service value at a glance.")}<div class="customer-grid">${cards}</div>`);
   }
@@ -3649,7 +3893,7 @@
     return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
   function operationsInventory() {
-    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
+    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money2(Number(item.cost || 0))}</td><td>${money2(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
     return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>`;
   }
   function visibleCannedServices() {
@@ -3662,7 +3906,7 @@
     const groups = cannedServiceGroups(visibleCannedServices()), tables = groups.map((group) => {
       const rows = group.items.map((item) => {
         const price = Number(item.menuPrice ?? item.partsPrice ?? 0), discount = Number(item.discount || 0);
-        return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>`;
+        return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money2(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>`;
       }).join("");
       return `<h3>${escapeHtml(group.label)}</h3><div class="data-panel"><table><thead><tr><th>Service</th><th>Menu price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
     }).join("");
@@ -4317,7 +4561,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return;
     }
     const bd = invoiceTaxBreakdown(invoice);
-    showModal(`<form class="modal" id="tax-form"><div class="modal-head"><h2>Invoice tax</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>${money(invoice.amount)}</strong></div><div class="form-grid"><label>Taxable subtotal *<input name="subtotal" type="number" step=".01" min="0" value="${bd.subtotal}" required/></label><label>Tax rate % *<input name="taxRate" type="number" step=".01" min="0" value="${bd.taxRate}" required/></label></div><div class="ledger-note">${icon("landmark", 15)} Tax is calculated on the taxable subtotal at the entered rate and posted to Sales Tax Payable when collected.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Save tax</button></div></form>`);
+    showModal(`<form class="modal" id="tax-form"><div class="modal-head"><h2>Invoice tax</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>${money2(invoice.amount)}</strong></div><div class="form-grid"><label>Taxable subtotal *<input name="subtotal" type="number" step=".01" min="0" value="${bd.subtotal}" required/></label><label>Tax rate % *<input name="taxRate" type="number" step=".01" min="0" value="${bd.taxRate}" required/></label></div><div class="ledger-note">${icon("landmark", 15)} Tax is calculated on the taxable subtotal at the entered rate and posted to Sales Tax Payable when collected.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Save tax</button></div></form>`);
     document.querySelector("#tax-form").onsubmit = (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target)), subtotal = Number(data.subtotal), taxRate = Number(data.taxRate);
@@ -4353,7 +4597,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function invoices() {
     const q = query.toLowerCase(), rows = state.invoices.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x);
-      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money(x.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} \xB7 Balance ${money(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money2(x.amount)}</b><small>Subtotal ${money2(bd.subtotal)} \xB7 Tax ${money2(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money2(paid)} \xB7 Balance ${money2(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
     }).join("");
     return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
@@ -4361,7 +4605,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     const invoice = state.invoices.find((item) => item.number === invoiceNumber);
     if (!invoice) return;
     const balance = invoiceBalance(invoice);
-    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>Balance ${money(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`);
+    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>Balance ${money2(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`);
     document.querySelector("#payment-form").onsubmit = (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target)), amount = Number(data.amount);
@@ -4380,7 +4624,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       updateInvoiceInApi(invoice);
       save();
       closeModal();
-      toast(`${money(amount)} ${method} payment recorded for ${invoice.number}`);
+      toast(`${money2(amount)} ${method} payment recorded for ${invoice.number}`);
       render();
     };
   }
@@ -4412,8 +4656,8 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Performance", "Reports", "A concise operational snapshot and state tax filing report based on current shop records.", false)}${stats()}<section class="messaging-panel"><div class="messaging-status ready">${icon("landmark", 17)}<div><strong>Tax filing report \u2014 ${stateName}</strong><span>Sales tax collected, formatted for ${stateName}'s ${t.filingFrequency.toLowerCase()} filing. Change the subscribing state in Shop settings.</span></div></div><form class="form-grid" id="tax-report-form"><label>From date *<input type="date" name="from" value="${result?.from || "2026-08-01"}" required/></label><label>To date *<input type="date" name="to" value="${result?.to || "2026-08-14"}" required/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("file-text", 14)} Generate report</button>${result ? `<button class="secondary" type="button" id="print-tax-report">${icon("printer", 14)} Print report</button>` : ""}</div></form>${result ? taxReportView(result, stateName, t) : ""}</section>`);
   }
   function taxReportView(result, stateName, settings2) {
-    const rows = result.rows.map((row) => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money(row.gross)}</td><td>${money(row.taxable)}</td><td><b>${money(row.tax)}</b></td></tr>`).join("");
-    return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings2.taxId || "Not set"} \xB7 Filing frequency: ${settings2.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>`;
+    const rows = result.rows.map((row) => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money2(row.gross)}</td><td>${money2(row.taxable)}</td><td><b>${money2(row.tax)}</b></td></tr>`).join("");
+    return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings2.taxId || "Not set"} \xB7 Filing frequency: ${settings2.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money2(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money2(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money2(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>`;
   }
   function settings() {
     const t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join("");
@@ -4476,7 +4720,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   }
   function superAdmin() {
     if (platformAccounts === null && !platformAccountsLoading) void loadPlatformAccounts();
-    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
+    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money2(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
     return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
@@ -4518,7 +4762,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
         await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify({ amount: Number(data.amount), reason: data.reason }) });
         closeModal();
         platformAccounts = null;
-        toast(`${money(Number(data.amount))} credit applied`);
+        toast(`${money2(Number(data.amount))} credit applied`);
         render();
       } catch (requestError) {
         error.textContent = requestError.message;
@@ -4945,7 +5189,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.querySelector("#modal-root")?.remove();
   }
   function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) {
-    return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
+    return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money2(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
   }
   function newOrderServiceExplanation(service, fallback) {
     const source = aiKeywords(service);
@@ -4966,10 +5210,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const estimate = readNewOrderEstimate();
     document.querySelectorAll(".new-estimate-line").forEach((row) => {
       const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), total2 = row.querySelector(".estimate-line-total");
-      if (total2) total2.textContent = money(hours * 165 + parts);
+      if (total2) total2.textContent = money2(hours * 165 + parts);
     });
     const summary = document.querySelector("#new-estimate-summary");
-    if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Fees <b>${money(estimate.fees.reduce((sum, fee) => sum + fee.amount, 0))}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+    if (summary) summary.innerHTML = `<span>Labor <b>${money2(estimate.labor)}</b></span><span>Parts <b>${money2(estimate.parts)}</b></span><span>Fees <b>${money2(estimate.fees.reduce((sum, fee) => sum + fee.amount, 0))}</b></span><span>Tax <b>${money2(estimate.tax)}</b></span><strong>Total ${money2(estimate.total)}</strong>`;
     const total = document.querySelector("#new-estimate-total");
     if (total) total.value = estimate.total.toFixed(2);
   }
@@ -5139,7 +5383,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const item = state.inventory.find((record) => record.id === line.inventoryId || line.inventorySku && record.sku === line.inventorySku);
       return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> \xB7 ${escapeHtml(item?.name || line.service)} \xB7 ${Number(line.committedQuantity || 0)} committed</p>`;
     }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map((t) => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map((h) => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`;
-    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
+    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money2(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money2(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money2(x.parts)}<br>Tax: ${money2(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
     bindWorkOrderMileage(".modal");
     if (canManage) {
       const baySelect = document.querySelector("#detail-bay");
@@ -5235,7 +5479,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function operationsAnalytics() {
     const revenue = paymentRecords().reduce((sum, item) => sum + Number(item.amount || 0), 0), inventoryValue = state.inventory.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.cost || 0), 0), completed = state.orders.filter((item) => ["completed", "invoiced"].includes(item.status)), customers2 = [...state.customers].sort((a, b) => Number(b.spend || 0) - Number(a.spend || 0)).slice(0, 5), techs = state.users.filter((user) => user.techName).map((user) => ({ name: user.techName, jobs: completed.filter((order) => order.tech === user.techName).length, hours: state.jobClockEntries.filter((entry) => entry.userId === user.id && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }));
-    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money(revenue)}</strong></article><article><span>Open receivables</span><strong>${money(finance().receivable)}</strong></article><article><span>Inventory value</span><strong>${money(inventoryValue)}</strong></article><article><span>Low stock</span><strong>${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length}</strong></article><article><span>Reminders due</span><strong>${state.reminders.filter((item) => !item.sentAt).length}</strong></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><h2>Technician productivity</h2></div>${techs.map((tech) => `<div class="statement-line"><span>${escapeHtml(tech.name)} \xB7 ${tech.hours.toFixed(2)} tracked hr</span><b>${tech.jobs} completed</b></div>`).join("") || "No completed technician work."}</section><section class="statement"><div class="statement-head"><h2>Customer lifetime value</h2></div>${customers2.map((customer) => `<div class="statement-line"><span>${escapeHtml(customer.name)}</span><b>${money(Number(customer.spend || 0))}</b></div>`).join("")}</section></div>`;
+    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money2(revenue)}</strong></article><article><span>Open receivables</span><strong>${money2(finance().receivable)}</strong></article><article><span>Inventory value</span><strong>${money2(inventoryValue)}</strong></article><article><span>Low stock</span><strong>${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length}</strong></article><article><span>Reminders due</span><strong>${state.reminders.filter((item) => !item.sentAt).length}</strong></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><h2>Technician productivity</h2></div>${techs.map((tech) => `<div class="statement-line"><span>${escapeHtml(tech.name)} \xB7 ${tech.hours.toFixed(2)} tracked hr</span><b>${tech.jobs} completed</b></div>`).join("") || "No completed technician work."}</section><section class="statement"><div class="statement-head"><h2>Customer lifetime value</h2></div>${customers2.map((customer) => `<div class="statement-line"><span>${escapeHtml(customer.name)}</span><b>${money2(Number(customer.spend || 0))}</b></div>`).join("")}</section></div>`;
   }
   function openEstimateDiscount(id) {
     const estimate = state.estimates.find((item) => item.id === id);
@@ -5291,7 +5535,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const customer = state.customers.find((c) => c.name === name);
     if (!customer) return;
     const vehicles = state.vehicles.filter((v) => v.customer === name), orders2 = state.orders.filter((o) => o.customer === name), invs = state.invoices.filter((i) => i.customer === name), payments2 = state.payments.filter((p) => p.customer === name), balance = customerBalance(name);
-    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money(i.amount)}</td><td>${money(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
+    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money2(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money2(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money2(i.amount)}</td><td>${money2(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money2(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
     document.querySelector("#cd-message")?.addEventListener("click", () => {
       closeModal();
       openCustomerMessage(customer.name, customer.phone, customer.email);
@@ -5323,7 +5567,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const vehicle = state.vehicles.find((v) => v.id === id);
     if (!vehicle) return;
     const history = linkedOrders(vehicle), photos = vehicle.photoKeys || [];
-    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
+    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money2(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
     document.querySelector("#vd-edit")?.addEventListener("click", () => {
       closeModal();
       openVehicleForm(vehicle);
@@ -5485,21 +5729,21 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return saveShopEntity("shopsettings", record);
   }
   function employees() {
-    const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role])}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><button class="mini-action" data-toggle-user="${escapeHtml(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></td></tr>`).join("");
+    const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role])}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money2(user.payRate) + " / yr" : money2(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><button class="mini-action" data-toggle-user="${escapeHtml(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></td></tr>`).join("");
     return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Admin sees all data. Technicians see only assigned jobs. Office sees customers, invoices, and accounting. Service writers manage service operations.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Create login</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
   function payroll() {
     syncAllPayroll();
     const period = weekPeriod(), admin = currentUser().role === "admin", people = admin ? state.users.filter((user) => user.active) : [currentUser()], stubs = people.map((user) => payStub(user, period));
-    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}<div class="ai-notice">${icon("landmark", 16)}<span>Payroll figures are a small-shop estimate for planning only. MechPro does not file taxes, generate W-2/1099 forms, or replace a payroll processor.</span></div>${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
+    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}<div class="ai-notice">${icon("landmark", 16)}<span>Payroll figures are a small-shop estimate for planning only. MechPro does not file taxes, generate W-2/1099 forms, or replace a payroll processor.</span></div>${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money2(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
   }
   function payStub(user, period) {
     const lines = state.payrollEntries.filter((entry) => entry.employeeId === user.id && entry.periodKey === period.key), hours = lines.reduce((sum, line) => sum + line.hours, 0), shiftHours = state.shiftEntries.filter((entry) => entry.userId === user.id && entry.clockOut && String(entry.clockIn).slice(0, 10) >= period.key).reduce((sum, entry) => sum + Number(entry.hours || 0), 0), jobPay = lines.reduce((sum, line) => sum + line.amount, 0), salaryPay = user.employmentType === "Salary" ? Number(user.payRate || 0) / 52 : 0, gross = jobPay + salaryPay, federal = Math.round(gross * 0.12 * 100) / 100, fica = Math.round(gross * 0.0765 * 100) / 100, other = 0;
     return { user, period, lines, hours, shiftHours, gross, federal, fica, other, net: Math.max(0, gross - federal - fica - other), salaryPay };
   }
   function payStubMarkup(stub) {
-    const user = stub.user, lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${line.hours.toFixed(2)}</td><td>${money(line.rate)}</td><td><b>${money(line.amount)}</b></td></tr>`).join("");
-    return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / year" : money(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
+    const user = stub.user, lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${line.hours.toFixed(2)}</td><td>${money2(line.rate)}</td><td><b>${money2(line.amount)}</b></td></tr>`).join("");
+    return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money2(user.payRate) + " / year" : money2(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money2(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money2(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money2(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money2(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
   }
   function openEmployee() {
     showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full">Email address *<input type="email" name="email" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
@@ -5559,26 +5803,26 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return shell(`${heading("Financial operations", "Accounting", "Income, expenses, receivables, and books for Your Car Guy.", false)}<div class="accounting-actions"><button class="secondary" id="accounting-export">${icon("download", 14)} Export ledger</button><button class="secondary" id="journal-entry">${icon("book-open-check", 14)} Journal entry</button><button class="primary" id="record-expense">${icon("plus", 14)} Record expense</button></div><div class="accounting-tabs">${tabs.map((x) => `<button class="tab ${accountingTab === x[0] ? "active" : ""}" data-accounting-tab="${x[0]}">${x[1]}</button>`).join("")}</div>${views[accountingTab]}`);
   }
   function profitLoss(data) {
-    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money(data.income)}</strong><small>Paid invoices and posted income</small></article><article><span>Operating expenses</span><strong>${money(data.expenses)}</strong><small>${state.expenses.length} recorded expenses</small></article><article class="${data.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money(data.net)}</strong><small>Cash-basis operating result</small></article><article><span>Accounts receivable</span><strong>${money(data.receivable)}</strong><small>${money(data.overdue)} overdue</small></article><article><span>Sales tax payable</span><strong>${money(data.tax)}</strong><small>From paid work orders</small></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Profit & loss</div><h2>Current activity</h2></div><span class="badge paid">Cash basis</span></div><div class="statement-line"><span>Service revenue</span><b>${money(data.income)}</b></div><div class="statement-line"><span>Operating expenses</span><b>(${money(data.expenses)})</b></div><div class="statement-line total"><span>Net income</span><b>${money(data.net)}</b></div></section><section class="statement"><div class="statement-head"><div><div class="eyebrow">Controls</div><h2>Month-end checklist</h2></div>${icon("list-checks", 18)}</div><p>Review overdue receivables, reconcile the operating account, and set aside sales tax before filing.</p><small>Financial reporting is generated from records stored in this application.</small></section></div>`;
+    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money2(data.income)}</strong><small>Paid invoices and posted income</small></article><article><span>Operating expenses</span><strong>${money2(data.expenses)}</strong><small>${state.expenses.length} recorded expenses</small></article><article class="${data.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money2(data.net)}</strong><small>Cash-basis operating result</small></article><article><span>Accounts receivable</span><strong>${money2(data.receivable)}</strong><small>${money2(data.overdue)} overdue</small></article><article><span>Sales tax payable</span><strong>${money2(data.tax)}</strong><small>From paid work orders</small></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Profit & loss</div><h2>Current activity</h2></div><span class="badge paid">Cash basis</span></div><div class="statement-line"><span>Service revenue</span><b>${money2(data.income)}</b></div><div class="statement-line"><span>Operating expenses</span><b>(${money2(data.expenses)})</b></div><div class="statement-line total"><span>Net income</span><b>${money2(data.net)}</b></div></section><section class="statement"><div class="statement-head"><div><div class="eyebrow">Controls</div><h2>Month-end checklist</h2></div>${icon("list-checks", 18)}</div><p>Review overdue receivables, reconcile the operating account, and set aside sales tax before filing.</p><small>Financial reporting is generated from records stored in this application.</small></section></div>`;
   }
   function arView(data) {
-    const rows = data.open.map((x) => `<tr><td class="mono"><b>${x.number}</b></td><td>${x.customer}</td><td>${x.due}</td><td>${badge(x.status)}</td><td><b>${money(x.amount)}</b></td></tr>`).join("");
-    return `<div class="accounting-summary"><span>${data.open.length} open invoices</span><strong>${money(data.receivable)} outstanding</strong></div><div class="data-panel"><table><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No open receivables.</td></tr>`}</tbody></table></div>`;
+    const rows = data.open.map((x) => `<tr><td class="mono"><b>${x.number}</b></td><td>${x.customer}</td><td>${x.due}</td><td>${badge(x.status)}</td><td><b>${money2(x.amount)}</b></td></tr>`).join("");
+    return `<div class="accounting-summary"><span>${data.open.length} open invoices</span><strong>${money2(data.receivable)} outstanding</strong></div><div class="data-panel"><table><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No open receivables.</td></tr>`}</tbody></table></div>`;
   }
   function expenseView() {
-    const rows = [...state.expenses].reverse().map((x) => `<tr><td>${x.date}</td><td><b>${x.vendor}</b><small>${x.memo || "No memo"}</small></td><td>${x.category}</td><td class="mono">${x.account || expenseAccount(x.category)}</td><td><b>${money(x.amount)}</b></td></tr>`).join(""), total = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
-    return `<div class="accounting-summary"><span>${state.expenses.length} recorded expenses</span><strong>${money(total)} total</strong></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Vendor & memo</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No expenses recorded.</td></tr>`}</tbody></table></div>`;
+    const rows = [...state.expenses].reverse().map((x) => `<tr><td>${x.date}</td><td><b>${x.vendor}</b><small>${x.memo || "No memo"}</small></td><td>${x.category}</td><td class="mono">${x.account || expenseAccount(x.category)}</td><td><b>${money2(x.amount)}</b></td></tr>`).join(""), total = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
+    return `<div class="accounting-summary"><span>${state.expenses.length} recorded expenses</span><strong>${money2(total)} total</strong></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Vendor & memo</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No expenses recorded.</td></tr>`}</tbody></table></div>`;
   }
   function ledger() {
     const receipts = paymentRecords().map((payment) => ({ date: payment.receivedAt, reference: payment.reference || payment.invoiceNumber, description: `${payment.method === "cash" ? "Cash" : "Processor"} payment \u2014 ${payment.customer} \xB7 ${payment.invoiceNumber}`, debitAccount: payment.method === "cash" ? "1010" : "1020", creditAccount: "1100", amount: payment.amount })), expense = state.expenses.map((x) => ({ date: x.date, reference: "EXP", description: `${x.vendor}${x.memo ? ` \u2014 ${x.memo}` : ""}`, debitAccount: x.account || expenseAccount(x.category), creditAccount: "1000", amount: Number(x.amount) }));
     return [...receipts, ...expense, ...state.journalEntries].sort((a, b) => String(b.date).localeCompare(String(a.date)));
   }
   function ledgerView() {
-    const rows = ledger().map((x) => `<tr><td>${x.date}</td><td class="mono">${x.reference || "JE"}</td><td>${x.description}</td><td class="mono">${x.debitAccount}</td><td class="mono">${x.creditAccount}</td><td><b>${money(x.amount)}</b></td></tr>`).join("");
+    const rows = ledger().map((x) => `<tr><td>${x.date}</td><td class="mono">${x.reference || "JE"}</td><td>${x.description}</td><td class="mono">${x.debitAccount}</td><td class="mono">${x.creditAccount}</td><td><b>${money2(x.amount)}</b></td></tr>`).join("");
     return `<div class="ledger-note">${icon("scale", 15)} Every entry is balanced: equal debit and credit amounts are posted.</div><div class="data-panel"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Debit</th><th>Credit</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No journal activity.</td></tr>`}</tbody></table></div>`;
   }
   function accountView() {
-    const d = finance(), balance = (x) => x.code === "1000" ? d.income - d.expenses : x.code === "1100" ? d.receivable : x.code === "2100" ? d.tax : x.code === "4000" ? d.income : ["5000", "6100", "6200", "6300"].includes(x.code) ? state.expenses.filter((e) => (e.account || expenseAccount(e.category)) === x.code).reduce((s, e) => s + Number(e.amount), 0) : 0, rows = state.chartOfAccounts.map((x) => `<tr><td class="mono"><b>${x.code}</b></td><td><b>${x.name}</b></td><td>${x.type}</td><td><b>${money(balance(x))}</b></td></tr>`).join("");
+    const d = finance(), balance = (x) => x.code === "1000" ? d.income - d.expenses : x.code === "1100" ? d.receivable : x.code === "2100" ? d.tax : x.code === "4000" ? d.income : ["5000", "6100", "6200", "6300"].includes(x.code) ? state.expenses.filter((e) => (e.account || expenseAccount(e.category)) === x.code).reduce((s, e) => s + Number(e.amount), 0) : 0, rows = state.chartOfAccounts.map((x) => `<tr><td class="mono"><b>${x.code}</b></td><td><b>${x.name}</b></td><td>${x.type}</td><td><b>${money2(balance(x))}</b></td></tr>`).join("");
     return `<div class="data-panel"><table><thead><tr><th>Account</th><th>Name</th><th>Type</th><th>Activity balance</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function openExpense() {
@@ -5703,12 +5947,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function printInvoice(number) {
     const invoice = state.invoices.find((item) => item.number === number);
     if (!invoice) return;
-    const profile = shopProfile(), brand = printableBrand(profile), breakdown = invoiceTaxBreakdown(invoice), paid = invoicePaid(invoice), balance = invoiceBalance(invoice), customer = state.customers.find((item) => item.name === invoice.customer), order = state.orders.find((item) => item.id === invoice.ro), payments2 = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money(Number(payment.amount || 0))}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
+    const profile = shopProfile(), brand = printableBrand(profile), breakdown = invoiceTaxBreakdown(invoice), paid = invoicePaid(invoice), balance = invoiceBalance(invoice), customer = state.customers.find((item) => item.name === invoice.customer), order = state.orders.find((item) => item.id === invoice.ro), payments2 = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money2(Number(payment.amount || 0))}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
     if (!win) {
       toast("Allow pop-ups to print the invoice");
       return;
     }
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span{color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice summary</h2><table><thead><tr><th>Description</th><th>Amount</th></tr></thead><tbody><tr><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money(breakdown.subtotal)}</td></tr><tr><td>Sales tax (${Number(breakdown.taxRate || 0)}%)</td><td>${money(breakdown.tax)}</td></tr></tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money(breakdown.subtotal)}</b></p><p><span>Tax</span><b>${money(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money(invoice.amount)}</b></p><p><span>Payments</span><b>-${money(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span{color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice summary</h2><table><thead><tr><th>Description</th><th>Amount</th></tr></thead><tbody><tr><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money2(breakdown.subtotal)}</td></tr><tr><td>Sales tax (${Number(breakdown.taxRate || 0)}%)</td><td>${money2(breakdown.tax)}</td></tr></tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money2(breakdown.subtotal)}</b></p><p><span>Tax</span><b>${money2(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money2(invoice.amount)}</b></p><p><span>Payments</span><b>-${money2(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money2(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
     win.document.close();
   }
   function invoiceNumberForOrder(order) {
@@ -5906,7 +6150,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const firstName = String(user.name || "there").split(/\s+/)[0];
     const attention = model.attention.map((item) => {
       const tone = item.type === "overdue" ? "warn" : item.type === "parts" ? "parts" : "assign";
-      const detail = item.type === "overdue" ? `${item.detail.split(" \xB7 ")[0]} \xB7 ${money(item.amount || 0)}` : item.detail;
+      const detail = item.type === "overdue" ? `${item.detail.split(" \xB7 ")[0]} \xB7 ${money2(item.amount || 0)}` : item.detail;
       return `<button class="home-row ${tone}" type="button" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><span class="home-row-icon">${icon(item.type === "overdue" ? "clock-alert" : item.type === "parts" ? "package" : "user-plus", 16)}</span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail)}</small></span>${icon("chevron-right", 14)}</button>`;
     }).join("");
     const todayJobs = model.todayJobs.map((order) => `<button class="home-job" type="button" data-order="${escapeHtml(order.id)}"><div><span class="mono">${escapeHtml(order.id)}</span>${badge(order.status)}</div><strong>${escapeHtml(order.customer)}</strong><small>${escapeHtml(order.vehicle)}</small><span class="home-job-meta">${icon("clock-3", 12)}${escapeHtml(order.promise || "Unscheduled")} \xB7 ${escapeHtml(order.tech || "Unassigned")}</span></button>`).join("");
@@ -6089,7 +6333,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return estimate;
   }
   function inventoryPartOptions(selected = "") {
-    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money(item.price)}</option>`).join("")}`;
+    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money2(item.price)}</option>`).join("")}`;
   }
   function estimateEditorLine(line = {}, index = 0, removable = true) {
     const item = normalizeEstimateLine(line, index), part = item.type === "part";
@@ -6104,7 +6348,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
     </div>
-    <div class="job-line-total"><span>Line total</span><b>${money(item.total)}</b></div>
+    <div class="job-line-total"><span>Line total</span><b>${money2(item.total)}</b></div>
   </article>`;
   }
   function estimateFromEditor(root, options = root?._estimateOptions || {}) {
@@ -6141,10 +6385,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
       row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
       row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
-      row.querySelector(".job-line-total b").textContent = money(quantity * rate);
+      row.querySelector(".job-line-total b").textContent = money2(quantity * rate);
     });
     const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
-    if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Subtotal <b>${money(estimate.subtotal)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+    if (summary) summary.innerHTML = `<span>Labor <b>${money2(estimate.labor)}</b></span><span>Parts <b>${money2(estimate.parts)}</b></span><span>Subtotal <b>${money2(estimate.subtotal)}</b></span><span>Tax <b>${money2(estimate.tax)}</b></span><strong>Total ${money2(estimate.total)}</strong>`;
     const total = document.querySelector("#new-estimate-total");
     if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
   }
@@ -6185,7 +6429,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     try {
       const link = await ensureCustomerDocumentLink("estimate", order.id);
       const subject = `Estimate ${order.id} \u2014 ${state.messagingSettings.shopName || "MechPro"}`;
-      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
+      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money2(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
       const delivery = await deliverShopMessage({ channel, to, subject, body, metadata: { type: "estimate", workOrderId: order.id, approvalUrl: link.url } });
       order.lastEstimateLink = { url: link.url, expiresAt: link.expiresAt, sentAt: now(), channel, deliveryMode: delivery.mode };
       await updateOrderInApi(order);
@@ -6198,8 +6442,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function onsiteSignatureModal(kind, record) {
     const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
     const number = kind === "estimate" ? record.id : record.number;
-    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
-    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money2(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money2(line.laborRate)}`}</small></span><strong>${money2(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money2(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
     let drawing = false, drawn = false;
     const position = (event) => {
@@ -6276,9 +6520,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       }
     };
   }
-  function jobCardLineTable(estimate) {
-    return `<div class="job-card-lines">${estimate.lines.map((line) => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} \xD7 ${money(line.unitPrice)}${line.partNumber || line.inventorySku ? ` \xB7 #${escapeHtml(line.partNumber || line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr \xD7 ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
-  }
   function jobWorkflowSteps(order, invoice) {
     const approval = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
     return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
@@ -6296,6 +6537,157 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     closeModal();
     toast(`${saved.id} completed and invoice generated`);
     render();
+  }
+  function estimateParty(estimate, fallback = {}) {
+    const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer || fallback.customer };
+    const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle || fallback.vehicle, vin: estimate.vin || fallback.vin };
+    return { customer, vehicle };
+  }
+  function estimateLinePresentation(line) {
+    const pending = line.priceStatus === "pending";
+    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money2(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money2(line.laborRate)}`;
+    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money2(line.total)}</b></article>`;
+  }
+  function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
+    const { customer, vehicle } = estimateParty(estimate, record);
+    const parts = (estimate.lines || []).filter((line) => line.type === "part");
+    const labor = (estimate.lines || []).filter((line) => line.type === "labor");
+    const supply = (estimate.fees || []).find((fee) => /shop supplies/i.test(fee.description));
+    const exclusions = estimate.exclusions || record.exclusions || [];
+    const insurance = estimate.insurance || record.insurance || {};
+    const complaint = estimate.complaint || record.complaint || "";
+    const number = estimate.number || record.estimateNumber || record.id || "";
+    return `<section class="reference-estimate-document ${standalone ? "standalone" : ""}">
+    <header class="reference-estimate-header"><div><div class="eyebrow">Reliable Automotive Services</div><h2>Service estimate</h2><p>2312 118th Street Suite Q \xB7 Lubbock, Texas \xB7 (806) 776-4460</p></div><div><b>${escapeHtml(number)}</b><span>${locked ? "Approved lines locked" : "Draft \xB7 review before authorization"}</span></div></header>
+    <div class="reference-party-grid">
+      <section><span>Customer</span><h3>${escapeHtml(customer.name || "Customer not provided")}</h3><p>${escapeHtml(customer.phone || record.phone || "")}${customer.email ? `<br>${escapeHtml(customer.email)}` : ""}${customer.address ? `<br>${escapeHtml(customer.address)}` : ""}</p></section>
+      <section><span>Vehicle</span><h3>${escapeHtml(vehicle.description || "Vehicle not provided")}</h3><p>${vehicle.vin ? `VIN ${escapeHtml(vehicle.vin)}` : "VIN not provided"}${vehicle.plate ? `<br>Plate ${escapeHtml(vehicle.plate)}` : ""}${insurance.policy ? `<br>${escapeHtml(insurance.company || "Insurance")} \xB7 Policy ${escapeHtml(insurance.policy)}` : ""}</p></section>
+    </div>
+    <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
+    <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money2(estimate.parts)}</b></div></section>
+    <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
+    <section class="reference-totals">
+      <div><span>Labor</span><b>${money2(estimate.labor)}</b></div>
+      <div><span>Shop supplies</span><b>${money2(supply?.amount || 0)}</b></div>
+      <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` \xB7 ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money2(estimate.discountAmount)}` : money2(0)}</b></div>
+      <div><span>Tax \xB7 ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money2(estimate.tax)}</b></div>
+      <div class="total"><span>Estimate total</span><b>${money2(estimate.total)}</b></div>
+    </section>
+    <aside class="reference-exclusions"><strong>Not included / still pending</strong><ul>${exclusions.length ? exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Additional or hidden work is not included without a revised estimate and authorization.</li>"}</ul></aside>
+  </section>`;
+  }
+  function availableEstimateSources() {
+    return [
+      REFERENCE_ESTIMATE,
+      ...state.estimates.map((estimate) => ({ ...estimate, id: estimate.id || estimate.number }))
+    ];
+  }
+  function estimateSourceById(id) {
+    return availableEstimateSources().find((estimate) => String(estimate.id) === String(id));
+  }
+  function normalizedEstimateSource(estimate) {
+    if (!estimate) return null;
+    const totals = calculateShopEstimate(expandedEstimateLines(estimate), {
+      taxRate: estimate.taxRate ?? state.taxSettings.rate,
+      discountPercent: estimate.discountPercent,
+      discountReason: estimate.discountReason,
+      shopSupplies: estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount
+    });
+    return { ...estimate, ...totals };
+  }
+  function showEstimatePreview(estimate) {
+    if (!estimate) return;
+    const totals = normalizedEstimateSource(estimate);
+    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
+    document.querySelector("#preview-fill-work-order").onclick = () => openNew(workOrderDraftFromEstimate(totals));
+  }
+  function addEstimateSourceControls(form) {
+    const body = form.querySelector(".modal-body");
+    if (!body || document.querySelector("#estimate-source-picker")) return;
+    const options = availableEstimateSources().map((estimate) => `<option value="${escapeAttr(estimate.id)}">${escapeHtml(estimate.number || "Saved draft")} \xB7 ${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer || "Customer")}</option>`).join("");
+    body.insertAdjacentHTML("afterbegin", `<section class="estimate-fill-panel"><div><div class="eyebrow">Optional estimate fill</div><h3>Start from a completed estimate</h3><p>A blank order stays blank. Choose an estimate and apply it only when it belongs to this customer.</p></div><div><select id="estimate-source-picker"><option value="">Select an estimate\u2026</option>${options}</select><button type="button" class="secondary" id="apply-estimate-source">${icon("clipboard-plus", 14)} Fill fields</button></div></section>`);
+    const estimator = form.querySelector(".new-order-estimator");
+    estimator?.insertAdjacentHTML("beforeend", `<div class="estimate-adjustments"><label>Shop supplies<input name="shopSupplies" type="number" min="0" step=".01" placeholder="Auto: 3% of labor, max $20"/></label><label>Discount %<input name="estimateDiscount" type="number" min="0" max="100" step=".1" value="0"/></label><label>Discount reason<input name="estimateDiscountReason" placeholder="Optional"/></label></div>`);
+    form.querySelectorAll("[name=shopSupplies],[name=estimateDiscount],[name=estimateDiscountReason]").forEach((input) => input.addEventListener("input", () => refreshEstimateEditor(form.querySelector("#new-estimate-lines"))));
+    document.querySelector("#apply-estimate-source").onclick = () => {
+      const estimate = estimateSourceById(document.querySelector("#estimate-source-picker").value);
+      if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+    };
+  }
+  function applyWorkOrderDraftToForm(form, draft) {
+    const customerSelect = form.elements.customerSelect;
+    const option = [...customerSelect.options].find((item) => item.value.toLowerCase() === draft.customer.toLowerCase());
+    customerSelect.value = option?.value || "__new__";
+    customerSelect.dispatchEvent(new Event("change"));
+    if (!option) form.elements.customer.value = draft.customer;
+    form.elements.phone.value = draft.phone || "";
+    form.elements.vehicleSelect.value = "";
+    form.elements.vehicle.value = draft.vehicle || "";
+    form.elements.vehicle.readOnly = false;
+    form.elements.vin.value = draft.vin || "";
+    form.elements.complaint.value = draft.complaint || "";
+    form.elements.requestedServices.value = draft.requestedServices || "";
+    const root = form.querySelector("#new-estimate-lines");
+    root.dataset.sourceEstimateNumber = draft.sourceEstimateNumber || "";
+    root.dataset.exclusions = JSON.stringify(draft.exclusions || []);
+    root.dataset.insurance = JSON.stringify(draft.insurance || {});
+    root.innerHTML = (draft.estimate?.lines || []).map((line, index) => estimateEditorLine(line, index)).join("");
+    form.elements.shopSupplies.value = draft.estimate?.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "";
+    form.elements.estimateDiscount.value = draft.estimate?.discountPercent || 0;
+    form.elements.estimateDiscountReason.value = draft.estimate?.discountReason || "";
+    bindEstimateEditor(root);
+    refreshEstimateEditor(root);
+    toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
+  }
+  function assistantMessageMarkup(item, index) {
+    const actions = (item.actions || []).map((action, actionIndex) => action.kind === "estimate_work_order_draft" ? `<button type="button" class="assistant-draft-action" data-assistant-draft="${index}:${actionIndex}">${icon("clipboard-plus", 14)} Save estimate & fill work order</button>` : "").join("");
+    return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
+  }
+  async function saveAssistantDraft(action) {
+    const estimate = estimateFromAssistantDraft(action);
+    const number = `EST-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
+    const record = {
+      ...estimate,
+      id: `estimate-${Date.now()}`,
+      number,
+      createdAt: now(),
+      status: "pending",
+      customer: estimate.customer.name,
+      customerDetails: estimate.customer,
+      phone: estimate.customer.phone,
+      email: estimate.customer.email,
+      address: estimate.customer.address,
+      vehicle: estimate.vehicle.description,
+      vehicleDetails: estimate.vehicle,
+      vin: estimate.vehicle.vin,
+      plate: estimate.vehicle.plate
+    };
+    state.estimates.push(record);
+    await pushEstimateToApi(record);
+    save();
+    closeModal();
+    openNew(workOrderDraftFromEstimate({
+      ...estimate,
+      number,
+      customer: estimate.customer,
+      vehicle: estimate.vehicle
+    }));
+  }
+  function bindAssistantDraftActions() {
+    document.querySelectorAll("[data-assistant-draft]").forEach((button) => {
+      button.onclick = async () => {
+        const [messageIndex, actionIndex] = button.dataset.assistantDraft.split(":").map(Number);
+        const action = assistantConversation[messageIndex]?.actions?.[actionIndex];
+        if (!action) return;
+        button.disabled = true;
+        try {
+          await saveAssistantDraft(action);
+        } catch (error) {
+          button.disabled = false;
+          toast(error.message || "The estimate draft could not be saved");
+        }
+      };
+    });
   }
   async function startApp() {
     if (isOfflineDesktop()) {
@@ -6335,7 +6727,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -6355,6 +6747,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_entity_persistence();
       init_mutation_queue_store();
       init_estimate_workflow();
+      init_estimate_templates();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -6488,7 +6881,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         return shell(`${heading("Connected workflow", "Shop operations", "Linked operational records and performance.", false)}<div class="accounting-tabs ops-tabs">${[["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"], ["analytics", "Analytics"]].map((tab) => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${operationsAnalytics()}`);
       };
       savedEstimates = function() {
-        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td><span class="badge ${estimate.status === "approved" ? "paid" : estimate.status === "declined" ? "overdue" : "estimate"}">${escapeHtml(estimate.status)}</span><small>${escapeHtml(estimate.decisionNote || "")}</small></td><td><b>${money(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount \xB7 ${escapeHtml(estimate.discountReason || "")}` : "No discount"}</small></td><td><div class="estimate-actions"><button class="mini-action" data-estimate-discount="${estimate.id}">${icon("percent", 13)} Discount</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button>${estimate.status === "pending" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${estimate.id}">${icon("circle-x", 13)} Decline</button>` : ""}</div></td></tr>`).join("");
+        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td><span class="badge ${estimate.status === "approved" ? "paid" : estimate.status === "declined" ? "overdue" : "estimate"}">${escapeHtml(estimate.status)}</span><small>${escapeHtml(estimate.decisionNote || "")}</small></td><td><b>${money2(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount \xB7 ${escapeHtml(estimate.discountReason || "")}` : "No discount"}</small></td><td><div class="estimate-actions"><button class="mini-action" data-estimate-discount="${estimate.id}">${icon("percent", 13)} Discount</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button>${estimate.status === "pending" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${estimate.id}">${icon("circle-x", 13)} Decline</button>` : ""}</div></td></tr>`).join("");
         return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Discount, send, approve with a signature, or record a declined decision.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Decision</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
       };
       bindEstimateActionsCore = bindEstimateActions;
@@ -6506,7 +6899,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       newOrderEstimateRow = function(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0, discount: 0 }) {
         const inventoryOptions = state.inventory.map((item) => `<option value="${escapeHtml(item.id)}" ${line.inventoryId === item.id ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} (${Number(item.quantity || 0)} on hand)</option>`).join("");
-        return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes || line.description || "")}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || line.laborHours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts ?? line.partsPrice ?? 0).toFixed(2)}"/></label><label>Discount %<input class="estimate-discount" type="number" min="0" max="100" step=".1" value="${Number(line.discount || 0)}"/></label><label>Inventory SKU<select class="estimate-inventory"><option value="">Not linked</option>${inventoryOptions}</select></label><label>Committed quantity<input class="estimate-committed-quantity" type="number" min=".01" step=".01" value="${Number(line.committedQuantity || 1)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money((Number(line.hours || line.laborHours || 0) * 165 + Number(line.parts ?? line.partsPrice ?? 0)) * (1 - Number(line.discount || 0) / 100))}</b></div></div></article>`;
+        return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes || line.description || "")}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || line.laborHours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts ?? line.partsPrice ?? 0).toFixed(2)}"/></label><label>Discount %<input class="estimate-discount" type="number" min="0" max="100" step=".1" value="${Number(line.discount || 0)}"/></label><label>Inventory SKU<select class="estimate-inventory"><option value="">Not linked</option>${inventoryOptions}</select></label><label>Committed quantity<input class="estimate-committed-quantity" type="number" min=".01" step=".01" value="${Number(line.committedQuantity || 1)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money2((Number(line.hours || line.laborHours || 0) * 165 + Number(line.parts ?? line.partsPrice ?? 0)) * (1 - Number(line.discount || 0) / 100))}</b></div></div></article>`;
       };
       readNewOrderEstimate = function() {
         const lines = [...document.querySelectorAll(".new-estimate-line")].map((row) => {
@@ -6519,10 +6912,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const form = document.querySelector("#new-form"), trip = refreshMileagePreview(form, { rate: shopMileageRate() }), estimate = applyMileageToEstimate(readNewOrderEstimate(), trip.roundTrip, shopMileageRate(), state.taxSettings.rate);
         document.querySelectorAll(".new-estimate-line").forEach((row) => {
           const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0));
-          row.querySelector(".estimate-line-total").textContent = money((hours * 165 + parts) * (1 - discount / 100));
+          row.querySelector(".estimate-line-total").textContent = money2((hours * 165 + parts) * (1 - discount / 100));
         });
         const summary = document.querySelector("#new-estimate-summary");
-        if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Discount <b>-${money(estimate.discountAmount)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Labor <b>${money2(estimate.labor)}</b></span><span>Parts <b>${money2(estimate.parts)}</b></span><span>Discount <b>-${money2(estimate.discountAmount)}</b></span><span>Tax <b>${money2(estimate.tax)}</b></span><strong>Total ${money2(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total) total.value = estimate.total.toFixed(2);
       };
@@ -6532,7 +6925,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const lines = document.querySelector("#new-estimate-lines");
         const canned = visibleCannedServices();
         if (!lines || !canned.length) return;
-        const picker = cannedServiceGroups(canned).map((group) => `<div class="canned-service-picker"><span>${escapeHtml(group.label)}</span>${group.items.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${escapeAttr(service.id)}">${escapeHtml(service.name)} \xB7 ${money(Number(service.menuPrice ?? service.partsPrice ?? 0))}</button>`).join("")}</div>`).join("");
+        const picker = cannedServiceGroups(canned).map((group) => `<div class="canned-service-picker"><span>${escapeHtml(group.label)}</span>${group.items.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${escapeAttr(service.id)}">${escapeHtml(service.name)} \xB7 ${money2(Number(service.menuPrice ?? service.partsPrice ?? 0))}</button>`).join("")}</div>`).join("");
         lines.insertAdjacentHTML("beforebegin", picker);
         document.querySelectorAll("[data-add-canned-service]").forEach((button) => button.onclick = () => {
           const service = visibleCannedServices().find((item) => item.id === button.dataset.addCannedService);
@@ -6757,7 +7150,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} \xB7 Balance ${money(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${escapeHtml(invoice.number)}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money2(invoice.amount)}</b><small>Subtotal ${money2(bd.subtotal)} \xB7 Tax ${money2(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money2(paid)} \xB7 Balance ${money2(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${escapeHtml(invoice.number)}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, payments, and branded print copies.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
       };
@@ -6778,12 +7171,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         });
       };
       printCustomerStatement = function(name) {
-        const invoices2 = state.invoices.filter((invoice) => invoice.customer === name), payments2 = paymentRecords().filter((payment) => payment.customer === name), balance = customerBalance(name), profile = shopProfile(), brand = printableBrand(profile), invoiceRows = invoices2.map((invoice) => `<tr><td>${escapeHtml(invoice.number)}</td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.status || "")}</td><td>${money(invoice.amount)}</td><td>${money(invoiceBalance(invoice))}</td></tr>`).join(""), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${money(Number(payment.amount || 0))}</td><td>${escapeHtml(payment.invoiceNumber || "")}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
+        const invoices2 = state.invoices.filter((invoice) => invoice.customer === name), payments2 = paymentRecords().filter((payment) => payment.customer === name), balance = customerBalance(name), profile = shopProfile(), brand = printableBrand(profile), invoiceRows = invoices2.map((invoice) => `<tr><td>${escapeHtml(invoice.number)}</td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.status || "")}</td><td>${money2(invoice.amount)}</td><td>${money2(invoiceBalance(invoice))}</td></tr>`).join(""), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${money2(Number(payment.amount || 0))}</td><td>${escapeHtml(payment.invoiceNumber || "")}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
         if (!win) {
           toast("Allow pop-ups to print the statement");
           return;
         }
-        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(name)} statement</title><style>${brand.style}body{font:12px/1.6 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{color:var(--brand)}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.total{margin-top:18px;padding:12px;border-top:4px solid var(--brand);font-size:16px;text-align:right}</style></head><body>${brand.header}<h2>Customer Statement: ${escapeHtml(name)}</h2><p>Generated ${escapeHtml((/* @__PURE__ */ new Date()).toLocaleDateString())}</p><h3>Invoices</h3><table><thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invoiceRows || `<tr><td colspan="5">No invoices.</td></tr>`}</tbody></table><h3>Payments</h3><table><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="4">No payments.</td></tr>`}</tbody></table><p class="total">Account Balance: ${money(balance)}</p><button type="button" onclick="window.print()">Print statement</button></body></html>`);
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(name)} statement</title><style>${brand.style}body{font:12px/1.6 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{color:var(--brand)}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.total{margin-top:18px;padding:12px;border-top:4px solid var(--brand);font-size:16px;text-align:right}</style></head><body>${brand.header}<h2>Customer Statement: ${escapeHtml(name)}</h2><p>Generated ${escapeHtml((/* @__PURE__ */ new Date()).toLocaleDateString())}</p><h3>Invoices</h3><table><thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invoiceRows || `<tr><td colspan="5">No invoices.</td></tr>`}</tbody></table><h3>Payments</h3><table><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="4">No payments.</td></tr>`}</tbody></table><p class="total">Account Balance: ${money2(balance)}</p><button type="button" onclick="window.print()">Print statement</button></body></html>`);
         win.document.close();
       };
       printInspectionReport = function(inspection) {
@@ -6819,14 +7212,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       customers = function() {
         const q = query.toLowerCase(), cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money2(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money2(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Edit customer contact details and safely remove unlinked records.")}<div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice), key = escapeHtml(invoiceRecordKey(invoice));
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} \xB7 Balance ${money(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-edit-invoice="${key}">${icon("pencil", 13)} Edit</button><button class="mini-action danger" data-delete-invoice="${key}">${icon("trash-2", 13)} Delete</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money2(invoice.amount)}</b><small>Subtotal ${money2(bd.subtotal)} \xB7 Tax ${money2(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money2(paid)} \xB7 Balance ${money2(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-edit-invoice="${key}">${icon("pencil", 13)} Edit</button><button class="mini-action danger" data-delete-invoice="${key}">${icon("trash-2", 13)} Delete</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Edit invoice details and safely remove invoices without payment history.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
@@ -6947,19 +7340,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       apiFetchAssistantCore = apiFetch;
       apiFetch = async function(path, options = {}) {
-        try {
-          return await apiFetchAssistantCore(path, options);
-        } catch (error) {
-          if (path === "/ai/assistant") {
-            let message = "";
-            try {
-              message = JSON.parse(options.body || "{}").message || "";
-            } catch {
-            }
-            return { message: localAssistantReply(message) };
-          }
-          throw error;
-        }
+        return apiFetchAssistantCore(path, options);
       };
       if ("serviceWorker" in navigator && isSecureContext && !isDesktopApp) {
         window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch((error) => console.error("Service worker registration failed", error)));
@@ -7023,7 +7404,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       stampDemoAppointments();
       employees = function() {
-        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / yr" : money(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money2(user.payRate) + " / yr" : money2(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
         return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
       };
       openEmployee = function(existing = null) {
@@ -7056,7 +7437,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const q = query.toLowerCase();
         const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money2(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money2(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -7128,7 +7509,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         };
       };
       orders = function() {
-        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money2(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
         return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
       };
       updateOrderInApi = async function(record) {
@@ -7263,11 +7644,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
         const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
-        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
-        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} \xB7 <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} \xB7 ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate \xB7 parts + labor</h3><p>${editNotice}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Subtotal ${money(estimate.subtotal)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money2(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
+        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
         const editorRoot = document.querySelector("#job-estimate-editor");
         if (editorRoot) {
           bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
@@ -7323,7 +7704,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} \xB7 Tax ${money(bd.tax)}</small><small>Balance ${money(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money2(invoice.amount)}</b><small>Subtotal ${money2(bd.subtotal)} \xB7 Tax ${money2(bd.tax)}</small><small>Balance ${money2(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Review the completed job, capture a mobile signature, and collect payment.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
       };
@@ -7366,6 +7747,194 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
           await loadEmployeesFromApi();
           if (state.route === "employees") render();
+        });
+      };
+      estimateEditorLine = function(line = {}, index = 0, removable = true) {
+        const item = normalizeEstimateLine(line, index), part = item.type === "part";
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    <div class="form-grid">
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
+    </div>
+    <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money2(item.total)}</b></div>
+  </article>`;
+      };
+      estimateFromEditor = function(root) {
+        const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
+          const type = row.querySelector(".job-line-type").value;
+          const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+          const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+          const inventory = type === "part" ? state.inventory.find((item) => item.id === row.querySelector(".job-line-inventory").value) : null;
+          return normalizeEstimateLine({
+            id: row.dataset.lineId || `line-${Date.now()}-${index}`,
+            type,
+            description: row.querySelector(".job-line-description").value.trim(),
+            notes: row.querySelector(".job-line-notes").value.trim(),
+            quantity,
+            unitPrice,
+            hours: type === "labor" ? quantity : 0,
+            laborRate: type === "labor" ? unitPrice : 0,
+            inventoryId: inventory?.id || null,
+            inventorySku: inventory?.sku || "",
+            committedQuantity: type === "part" && inventory ? quantity : 0,
+            priceStatus: row.dataset.priceStatus || "priced",
+            laborSource: row.dataset.laborSource || ""
+          }, index);
+        }).filter((line) => line.description && line.quantity > 0);
+        const form = root.closest("form");
+        const suppliesValue = form?.querySelector("[name=shopSupplies]")?.value ?? root.dataset.shopSupplies;
+        const estimate = calculateShopEstimate(lines, {
+          taxRate: state.taxSettings.rate,
+          discountPercent: form?.querySelector("[name=estimateDiscount]")?.value ?? root.dataset.discountPercent,
+          discountReason: form?.querySelector("[name=estimateDiscountReason]")?.value ?? root.dataset.discountReason,
+          shopSupplies: suppliesValue === "" || suppliesValue == null ? void 0 : Number(suppliesValue)
+        });
+        estimate.sourceEstimateNumber = root.dataset.sourceEstimateNumber || "";
+        estimate.exclusions = JSON.parse(root.dataset.exclusions || "[]");
+        estimate.insurance = JSON.parse(root.dataset.insurance || "{}");
+        return estimate;
+      };
+      refreshEstimateEditor = function(root) {
+        root.querySelectorAll(".job-estimate-line").forEach((row) => {
+          const type = row.querySelector(".job-line-type").value;
+          const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+          const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+          row.querySelector(".job-inventory-field").hidden = type !== "part";
+          row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+          row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+          row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
+          row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money2(quantity * rate);
+        });
+        const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
+        const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
+        if (summary) summary.innerHTML = `<span>Parts <b>${money2(estimate.parts)}</b></span><span>Labor <b>${money2(estimate.labor)}</b></span><span>Supplies <b>${money2(supplies)}</b></span><span>Discount <b>-${money2(estimate.discountAmount)}</b></span><span>Tax <b>${money2(estimate.tax)}</b></span><strong>Total ${money2(estimate.total)}</strong>`;
+        const total = document.querySelector("#new-estimate-total");
+        if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
+      };
+      coherentOrderEstimate = function(order) {
+        const source = order.estimate || {};
+        const estimate = calculateShopEstimate(expandedEstimateLines(source), {
+          taxRate: source.taxRate ?? state.taxSettings.rate,
+          discountPercent: source.discountPercent,
+          discountReason: source.discountReason,
+          shopSupplies: source.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount
+        });
+        return {
+          ...estimate,
+          number: source.number || source.sourceEstimateNumber || order.estimateNumber || order.id,
+          summary: source.summary || `Estimate for ${order.vehicle}`,
+          generatedAt: source.generatedAt || now(),
+          complaint: source.complaint || order.complaint,
+          exclusions: source.exclusions || order.exclusions || [],
+          insurance: source.insurance || order.insurance || {}
+        };
+      };
+      openNewEstimateFillCore = openNew;
+      openNew = function(draft = null) {
+        openNewEstimateFillCore();
+        const form = document.querySelector("#new-form");
+        if (!form) return;
+        addEstimateSourceControls(form);
+        if (draft) applyWorkOrderDraftToForm(form, draft);
+      };
+      savedEstimates = function() {
+        const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} \xB7 ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money2(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
+        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money2(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button></div></td></tr>`).join("");
+        return `${reference}<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Review the customer-facing document or explicitly fill a new work order.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
+      };
+      liveAssistant = function() {
+        const rows = assistantConversation.map(assistantMessageMarkup).join("");
+        return `<section class="ai-panel live-assistant"><div class="statement-head"><div><div class="eyebrow">Claude + Deepgram call assistant</div><h2>Talk through the job</h2><p>Speak or type the customer, vehicle, complaint, parts, labor hours and source, and exclusions. MechPro prepares both records for review; it never auto-submits the work order.</p></div>${icon("audio-lines", 20)}</div><div class="assistant-messages" id="assistant-messages">${rows || `<div class="assistant-empty">Ask the assistant to prepare an estimate and work order from the call.</div>`}</div><form class="assistant-form" id="assistant-form"><textarea name="message" rows="2" maxlength="4000" placeholder="Create an estimate and work order for\u2026"></textarea><div class="assistant-actions"><button class="secondary" type="button" id="assistant-mic" title="Record with Deepgram">${icon("mic", 15)} <span>Record</span></button><button class="icon-button" type="button" id="assistant-stop" title="Stop speaking">${icon("volume-x", 15)}</button><button class="primary" type="submit">${icon("send", 14)} Ask assistant</button></div><p class="assistant-provider-note">Voice transcription requires Deepgram. Estimate drafting requires Claude. Missing configuration is reported without a simulated answer.</p></form></section>`;
+      };
+      bindLiveAssistant = function() {
+        const form = document.querySelector("#assistant-form");
+        if (!form) return;
+        const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), micButton = document.querySelector("#assistant-mic");
+        const renderMessages = () => {
+          const list = document.querySelector("#assistant-messages");
+          list.innerHTML = assistantConversation.map(assistantMessageMarkup).join("");
+          list.scrollTop = list.scrollHeight;
+          bindAssistantDraftActions();
+        };
+        const append = (role, content, actions = []) => {
+          assistantConversation.push({ role, content, actions });
+          renderMessages();
+        };
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          if (assistantPaused) return;
+          const message = String(input.value || "").trim();
+          if (!message) return;
+          input.value = "";
+          sendButton.disabled = true;
+          append("user", message);
+          try {
+            const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || void 0, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+            assistantSessionId = result.sessionId || assistantSessionId;
+            const answer = result.message || "The assistant did not return an answer.";
+            append("assistant", answer, result.actions || []);
+            if (!assistantPaused && "speechSynthesis" in window) {
+              speechSynthesis.cancel();
+              speechSynthesis.speak(new SpeechSynthesisUtterance(answer));
+            }
+          } catch (error) {
+            append("assistant", error.message || "The assistant is unavailable.");
+          } finally {
+            sendButton.disabled = assistantPaused;
+          }
+        };
+        document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel());
+        let recorder = null, stream = null, chunks = [];
+        micButton?.addEventListener("click", async () => {
+          if (recorder?.state === "recording") {
+            recorder.stop();
+            return;
+          }
+          if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("Audio recording is not supported in this browser");
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            chunks = [];
+            recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = (event) => {
+              if (event.data.size) chunks.push(event.data);
+            };
+            recorder.onstop = async () => {
+              micButton.disabled = true;
+              micButton.querySelector("span").textContent = "Transcribing\u2026";
+              stream?.getTracks().forEach((track) => track.stop());
+              try {
+                const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+                const result = await apiFetch("/ai/transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+                input.value = result.transcript;
+                form.requestSubmit();
+              } catch (error) {
+                append("assistant", error.message || "Voice transcription is unavailable.");
+              } finally {
+                micButton.disabled = false;
+                micButton.querySelector("span").textContent = "Record";
+              }
+            };
+            recorder.start();
+            micButton.querySelector("span").textContent = "Stop & send";
+            toast("Recording with Deepgram transcription");
+          } catch {
+            toast("Microphone access was not granted");
+          }
+        });
+        bindAssistantDraftActions();
+      };
+      bindReferenceEstimatesCore = bindEstimateActions;
+      bindEstimateActions = function() {
+        bindReferenceEstimatesCore();
+        document.querySelectorAll("[data-preview-estimate]").forEach((button) => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
+        document.querySelectorAll("[data-fill-estimate]").forEach((button) => button.onclick = () => {
+          const estimate = estimateSourceById(button.dataset.fillEstimate);
+          if (estimate) openNew(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
         });
       };
       if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {
