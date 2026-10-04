@@ -34,6 +34,7 @@ import {
   isAiEnabled,
   recordAiUsage,
   runAnthropicTurn,
+  transcribeDeepgramAudio,
 } from './ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
@@ -1095,6 +1096,19 @@ async function handleVoiceSession(request, env, context) {
   headers.delete('Cookie');
   headers.delete('Cf-Access-Jwt-Assertion');
   return stub.fetch(new Request(request, { headers }));
+}
+
+async function handleVoiceTranscription(request, env, context) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'office', 'service_writer', 'technician']);
+  const contentType = request.headers.get('Content-Type') || 'audio/webm';
+  if (!contentType.toLowerCase().startsWith('audio/')) {
+    throw new HttpError(415, 'An audio recording is required');
+  }
+  const contentLength = Number(request.headers.get('Content-Length') || 0);
+  if (contentLength > 10 * 1024 * 1024) throw new HttpError(413, 'Recorded audio must be 10 MB or smaller');
+  const result = await transcribeDeepgramAudio(env, await request.arrayBuffer(), { contentType });
+  return json(result);
 }
 
 async function saveIntegrationSecret(env, shopId, name, value) {
@@ -2289,6 +2303,7 @@ async function route(request, env, analytics) {
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
+  if (path === '/ai/transcribe') return handleVoiceTranscription(request, env, context);
   if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);

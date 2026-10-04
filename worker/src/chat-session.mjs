@@ -59,6 +59,7 @@ export class AiChatSession {
     await this.state.storage.put('updatedAt', new Date().toISOString());
     return json({
       message: result.text,
+      actions: result.actions,
       model: result.model,
       modelFamily: result.family,
       routingReason: result.routingReason,

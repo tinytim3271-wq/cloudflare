@@ -23,6 +23,13 @@ import {
   normalizeEstimateLine,
   workOrderWithEditedEstimate,
 } from '../modules/estimate-workflow.js';
+import {
+  REFERENCE_ESTIMATE,
+  SHOP_ESTIMATE_RULES,
+  calculateShopEstimate,
+  estimateFromAssistantDraft,
+  workOrderDraftFromEstimate,
+} from '../modules/estimate-templates.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
@@ -91,7 +98,7 @@ function aiPhoneForm() { return `${aiFormShell("AI phone intake", "Turn a custom
 function aiKeywords(text) { return String(text || "").toLowerCase() }
 /* removed duplicate diagnoseLocal */
 
-function estimateLocal(vehicle, service, notes = "") { const source = aiKeywords(`${service} ${notes}`), laborRate = 165, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: .5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }]; const detail = lines.map(line => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), subtotal = detail.reduce((sum, line) => sum + line.total, 0) + 12, tax = Math.round(subtotal * .0825 * 100) / 100; return { kind: "estimate", vehicle, lines: detail, fees: [{ description: "Shop supplies", amount: 12 }], subtotal, tax, total: subtotal + tax, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` } }
+function estimateLocal(vehicle, service, notes = "") { const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: .5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }]; const detail = lines.map(line => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...(line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : [])])); return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` } }
 function guideLocal(vehicle, repair) { return buildRepairGuide(vehicle, repair) }
 function phoneLocal(transcript) { const text = aiKeywords(transcript), vehicle = (transcript.match(/(?:19|20)\d{2}\s+[A-Za-z]+(?:\s+[A-Za-z0-9-]+){0,2}/) || ["Vehicle not confirmed"])[0], urgent = /brake|smoke|overheat|stall|no.?start/.test(text), service = /brake/.test(text) ? "Brake system inspection" : /a\/c|warm/.test(text) ? "A/C performance inspection" : /check engine|rough|shake/.test(text) ? "Check-engine diagnostic" : /oil/.test(text) ? "Oil service and inspection" : "Diagnostic inspection"; return { kind: "phone", vehicle, symptoms: transcript.slice(0, 260), service, urgency: urgent ? "Immediate" : "Soon", response: urgent ? "For safety, please avoid driving the vehicle until we can inspect it. We can prioritize an appointment today." : "We can schedule a diagnostic appointment so a technician can verify the concern and provide an accurate estimate.", questions: ["What warning lights are currently on?", "When did the concern begin and does it happen consistently?", "What is the current mileage and have there been recent repairs?"], booking: true } }
 function detailedDiagnosticPlan(vehicle, symptoms, dtc) { const source = aiKeywords(`${symptoms} ${dtc}`), misfire = /misfire|p030|rough|shake/.test(source), brake = /brake|grind|vibrat|pulsat/.test(source), ac = /a\/c|air.?condition|warm air|not cool/.test(source); const common = { vehicle, symptoms, dtc, kind: "diagnostics", urgency: brake ? "High" : misfire ? "Prompt" : "Standard", hours: brake ? 1.5 : misfire ? 2 : 1.5, notes: "Advisory diagnostic plan only. Confirm procedures, specifications, torque values, refrigerant requirements, and safety precautions in current manufacturer service information for the exact VIN." }; const causes = misfire ? [{ cause: "Ignition coil, spark plug, or cylinder-specific ignition fault", likelihood: "High", explanation: "Rough running and P030x-style symptoms most often require ignition and cylinder-contribution checks first.", evidence: "A cylinder-specific misfire counter, worn/fouled plug, weak spark, or a misfire that follows a swapped coil increases confidence.", tools: ["OEM-capable scan tool", "Spark tester", "Digital multimeter", "Torque wrench"], tests: [{ name: "Confirm the affected cylinder and operating conditions", procedure: ["Connect a scan tool and perform a complete module scan before clearing codes.", "Record DTCs, freeze-frame data, fuel trims, coolant temperature, load, RPM, and misfire counters.", "Duplicate the complaint at the recorded speed, load, and temperature when safe."], good: "No abnormal cylinder count; trims and sensor data remain within manufacturer specification.", bad: "One cylinder accumulates counts or the fault repeats under the freeze-frame conditions." }, { name: "Inspect and isolate the ignition component", procedure: ["Disable the engine and inspect the plug, boot, coil, connector, and harness for damage, oil, coolant, carbon tracking, or corrosion.", "Measure plug condition and gap against current service information.", "When manufacturer guidance permits, swap the suspect coil with a known-good cylinder, clear counters, and repeat the operating condition."], good: "Components pass inspection and the misfire remains with the original cylinder.", bad: "The misfire follows the coil or a plug/boot defect is found." }], repairs: ["Replace only the failed plug, boot, coil, or damaged connector after confirmation; inspect companion components for the same wear pattern.", "If ignition passes, continue with injector balance, compression, relative compression, and cylinder leak-down testing before authorizing parts."] }, { cause: "Unmetered air, intake leak, or crankcase ventilation fault", likelihood: "Medium", explanation: "An intake leak can create a lean, unstable idle and secondary misfires, especially when fuel trims improve at higher RPM.", evidence: "High positive trim at idle that decreases near 2,500 RPM, smoke leakage, or a split PCV/intake hose increases confidence.", tools: ["Scan tool", "EVAP-approved smoke machine", "Inspection light", "Service-information vacuum diagram"], tests: [{ name: "Compare fuel trim by engine speed", procedure: ["Warm the engine to closed loop and switch off nonessential loads.", "Record short- and long-term fuel trim for each bank at idle.", "Hold approximately 2,500 RPM and record the same values; compare banks and RPM ranges."], good: "Combined trim remains within manufacturer limits and does not change materially with RPM.", bad: "Positive trim is excessive at idle and improves substantially at higher RPM." }, { name: "Smoke-test the intake system", procedure: ["Key off and follow manufacturer isolation points for the intake and EVAP system.", "Introduce regulated smoke at the specified low pressure.", "Inspect intake boots, manifold seals, brake-booster supply, PCV plumbing, vacuum hoses, and capped ports."], good: "The sealed intake holds smoke with no external leakage.", bad: "Smoke exits a hose, gasket, fitting, diaphragm, or intake component." }], repairs: ["Replace the confirmed leaking hose, seal, gasket, or valve and repair damaged wiring or fittings.", "Clear adaptations only when directed, then recheck trims at idle and 2,500 RPM."] }, { cause: "Fuel injector delivery or mechanical cylinder fault", likelihood: "Minor", explanation: "Injector flow, compression, valve sealing, or timing faults can mimic ignition failure but should be tested after faster primary checks.", evidence: "Misfire stays on the cylinder after ignition checks, injector balance differs, or compression/leak-down is outside specification.", tools: ["Scan tool with injector control", "Fuel-pressure gauge or approved analyzer", "Compression or relative-compression tester", "Cylinder leak-down tester"], tests: [{ name: "Compare injector operation and cylinder sealing", procedure: ["Verify injector command, connector integrity, and audible/measured operation.", "Perform the manufacturer injector balance or contribution test while monitoring safe fuel pressure.", "If delivery is acceptable, perform relative or manual compression and leak-down testing with the engine secured."], good: "Injector pressure drop and cylinder sealing are even and within specification.", bad: "The injector has an unequal pressure drop or cylinder compression/leakage is outside specification." }], repairs: ["Service or replace the confirmed injector only after electrical and pressure checks pass.", "For mechanical leakage, document readings and obtain authorization for the required engine repair or teardown diagnosis."] }] : brake ? [{ cause: "Brake pads below limit and/or rotor thickness variation or runout", likelihood: "High", explanation: "Grinding, vibration, and pulsation commonly result from worn friction material or rotor condition.", evidence: "Pad thickness below limit, metal contact, rotor below discard thickness, measurable runout, or thickness variation increases confidence.", tools: ["Vehicle lift or rated jack stands", "Brake micrometer", "Dial indicator with magnetic base", "Torque wrench"], tests: [{ name: "Measure friction and rotor condition", procedure: ["Confirm the complaint with a controlled road test only if braking remains safe.", "Lift and support the vehicle at approved points; remove wheels and inspect inner and outer pads.", "Measure pad thickness, rotor thickness at multiple indexed points, and lateral runout using the manufacturer procedure.", "Record every reading on the worksheet before disassembly."], good: "Pads, rotor thickness, variation, and runout are within current manufacturer limits.", bad: "Friction is at/below limit, metal contact exists, or any rotor reading exceeds specification." }], repairs: ["Replace pads and service or replace rotors as allowed by measured thickness and manufacturer policy.", "Clean mating surfaces, install approved hardware, torque fasteners and wheels to specification, then perform the required bedding procedure."] }, { cause: "Restricted caliper piston, slide, hose, or uneven application", likelihood: "Medium", explanation: "A restricted corner can overheat a rotor, accelerate one-sided wear, and create a pull or vibration.", evidence: "Side-to-side temperature difference, tapered/uneven pad wear, restricted slide travel, or residual pressure increases confidence.", tools: ["Infrared thermometer or thermal camera", "Brake hose clamps only if manufacturer-approved", "Caliper service tools", "Dial indicator"], tests: [{ name: "Compare wheel-end operation", procedure: ["After a controlled stop sequence, compare wheel-end temperatures without touching hot components.", "Inspect pad wear pattern, slide movement, piston boot, hose routing, and signs of heat damage.", "Follow service information to distinguish mechanical binding from trapped hydraulic pressure."], good: "Temperatures and wear are even; slides and piston move normally with no residual restriction.", bad: "One corner is materially hotter, wear is tapered, or pressure/movement remains restricted." }], repairs: ["Replace or overhaul the confirmed caliper/slide components and heat-damaged friction parts as specified.", "Replace a confirmed restricted hose; bleed with the specified fluid and sequence, then verify pedal reserve and leaks."] }, { cause: "Hub, wheel-bearing, suspension, or wheel-torque contribution", likelihood: "Minor", explanation: "Mounting-face debris, bearing play, suspension looseness, or uneven wheel torque can produce brake-related vibration even when friction parts appear acceptable.", evidence: "Runout changes after rotor indexing, hub runout is excessive, play/noise is present, or wheel torque is uneven.", tools: ["Dial indicator", "Torque wrench", "Hub cleaning tools", "Approved chassis inspection tools"], tests: [{ name: "Isolate hub and chassis contribution", procedure: ["Inspect wheel fastener condition and record removal torque concerns.", "Clean the hub/rotor mounting faces and measure hub runout using service information.", "Check bearing play/noise and related steering or suspension joints under the approved unloaded/loaded condition."], good: "Hub runout, bearing condition, chassis joints, and wheel torque meet specification.", bad: "Excessive hub runout/play, looseness, damage, or uneven fastening is confirmed." }], repairs: ["Correct mounting-face corrosion and index the rotor only when permitted.", "Replace the confirmed hub/bearing or worn chassis component, align if required, and torque wheels in sequence."] }] : ac ? [{ cause: "Insufficient condenser airflow or cooling-fan control fault", likelihood: "High", explanation: "Cooling that worsens at idle commonly points to inadequate airflow or fan operation.", evidence: "High-side pressure rises at idle and drops with added airflow, or commanded fan speed does not match actual operation.", tools: ["Bidirectional scan tool", "Refrigerant identifier and approved service station", "Digital multimeter", "Airflow/temperature probes"], tests: [{ name: "Verify airflow and fan command", procedure: ["Confirm refrigerant type and inspect the condenser/radiator stack for blockage or damage.", "Monitor ambient temperature, vent temperature, fan command, fan speed, and system pressures at idle.", "Add controlled external airflow and compare pressure and vent-temperature response."], good: "Fan operation follows command and pressures remain within the manufacturer chart for ambient conditions.", bad: "Fan operation is absent/slow or controlled airflow materially restores pressure and cooling." }], repairs: ["Repair the confirmed fan motor, relay/module, power, ground, control circuit, shutter, or airflow blockage.", "Retest at idle and road speed with pressures and center-vent temperature documented."] }, { cause: "Low refrigerant charge caused by a system leak", likelihood: "Medium", explanation: "Low charge reduces heat transfer; adding refrigerant without locating the leak is not a complete repair.", evidence: "Recovered weight is below specification or an electronic detector, dye inspection, vacuum decay, or nitrogen trace test confirms leakage.", tools: ["Certified recovery/recharge station", "Refrigerant identifier", "Electronic leak detector", "UV lamp or approved trace-gas equipment"], tests: [{ name: "Recover, measure, and leak-test", procedure: ["Identify refrigerant and recover it using approved equipment; record recovered weight.", "Compare recovered quantity with the underhood charge specification.", "Leak-test accessible fittings, hoses, condenser, compressor, service ports, evaporator drain, and other specified points.", "Do not mix refrigerants or vent refrigerant."], good: "Charge weight matches specification and no leak is detected by the approved method.", bad: "Charge is low and a leak is confirmed or the system fails the specified integrity test." }], repairs: ["Replace the confirmed leaking component and required seals, add the specified oil quantity, evacuate, verify vacuum hold, and recharge by exact weight.", "Replace service-port caps/seals as required and document leak-test results after repair."] }, { cause: "Air-mix door, temperature sensor, compressor-control, or internal system fault", likelihood: "Minor", explanation: "Control or internal faults remain possible after airflow and charge integrity are proven.", evidence: "Commands and actual door position disagree, sensor values are implausible, compressor command/output differs, or pressure performance remains abnormal at correct charge.", tools: ["OEM-capable scan tool", "Digital multimeter", "Temperature probes", "Manufacturer pressure/temperature charts"], tests: [{ name: "Validate HVAC commands and thermal performance", procedure: ["Scan HVAC and powertrain modules and record DTCs before clearing.", "Compare requested and actual door positions, evaporator/ambient/cabin sensors, compressor command, and pressure sensor data.", "Measure vent temperatures across modes and sides and compare pressure-temperature performance with service information."], good: "Commands, positions, sensors, and pressure-temperature relationships agree with specification.", bad: "A command/feedback mismatch, implausible sensor, control-circuit fault, or internal performance failure is repeatable." }], repairs: ["Calibrate or repair the confirmed actuator, sensor, wiring, control, compressor, or internal component according to service information.", "Do not authorize major HVAC component replacement until charge and airflow are verified."] }] : [{ cause: "Condition directly related to the customer complaint", likelihood: "High", explanation: "The first path should reproduce the concern and inspect the system named in the complaint before replacing parts.", evidence: "A repeatable symptom, visual defect, DTC, abnormal live-data value, or failed specification increases confidence.", tools: ["OEM-capable scan tool", "Digital multimeter", "Inspection light", "Manufacturer service information"], tests: [{ name: "Verify and baseline the complaint", procedure: ["Confirm vehicle identity, VIN, mileage, warning indicators, and the exact customer concern.", "Perform a complete scan and save codes, freeze-frame, readiness state, and relevant live data.", "Inspect the affected system for loose, damaged, leaking, overheated, contaminated, or previously repaired components.", "Reproduce the concern under safe, documented conditions and compare readings with current manufacturer specifications."], good: "The concern cannot be duplicated and all inspected values remain within specification.", bad: "The concern repeats and a related component, circuit, fluid, or measured value fails specification." }], repairs: ["Repair only the verified failed component or connection, following manufacturer service information.", "If the concern is not verified, document conditions and obtain more customer detail instead of guessing."] }, { cause: "Electrical supply, ground, connector, wiring, or sensor input fault", likelihood: "Medium", explanation: "Circuit faults can create intermittent or misleading symptoms and should be load-tested before module or component replacement.", evidence: "Voltage drop, unstable reference voltage, poor terminal tension, corrosion, or an implausible sensor signal increases confidence.", tools: ["Digital multimeter", "Low-current test light where approved", "Terminal test kit", "Wiring diagrams"], tests: [{ name: "Test the circuit under load", procedure: ["Use the wiring diagram to identify powers, grounds, reference, signal, splices, and shared loads.", "Inspect connector locks, terminal tension, fretting, moisture, rub-through, and prior repairs.", "Back-probe only with approved methods; measure voltage drop and signal response while the circuit is loaded and the complaint is present."], good: "Power, ground voltage drop, terminal integrity, and signal sweep meet specification.", bad: "Excessive drop, intermittent open/short, poor terminal fit, or implausible signal is captured." }], repairs: ["Repair terminals or wiring with approved materials and routing; correct power or ground faults before replacing controlled parts.", "Repeat the loaded test and secure the harness away from heat, motion, and abrasion."] }, { cause: "Secondary mechanical, contamination, calibration, or intermittent fault", likelihood: "Minor", explanation: "Less common faults should be pursued after the complaint and primary electrical/mechanical checks are documented.", evidence: "Primary tests pass but the symptom remains repeatable under a specific temperature, load, vibration, or time condition.", tools: ["Data-logging scan tool", "Specialty gauges as required", "Manufacturer service information", "Inspection tools"], tests: [{ name: "Capture the intermittent or secondary condition", procedure: ["Review service bulletins and known diagnostic procedures for the exact VIN and configuration.", "Data-log the relevant inputs and outputs during the conditions that trigger the concern.", "Test mechanical integrity, fluid condition, contamination, calibration, and learned values only as directed by service information."], good: "No abnormal event is captured and all secondary measurements meet specification.", bad: "A repeatable correlation or out-of-specification mechanical/calibration value is documented." }], repairs: ["Correct the documented mechanical, contamination, or calibration fault; do not replace parts solely on probability.", "If no fault is captured, return the vehicle with documented test conditions and a monitoring/recheck plan."] }]; return { ...common, causes, tests: causes.flatMap(item => item.tests.map(test => `${item.likelihood}: ${test.name} — ${test.procedure.join(" ")} PASS: ${test.good} FAIL: ${test.bad}`)) } }
@@ -224,7 +231,7 @@ function queueEntityMutation(mutation, conflict = false) { const queue = readMut
 async function authorizedApiRequest(path, options = {}) { if (!authSession()) throw new Error("Not signed in"); return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } }) }
 async function verifyDesktopEntitlement() { if (!isDesktopApp || isOfflineDesktop() || (isLocalShell() && cloudflareConfig.apiUrl.startsWith("/"))) { desktopEntitlementVerified = true; return true } if (!navigator.onLine) throw new Error("MechPro Desktop requires an internet connection to verify your subscription."); let response; try { response = await authorizedApiRequest("/subscription/entitlement", { cache: "no-store" }) } catch { throw new Error("MechPro could not reach the subscription service. Check your internet connection and try again.") } const body = await response.json().catch(() => ({})); if (!response.ok || body.active !== true) throw new Error(body.status === "expired" ? "Your MechPro subscription has expired." : body.status === "suspended" ? "This MechPro subscription is suspended." : "An active MechPro subscription is required for the Windows app."); desktopEntitlementVerified = true; desktopLoginMessage = ""; return true }
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} }) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
-async function apiFetch(path, options = {}) { if (isOfflineDesktop()) { const method = String(options.method || "GET").toUpperCase(); if (method === "GET" || method === "HEAD") { const offlineError = new Error("This copy of MechPro keeps shop records on this computer."); offlineError.retryable = false; throw offlineError } return { queued: true } } if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareMutation(path, options); try { const response = await authorizedApiRequest(path, mutation.options); if (!response.ok) { const error = new Error(`API request failed: ${response.status}`); error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
+async function apiFetch(path, options = {}) { if (isOfflineDesktop()) { const method = String(options.method || "GET").toUpperCase(); if (method === "GET" || method === "HEAD") { const offlineError = new Error("This copy of MechPro keeps shop records on this computer."); offlineError.retryable = false; throw offlineError } return { queued: true } } if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareMutation(path, options); try { const response = await authorizedApiRequest(path, mutation.options); if (!response.ok) { const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`); error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
 window.addEventListener("online", flushMutationQueue);
 async function pushCustomerToApi(record) { record.id ||= mutationId(); try { await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync customer to API", error) } }
 async function loadCustomersFromApi() { try { state.customers = await apiFetch("/entities/customers"); cloudSyncStatus = "connected"; save() } catch (error) { console.error("Failed to load customers from API; using local data", error); cloudSyncStatus = authSession() ? "offline" : "local" } }
@@ -660,7 +667,7 @@ bindExpandedFeatures = function () { bindAgentPhoneSettingsCore(); document.quer
 const bindAssistantGlobalCore = bind;
 bind = function () { bindAssistantGlobalCore(); const existing = document.querySelector("#global-assistant-controls"); if (!currentUser()) { existing?.remove(); return } if (existing) return; document.body.insertAdjacentHTML("beforeend", `<div id="global-assistant-controls" aria-label="Assistant controls"><button type="button" class="assistant-float-main" id="global-assistant" title="Open MechPro Assistant">${icon("sparkles", 16)}<span>Assistant</span></button><button type="button" class="assistant-float-pause ${assistantPaused ? "paused" : ""}" data-assistant-pause title="${assistantPaused ? "Resume assistant" : "Pause assistant"}>${icon(assistantPaused ? "play" : "pause", 15)}</button></div>`); document.querySelector("#global-assistant").onclick = openGlobalAssistant; document.querySelector("[data-assistant-pause]").onclick = toggleAssistantPause; lucide.createIcons() };
 const apiFetchAssistantCore = apiFetch;
-apiFetch = async function (path, options = {}) { try { return await apiFetchAssistantCore(path, options) } catch (error) { if (path === "/ai/assistant") { let message = ""; try { message = JSON.parse(options.body || "{}").message || "" } catch { } return { message: localAssistantReply(message) } } throw error } };
+apiFetch = async function (path, options = {}) { return apiFetchAssistantCore(path, options) };
 if ("serviceWorker" in navigator && isSecureContext && !isDesktopApp) { window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch(error => console.error("Service worker registration failed", error))) }
 
 ["admin", "technician", "office", "service_writer"].forEach(role => { if (roleRoutes[role] && !roleRoutes[role].includes("home")) roleRoutes[role] = ["home", ...roleRoutes[role]] });
@@ -1311,11 +1318,11 @@ openOrder = function (id) {
       : wasApproved
         ? "Saving creates a revision and clears the prior customer approval."
         : "Changes recalculate labor, parts, tax, and total before saving.";
-  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
-  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} · <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} · ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate · parts + labor</h3><p>${editNotice}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Subtotal ${money(estimate.subtotal)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
   const editorRoot = document.querySelector("#job-estimate-editor");
   if (editorRoot) {
     bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
@@ -1402,6 +1409,352 @@ bind = function () {
   document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
     await loadEmployeesFromApi();
     if (state.route === "employees") render();
+  });
+};
+
+function estimateParty(estimate, fallback = {}) {
+  const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer || fallback.customer };
+  const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle || fallback.vehicle, vin: estimate.vin || fallback.vin };
+  return { customer, vehicle };
+}
+
+function estimateLinePresentation(line) {
+  const pending = line.priceStatus === "pending";
+  const meta = line.type === "part"
+    ? `${Number(line.quantity || 0)} × ${money(line.unitPrice)}${line.partNumber ? ` · ${escapeHtml(line.partNumber)}` : ""}`
+    : `${Number(line.hours || 0).toFixed(2)} hr × ${money(line.laborRate)}`;
+  return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money(line.total)}</b></article>`;
+}
+
+function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
+  const { customer, vehicle } = estimateParty(estimate, record);
+  const parts = (estimate.lines || []).filter(line => line.type === "part");
+  const labor = (estimate.lines || []).filter(line => line.type === "labor");
+  const supply = (estimate.fees || []).find(fee => /shop supplies/i.test(fee.description));
+  const exclusions = estimate.exclusions || record.exclusions || [];
+  const insurance = estimate.insurance || record.insurance || {};
+  const complaint = estimate.complaint || record.complaint || "";
+  const number = estimate.number || record.estimateNumber || record.id || "";
+  return `<section class="reference-estimate-document ${standalone ? "standalone" : ""}">
+    <header class="reference-estimate-header"><div><div class="eyebrow">Reliable Automotive Services</div><h2>Service estimate</h2><p>2312 118th Street Suite Q · Lubbock, Texas · (806) 776-4460</p></div><div><b>${escapeHtml(number)}</b><span>${locked ? "Approved lines locked" : "Draft · review before authorization"}</span></div></header>
+    <div class="reference-party-grid">
+      <section><span>Customer</span><h3>${escapeHtml(customer.name || "Customer not provided")}</h3><p>${escapeHtml(customer.phone || record.phone || "")}${customer.email ? `<br>${escapeHtml(customer.email)}` : ""}${customer.address ? `<br>${escapeHtml(customer.address)}` : ""}</p></section>
+      <section><span>Vehicle</span><h3>${escapeHtml(vehicle.description || "Vehicle not provided")}</h3><p>${vehicle.vin ? `VIN ${escapeHtml(vehicle.vin)}` : "VIN not provided"}${vehicle.plate ? `<br>Plate ${escapeHtml(vehicle.plate)}` : ""}${insurance.policy ? `<br>${escapeHtml(insurance.company || "Insurance")} · Policy ${escapeHtml(insurance.policy)}` : ""}</p></section>
+    </div>
+    <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
+    <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money(estimate.parts)}</b></div></section>
+    <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
+    <section class="reference-totals">
+      <div><span>Labor</span><b>${money(estimate.labor)}</b></div>
+      <div><span>Shop supplies</span><b>${money(supply?.amount || 0)}</b></div>
+      <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` · ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money(estimate.discountAmount)}` : money(0)}</b></div>
+      <div><span>Tax · ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money(estimate.tax)}</b></div>
+      <div class="total"><span>Estimate total</span><b>${money(estimate.total)}</b></div>
+    </section>
+    <aside class="reference-exclusions"><strong>Not included / still pending</strong><ul>${exclusions.length ? exclusions.map(item => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Additional or hidden work is not included without a revised estimate and authorization.</li>"}</ul></aside>
+  </section>`;
+}
+
+function availableEstimateSources() {
+  return [
+    REFERENCE_ESTIMATE,
+    ...state.estimates.map(estimate => ({ ...estimate, id: estimate.id || estimate.number })),
+  ];
+}
+
+function estimateSourceById(id) {
+  return availableEstimateSources().find(estimate => String(estimate.id) === String(id));
+}
+
+function normalizedEstimateSource(estimate) {
+  if (!estimate) return null;
+  const totals = calculateShopEstimate(expandedEstimateLines(estimate), {
+    taxRate: estimate.taxRate ?? state.taxSettings.rate,
+    discountPercent: estimate.discountPercent,
+    discountReason: estimate.discountReason,
+    shopSupplies: estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount,
+  });
+  return { ...estimate, ...totals };
+}
+
+function showEstimatePreview(estimate) {
+  if (!estimate) return;
+  const totals = normalizedEstimateSource(estimate);
+  showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
+  document.querySelector("#preview-fill-work-order").onclick = () => openNew(workOrderDraftFromEstimate(totals));
+}
+
+estimateEditorLine = function (line = {}, index = 0, removable = true) {
+  const item = normalizeEstimateLine(line, index), part = item.type === "part";
+  return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    <div class="form-grid">
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
+    </div>
+    <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money(item.total)}</b></div>
+  </article>`;
+};
+
+estimateFromEditor = function (root) {
+  const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
+    const type = row.querySelector(".job-line-type").value;
+    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    const inventory = type === "part" ? state.inventory.find(item => item.id === row.querySelector(".job-line-inventory").value) : null;
+    return normalizeEstimateLine({
+      id: row.dataset.lineId || `line-${Date.now()}-${index}`,
+      type,
+      description: row.querySelector(".job-line-description").value.trim(),
+      notes: row.querySelector(".job-line-notes").value.trim(),
+      quantity,
+      unitPrice,
+      hours: type === "labor" ? quantity : 0,
+      laborRate: type === "labor" ? unitPrice : 0,
+      inventoryId: inventory?.id || null,
+      inventorySku: inventory?.sku || "",
+      committedQuantity: type === "part" && inventory ? quantity : 0,
+      priceStatus: row.dataset.priceStatus || "priced",
+      laborSource: row.dataset.laborSource || "",
+    }, index);
+  }).filter(line => line.description && line.quantity > 0);
+  const form = root.closest("form");
+  const suppliesValue = form?.querySelector("[name=shopSupplies]")?.value ?? root.dataset.shopSupplies;
+  const estimate = calculateShopEstimate(lines, {
+    taxRate: state.taxSettings.rate,
+    discountPercent: form?.querySelector("[name=estimateDiscount]")?.value ?? root.dataset.discountPercent,
+    discountReason: form?.querySelector("[name=estimateDiscountReason]")?.value ?? root.dataset.discountReason,
+    shopSupplies: suppliesValue === "" || suppliesValue == null ? undefined : Number(suppliesValue),
+  });
+  estimate.sourceEstimateNumber = root.dataset.sourceEstimateNumber || "";
+  estimate.exclusions = JSON.parse(root.dataset.exclusions || "[]");
+  estimate.insurance = JSON.parse(root.dataset.insurance || "{}");
+  return estimate;
+};
+
+refreshEstimateEditor = function (root) {
+  root.querySelectorAll(".job-estimate-line").forEach(row => {
+    const type = row.querySelector(".job-line-type").value;
+    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    row.querySelector(".job-inventory-field").hidden = type !== "part";
+    row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+    row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+    row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
+    row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money(quantity * rate);
+  });
+  const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
+  const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
+  if (summary) summary.innerHTML = `<span>Parts <b>${money(estimate.parts)}</b></span><span>Labor <b>${money(estimate.labor)}</b></span><span>Supplies <b>${money(supplies)}</b></span><span>Discount <b>-${money(estimate.discountAmount)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+  const total = document.querySelector("#new-estimate-total");
+  if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
+};
+
+coherentOrderEstimate = function (order) {
+  const source = order.estimate || {};
+  const estimate = calculateShopEstimate(expandedEstimateLines(source), {
+    taxRate: source.taxRate ?? state.taxSettings.rate,
+    discountPercent: source.discountPercent,
+    discountReason: source.discountReason,
+    shopSupplies: source.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount,
+  });
+  return {
+    ...estimate,
+    number: source.number || source.sourceEstimateNumber || order.estimateNumber || order.id,
+    summary: source.summary || `Estimate for ${order.vehicle}`,
+    generatedAt: source.generatedAt || now(),
+    complaint: source.complaint || order.complaint,
+    exclusions: source.exclusions || order.exclusions || [],
+    insurance: source.insurance || order.insurance || {},
+  };
+};
+
+function addEstimateSourceControls(form) {
+  const body = form.querySelector(".modal-body");
+  if (!body || document.querySelector("#estimate-source-picker")) return;
+  const options = availableEstimateSources().map(estimate => `<option value="${escapeAttr(estimate.id)}">${escapeHtml(estimate.number || "Saved draft")} · ${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer || "Customer")}</option>`).join("");
+  body.insertAdjacentHTML("afterbegin", `<section class="estimate-fill-panel"><div><div class="eyebrow">Optional estimate fill</div><h3>Start from a completed estimate</h3><p>A blank order stays blank. Choose an estimate and apply it only when it belongs to this customer.</p></div><div><select id="estimate-source-picker"><option value="">Select an estimate…</option>${options}</select><button type="button" class="secondary" id="apply-estimate-source">${icon("clipboard-plus", 14)} Fill fields</button></div></section>`);
+  const estimator = form.querySelector(".new-order-estimator");
+  estimator?.insertAdjacentHTML("beforeend", `<div class="estimate-adjustments"><label>Shop supplies<input name="shopSupplies" type="number" min="0" step=".01" placeholder="Auto: 3% of labor, max $20"/></label><label>Discount %<input name="estimateDiscount" type="number" min="0" max="100" step=".1" value="0"/></label><label>Discount reason<input name="estimateDiscountReason" placeholder="Optional"/></label></div>`);
+  form.querySelectorAll("[name=shopSupplies],[name=estimateDiscount],[name=estimateDiscountReason]").forEach(input => input.addEventListener("input", () => refreshEstimateEditor(form.querySelector("#new-estimate-lines"))));
+  document.querySelector("#apply-estimate-source").onclick = () => {
+    const estimate = estimateSourceById(document.querySelector("#estimate-source-picker").value);
+    if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+  };
+}
+
+function applyWorkOrderDraftToForm(form, draft) {
+  const customerSelect = form.elements.customerSelect;
+  const option = [...customerSelect.options].find(item => item.value.toLowerCase() === draft.customer.toLowerCase());
+  customerSelect.value = option?.value || "__new__";
+  customerSelect.dispatchEvent(new Event("change"));
+  if (!option) form.elements.customer.value = draft.customer;
+  form.elements.phone.value = draft.phone || "";
+  form.elements.vehicleSelect.value = "";
+  form.elements.vehicle.value = draft.vehicle || "";
+  form.elements.vehicle.readOnly = false;
+  form.elements.vin.value = draft.vin || "";
+  form.elements.complaint.value = draft.complaint || "";
+  form.elements.requestedServices.value = draft.requestedServices || "";
+  const root = form.querySelector("#new-estimate-lines");
+  root.dataset.sourceEstimateNumber = draft.sourceEstimateNumber || "";
+  root.dataset.exclusions = JSON.stringify(draft.exclusions || []);
+  root.dataset.insurance = JSON.stringify(draft.insurance || {});
+  root.innerHTML = (draft.estimate?.lines || []).map((line, index) => estimateEditorLine(line, index)).join("");
+  form.elements.shopSupplies.value = draft.estimate?.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "";
+  form.elements.estimateDiscount.value = draft.estimate?.discountPercent || 0;
+  form.elements.estimateDiscountReason.value = draft.estimate?.discountReason || "";
+  bindEstimateEditor(root);
+  refreshEstimateEditor(root);
+  toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
+}
+
+const openNewEstimateFillCore = openNew;
+openNew = function (draft = null) {
+  openNewEstimateFillCore();
+  const form = document.querySelector("#new-form");
+  if (!form) return;
+  addEstimateSourceControls(form);
+  if (draft) applyWorkOrderDraftToForm(form, draft);
+};
+
+savedEstimates = function () {
+  const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} · ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
+  const rows = [...state.estimates].reverse().map(estimate => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button></div></td></tr>`).join("");
+  return `${reference}<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Review the customer-facing document or explicitly fill a new work order.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
+};
+
+function assistantMessageMarkup(item, index) {
+  const actions = (item.actions || []).map((action, actionIndex) => action.kind === "estimate_work_order_draft" ? `<button type="button" class="assistant-draft-action" data-assistant-draft="${index}:${actionIndex}">${icon("clipboard-plus", 14)} Save estimate & fill work order</button>` : "").join("");
+  return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
+}
+
+liveAssistant = function () {
+  const rows = assistantConversation.map(assistantMessageMarkup).join("");
+  return `<section class="ai-panel live-assistant"><div class="statement-head"><div><div class="eyebrow">Claude + Deepgram call assistant</div><h2>Talk through the job</h2><p>Speak or type the customer, vehicle, complaint, parts, labor hours and source, and exclusions. MechPro prepares both records for review; it never auto-submits the work order.</p></div>${icon("audio-lines", 20)}</div><div class="assistant-messages" id="assistant-messages">${rows || `<div class="assistant-empty">Ask the assistant to prepare an estimate and work order from the call.</div>`}</div><form class="assistant-form" id="assistant-form"><textarea name="message" rows="2" maxlength="4000" placeholder="Create an estimate and work order for…"></textarea><div class="assistant-actions"><button class="secondary" type="button" id="assistant-mic" title="Record with Deepgram">${icon("mic", 15)} <span>Record</span></button><button class="icon-button" type="button" id="assistant-stop" title="Stop speaking">${icon("volume-x", 15)}</button><button class="primary" type="submit">${icon("send", 14)} Ask assistant</button></div><p class="assistant-provider-note">Voice transcription requires Deepgram. Estimate drafting requires Claude. Missing configuration is reported without a simulated answer.</p></form></section>`;
+};
+
+async function saveAssistantDraft(action) {
+  const estimate = estimateFromAssistantDraft(action);
+  const number = `EST-${new Date().getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
+  const record = {
+    ...estimate,
+    id: `estimate-${Date.now()}`,
+    number,
+    createdAt: now(),
+    status: "pending",
+    customer: estimate.customer.name,
+    customerDetails: estimate.customer,
+    phone: estimate.customer.phone,
+    email: estimate.customer.email,
+    address: estimate.customer.address,
+    vehicle: estimate.vehicle.description,
+    vehicleDetails: estimate.vehicle,
+    vin: estimate.vehicle.vin,
+    plate: estimate.vehicle.plate,
+  };
+  state.estimates.push(record);
+  await pushEstimateToApi(record);
+  save();
+  closeModal();
+  openNew(workOrderDraftFromEstimate({
+    ...estimate,
+    number,
+    customer: estimate.customer,
+    vehicle: estimate.vehicle,
+  }));
+}
+
+function bindAssistantDraftActions() {
+  document.querySelectorAll("[data-assistant-draft]").forEach(button => {
+    button.onclick = async () => {
+      const [messageIndex, actionIndex] = button.dataset.assistantDraft.split(":").map(Number);
+      const action = assistantConversation[messageIndex]?.actions?.[actionIndex];
+      if (!action) return;
+      button.disabled = true;
+      try { await saveAssistantDraft(action) } catch (error) { button.disabled = false; toast(error.message || "The estimate draft could not be saved") }
+    };
+  });
+}
+
+bindLiveAssistant = function () {
+  const form = document.querySelector("#assistant-form");
+  if (!form) return;
+  const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), micButton = document.querySelector("#assistant-mic");
+  const renderMessages = () => {
+    const list = document.querySelector("#assistant-messages");
+    list.innerHTML = assistantConversation.map(assistantMessageMarkup).join("");
+    list.scrollTop = list.scrollHeight;
+    bindAssistantDraftActions();
+  };
+  const append = (role, content, actions = []) => { assistantConversation.push({ role, content, actions }); renderMessages() };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (assistantPaused) return;
+    const message = String(input.value || "").trim();
+    if (!message) return;
+    input.value = "";
+    sendButton.disabled = true;
+    append("user", message);
+    try {
+      const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+      assistantSessionId = result.sessionId || assistantSessionId;
+      const answer = result.message || "The assistant did not return an answer.";
+      append("assistant", answer, result.actions || []);
+      if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) }
+    } catch (error) {
+      append("assistant", error.message || "The assistant is unavailable.");
+    } finally {
+      sendButton.disabled = assistantPaused;
+    }
+  };
+  document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel());
+  let recorder = null, stream = null, chunks = [];
+  micButton?.addEventListener("click", async () => {
+    if (recorder?.state === "recording") { recorder.stop(); return }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("Audio recording is not supported in this browser");
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data) };
+      recorder.onstop = async () => {
+        micButton.disabled = true;
+        micButton.querySelector("span").textContent = "Transcribing…";
+        stream?.getTracks().forEach(track => track.stop());
+        try {
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          const result = await apiFetch("/ai/transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+          input.value = result.transcript;
+          form.requestSubmit();
+        } catch (error) {
+          append("assistant", error.message || "Voice transcription is unavailable.");
+        } finally {
+          micButton.disabled = false;
+          micButton.querySelector("span").textContent = "Record";
+        }
+      };
+      recorder.start();
+      micButton.querySelector("span").textContent = "Stop & send";
+      toast("Recording with Deepgram transcription");
+    } catch {
+      toast("Microphone access was not granted");
+    }
+  });
+  bindAssistantDraftActions();
+};
+
+const bindReferenceEstimatesCore = bindEstimateActions;
+bindEstimateActions = function () {
+  bindReferenceEstimatesCore();
+  document.querySelectorAll("[data-preview-estimate]").forEach(button => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
+  document.querySelectorAll("[data-fill-estimate]").forEach(button => button.onclick = () => {
+    const estimate = estimateSourceById(button.dataset.fillEstimate);
+    if (estimate) openNew(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
   });
 };
 

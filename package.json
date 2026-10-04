@@ -49,7 +49,7 @@
     "test:guides": "node --test src/modules/repair-guide.test.mjs",
     "test:inspections": "node --test src/modules/shop-inspections.test.mjs",
     "test:autozone": "node --test src/modules/autozone-pro.test.mjs",
-    "test:estimate": "node --test src/modules/estimate-workflow.test.mjs",
+    "test:estimate": "node --test src/modules/estimate-workflow.test.mjs src/modules/estimate-templates.test.mjs",
     "test:market": "node --test scripts/market-pages.test.mjs",
     "test:mileage": "node --test src/modules/mileage.test.mjs",
     "issue-invite": "node scripts/issue-founding-invite.mjs",

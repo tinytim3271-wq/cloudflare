@@ -5,9 +5,11 @@ import {
   MECHPRO_SYSTEM_PROMPT,
   calculateTextCost,
   executeGroundingTool,
+  prepareEstimateWorkOrderDraft,
   runAnthropicTurn,
   selectAnthropicModel,
   shouldEscalateToOpus,
+  transcribeDeepgramAudio,
 } from '../src/ai.mjs';
 import { AiChatSession } from '../src/chat-session.mjs';
 import { buildDeepgramSettings } from '../src/voice-session.mjs';
@@ -35,6 +37,23 @@ test('system prompt requires detailed, evidence-grounded answers', () => {
   assert.match(MECHPRO_SYSTEM_PROMPT, /never guess/i);
   assert.match(MECHPRO_SYSTEM_PROMPT, /ask for the missing VIN/i);
   assert.match(MECHPRO_SYSTEM_PROMPT, /read-only/i);
+  assert.match(MECHPRO_SYSTEM_PROMPT, /prepare_estimate_work_order/);
+  assert.match(MECHPRO_SYSTEM_PROMPT, /\$140 per labor hour/);
+});
+
+test('estimate and work-order tool creates a bounded review draft without persistence', () => {
+  const result = prepareEstimateWorkOrderDraft({
+    customer: { name: 'Caller' },
+    vehicle: { description: '2020 Example' },
+    complaint: 'Noise',
+    requestedServices: ['Inspect noise'],
+    parts: [{ description: 'Unpriced cover', quantity: 1, unitPrice: 0, priceStatus: 'pending' }],
+    labor: [{ description: 'Inspection', hours: 1, source: 'Caller-provided time' }],
+  });
+  assert.equal(result.kind, 'estimate_work_order_draft');
+  assert.equal(result.requiresUserReview, true);
+  assert.equal(result.saved, false);
+  assert.equal(result.draft.parts[0].priceStatus, 'pending');
 });
 
 test('grounding lookup is tenant-scoped and read-only', async () => {
@@ -118,6 +137,69 @@ test('Anthropic turn executes read-only tools and accumulates token usage', asyn
   assert.equal(requests[0].url, 'https://api.anthropic.com/v1/messages');
   assert.equal(requests[1].body.messages.at(-1).content[0].type, 'tool_result');
   assert.match(requests[1].body.messages.at(-1).content[0].content, /"readOnly":true/);
+});
+
+test('Anthropic turn returns a reviewable estimate action from the preparation tool', async () => {
+  const responses = [
+    {
+      content: [{
+        type: 'tool_use',
+        id: 'tool-draft',
+        name: 'prepare_estimate_work_order',
+        input: {
+          customer: { name: 'Caller' },
+          vehicle: { description: '2020 Example' },
+          complaint: 'Noise',
+          requestedServices: ['Inspect noise'],
+          parts: [],
+          labor: [{ description: 'Inspection', hours: 1, source: 'Customer-provided estimate' }],
+        },
+      }],
+      usage: { input_tokens: 20, output_tokens: 10 },
+    },
+    {
+      content: [{ type: 'text', text: 'I prepared a draft for review.' }],
+      usage: { input_tokens: 30, output_tokens: 10 },
+    },
+  ];
+  const result = await runAnthropicTurn({
+    AI_ENABLED: '1',
+    ANTHROPIC_API_KEY: secret(),
+  }, {
+    shopId: 'shop-a',
+    message: 'Create the estimate and work order.',
+    fetcher: async () => Response.json(responses.shift()),
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].kind, 'estimate_work_order_draft');
+  assert.equal(result.actions[0].saved, false);
+});
+
+test('Deepgram transcription fails honestly without a configured key', async () => {
+  await assert.rejects(
+    () => transcribeDeepgramAudio({ AI_ENABLED: '1' }, new Uint8Array([1]).buffer),
+    /Voice transcription is not configured/,
+  );
+});
+
+test('Deepgram transcription returns provider text without exposing the key', async () => {
+  const apiKey = secret();
+  const result = await transcribeDeepgramAudio({
+    AI_ENABLED: '1',
+    DEEPGRAM_API_KEY: apiKey,
+    DEEPGRAM_LISTEN_MODEL: 'nova-test',
+  }, new Uint8Array([1, 2, 3]).buffer, {
+    contentType: 'audio/webm',
+    fetcher: async (url, init) => {
+      assert.match(url, /model=nova-test/);
+      assert.equal(init.headers.Authorization, `Token ${apiKey}`);
+      assert.equal(init.headers['Content-Type'], 'audio/webm');
+      return Response.json({
+        results: { channels: [{ alternatives: [{ transcript: 'Create an estimate.' }] }] },
+      });
+    },
+  });
+  assert.equal(result.transcript, 'Create an estimate.');
 });
 
 test('cost calculation leaves unknown rates null and applies configured markup', () => {
