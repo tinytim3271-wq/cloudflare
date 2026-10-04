@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const edition = require('./edition.json');
+const edition = {
+  offline: process.argv.includes('--mechpro-offline'),
+  portable: process.argv.includes('--mechpro-portable'),
+  demo: process.argv.includes('--mechpro-demo'),
+};
 
 async function invoke(channel, params) {
   const response = await ipcRenderer.invoke(channel, params);
@@ -11,6 +15,8 @@ const desktopApi = {
   platform: process.platform,
   version: process.versions.electron,
   offline: edition.offline === true,
+  portable: edition.portable === true,
+  demo: edition.demo === true,
 };
 
 if (edition.offline === true) {

@@ -1,0 +1,36 @@
+{
+  "extends": null,
+  "appId": "com.mechpro.dispatch.demo",
+  "productName": "MechPro Demo",
+  "artifactName": "MechPro-Demo-USB-${version}.${ext}",
+  "publish": null,
+  "directories": {
+    "output": "dist/windows-demo"
+  },
+  "files": [
+    "app.js",
+    "diagnostics-ui.js",
+    "index.html",
+    "styles.css",
+    "theme.css",
+    "manifest.webmanifest",
+    "service-worker.js",
+    "mechpro-icon.svg",
+    "assets/**/*",
+    "desktop/**/*",
+    "!desktop/packaged-secrets/**/*",
+    "diagnostics/j2534-host-node/**/*",
+    "diagnostics/coverage/**/*"
+  ],
+  "extraResources": [],
+  "extraFiles": [
+    {
+      "from": "desktop/demo-instructions.txt",
+      "to": "START-HERE.txt"
+    }
+  ],
+  "win": {
+    "target": [{ "target": "zip", "arch": ["x64"] }],
+    "signAndEditExecutable": false
+  }
+}
