@@ -6,6 +6,10 @@
   "author": "MechPro",
   "license": "UNLICENSED",
   "scripts": {
+    "dev": "node scripts/build-web.mjs --watch",
+    "build": "npm run build:web",
+    "test": "npm run test:config && npm run test:worker && npm run test:j2534",
+    "lint": "eslint src",
     "sync:config": "node scripts/sync-frontend-config.mjs",
     "test:config": "node scripts/sync-frontend-config.test.mjs",
     "build:web": "node scripts/sync-frontend-config.mjs && node scripts/build-web.mjs",
@@ -36,6 +40,8 @@
     "electron": "^41.10.3",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
     "wrangler": "^4.130.0"
   },
   "build": {
