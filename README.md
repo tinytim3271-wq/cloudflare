@@ -155,12 +155,10 @@ the Worker on the `/api/*` route only. Do not attach `mechpro-api` as a custom
 domain for the whole hostname — that conflicts with Pages. Browser requests stay
 same-origin: Pages serves the PWA and the Worker handles `/api`.
 
-Do not put Cloudflare Access or Bot Fight Mode / Super Bot Fight Mode in front of
-the public hostname. Those challenges return HTTP 403 "Just a moment..." for
-`https://www.yourcarguy806.com/` and `/api/*`, which blocks the PWA and API
-clients. Reserve Access for an internal admin hostname. Confirm the Worker route
-with `curl -sS https://www.yourcarguy806.com/api/healthz` — it should return JSON
-`{"ok":true,"service":"mechpro-cloudflare-api"}`, not a Cloudflare challenge page.
+Keep Cloudflare Access in front of authenticated `/api/*` routes until app-owned
+customer authentication is implemented; the Worker currently requires a
+`Cf-Access-Jwt-Assertion` for those routes. Leave the PWA shell and
+`/api/healthz` public, and disable Bot Fight challenges that block API clients.
 
 After the bootstrap administrator signs in, create shops in **Platform
 Administration**. Account creation maps the owner's identity email to the shop;
