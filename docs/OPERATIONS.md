@@ -19,8 +19,9 @@ Operational runbook for deploying and verifying MechPro on Cloudflare.
    and `validate:worker` must pass.
 3. Deploy the relevant target workflow (Pages/Worker publish via
    `cloudflare-pages.yml`; R2 via `deploy-r2.yml`; Android/Windows as needed).
-   Publishing is skipped when `CLOUDFLARE_DEPLOY_ENABLED` is `false` or the
-   Cloudflare token is absent.
+   Publishing conditions are workflow-specific: Pages publishes only on `main`
+   pushes when `CLOUDFLARE_DEPLOY_ENABLED` is `true`; R2 skips when it is `false`
+   or S3 credentials are absent; Windows publishing currently requires credentials.
 4. Run smoke checks (below).
 5. Publish/verify target artifacts (APK, Windows installer) when applicable.
 
