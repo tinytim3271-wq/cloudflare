@@ -24,6 +24,7 @@ import {
   verifyGoogleIdToken,
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
+import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
@@ -1284,25 +1285,10 @@ async function handleFiles(request, env, context, segments, analytics) {
     const maxBytes = 15 * 1024 * 1024;
     const declaredLength = Number(request.headers.get('Content-Length') || 0);
     if (declaredLength > maxBytes) throw new HttpError(413, 'File exceeds 15 MB');
-    let received = 0;
-    const limiter = new TransformStream({
-      transform(chunk, controller) {
-        received += chunk.byteLength;
-        if (received > maxBytes) {
-          controller.error(new Error('File exceeds 15 MB'));
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    });
-    try {
-      await env.FILES.put(key, request.body.pipeThrough(limiter), {
-        httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-        customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
-      });
-    } catch {
-      throw new HttpError(413, 'File exceeds 15 MB');
-    }
+    const received = await storeUploadedFile(env.FILES, key, request.body, {
+      httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
+      customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+    }, maxBytes);
     captureForContext(analytics, context, 'file_uploaded', {
       file_kind: key.split('/')[2],
       content_type: request.headers.get('Content-Type') || 'application/octet-stream',
