@@ -42,6 +42,37 @@ test('customer decisions retain declined lines while totaling approved work only
   assert.equal(approved.total, 178.61);
 });
 
+test('estimate approval recalculates supplies and discount for approved work and invoice', () => {
+  const estimate = {
+    ...calculateEstimate([
+      { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 140 },
+      { id: 'part', type: 'part', description: 'Optional sensor', quantity: 1, unitPrice: 100 },
+    ], 8.25, [{ description: 'Shop supplies', amount: 20 }]),
+    discountPercent: 10,
+    discountReason: 'Customer discount',
+  };
+  const approved = approvedEstimate(estimate, { labor: 'approved', part: 'declined' });
+
+  assert.deepEqual(approved.fees, [{ description: 'Shop supplies', amount: 4.2 }]);
+  assert.equal(approved.grossSubtotal, 144.2);
+  assert.equal(approved.discountAmount, 14.42);
+  assert.equal(approved.subtotal, 129.78);
+  assert.equal(approved.tax, 10.71);
+  assert.equal(approved.total, 140.49);
+
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1101',
+    customer: 'Customer',
+    vehicle: 'Vehicle',
+    total: approved.total,
+    estimate: approved,
+  }, new Date('2026-10-02T12:00:00.000Z'));
+  assert.equal(invoice.amount, approved.total);
+  assert.equal(invoice.discountAmount, 14.42);
+  assert.equal(invoice.subtotal + invoice.tax, invoice.amount);
+  assert.equal(invoice.lines.length, 1);
+});
+
 test('invoice carries approved estimate lines and signature provenance forward', () => {
   const estimate = approvedEstimate(calculateEstimate([
     { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 165 },

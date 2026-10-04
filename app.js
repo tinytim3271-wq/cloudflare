@@ -2429,6 +2429,34 @@
       total: roundMoney2(subtotal + tax)
     };
   }
+  function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+    const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
+    let fees = estimate.fees || [];
+    let totals = calculateEstimate(lines, taxRate, fees);
+    const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
+    if (repriceSupplies && hasSuppliesFee) {
+      const supplies = totals.labor > 0 ? roundMoney2(Math.min(
+        SHOP_ESTIMATE_RULES.shopSuppliesCap,
+        totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
+      )) : 0;
+      fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
+      totals = calculateEstimate(lines, taxRate, fees);
+    }
+    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+    const discountAmount = roundMoney2(totals.subtotal * discountPercent / 100);
+    const subtotal = roundMoney2(totals.subtotal - discountAmount);
+    const tax = roundMoney2(subtotal * taxRate / 100);
+    return {
+      ...totals,
+      grossSubtotal: totals.subtotal,
+      discountPercent,
+      discountReason: String(estimate.discountReason || ""),
+      discountAmount,
+      subtotal,
+      tax,
+      total: roundMoney2(subtotal + tax)
+    };
+  }
   function approvedEstimate(estimate = {}, decisions = {}) {
     const lines = (estimate.lines || []).map((line, index) => {
       const normalized = normalizeEstimateLine(line, index);
@@ -2438,7 +2466,7 @@
       };
     });
     const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
-    const totals = calculateEstimate(approvedLines, estimate.taxRate, estimate.fees);
+    const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
     return {
       ...estimate,
       ...totals,
@@ -2449,11 +2477,11 @@
   }
   function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
     const source = order.estimate || {};
-    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+    const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
     const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
     const due = new Date(issuedAt);
     due.setDate(due.getDate() + 14);
-    const amount = roundMoney2(order.total ?? estimate.total);
+    const amount = source.lines?.length ? estimate.total : roundMoney2(order.total ?? estimate.total);
     return {
       id: number,
       number,
@@ -2461,7 +2489,12 @@
       customer: order.customer,
       vehicle: order.vehicle,
       amount,
+      grossSubtotal: estimate.grossSubtotal,
       subtotal: estimate.subtotal,
+      discountPercent: estimate.discountPercent,
+      discountAmount: estimate.discountAmount,
+      discountReason: estimate.discountReason,
+      fees: estimate.fees,
       tax: estimate.tax,
       taxRate: Math.max(0, Number(estimate.taxRate) || 0),
       fees: estimate.fees,
@@ -2515,10 +2548,16 @@
       revisedAt: editedAt
     };
   }
-  var roundMoney2;
+  var roundMoney2, SHOP_ESTIMATE_RULES;
   var init_estimate_workflow = __esm({
     "src/modules/estimate-workflow.js"() {
       roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      SHOP_ESTIMATE_RULES = Object.freeze({
+        laborRate: 140,
+        taxRate: 8.25,
+        shopSuppliesRate: 3,
+        shopSuppliesCap: 20
+      });
     }
   });
 
@@ -2531,10 +2570,11 @@
   } = {}) {
     const normalizedLines = lines.map(normalizeEstimateLine);
     const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
-    const supplies = labor > 0 ? money(shopSupplies ?? Math.min(
+    const automaticSupplies = Math.min(
       SHOP_ESTIMATE_RULES.shopSuppliesCap,
       labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
-    )) : 0;
+    );
+    const supplies = labor > 0 ? money(Math.min(SHOP_ESTIMATE_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies))) : 0;
     const base = calculateEstimate(
       normalizedLines,
       0,
@@ -2597,7 +2637,7 @@
       type: "part",
       description: String(part.description || "Part"),
       notes: String(part.notes || ""),
-      quantity: Math.max(0, Number(part.quantity) || 1),
+      quantity: Math.max(0, Number(part.quantity) || 0),
       unitPrice: Math.max(0, Number(part.unitPrice) || 0),
       partNumber: String(part.partNumber || ""),
       priceStatus: part.priceStatus === "pending" ? "pending" : "priced"
@@ -2638,16 +2678,10 @@
       ...totals
     };
   }
-  var SHOP_ESTIMATE_RULES, money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
+  var money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
   var init_estimate_templates = __esm({
     "src/modules/estimate-templates.js"() {
       init_estimate_workflow();
-      SHOP_ESTIMATE_RULES = Object.freeze({
-        laborRate: 140,
-        taxRate: 8.25,
-        shopSuppliesRate: 3,
-        shopSuppliesCap: 20
-      });
       money = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       referenceLines = [
         {
@@ -2731,20 +2765,20 @@
         status: "draft",
         template: true,
         customer: {
-          name: "Adrianna Nichole Montemayor",
-          phone: "806-472-8455",
-          email: "adriannamontemayordsi@gmail.com",
-          address: "2801 Amherst Street, Lubbock, Texas 79415",
+          name: "Jordan Example",
+          phone: "555-0100",
+          email: "customer@example.test",
+          address: "123 Example Street, Sample City, TX 00000",
           role: "Claimant"
         },
         vehicle: {
           description: "2016 Mercedes-Benz GLA250",
-          vin: "WDCTG4EB8GJ232287",
-          plate: "XDH0971"
+          vin: "DEMO-VEHICLE-VIN",
+          plate: "DEMO-01"
         },
         insurance: {
-          company: "Westlake Specialty Insurance Company",
-          policy: "FSTX00012637",
+          company: "Example Insurance",
+          policy: "TEST-POLICY-001",
           claimNumber: ""
         },
         complaint: "Deer collision. Claimant was not injured. No structural damage was found.",
@@ -2763,8 +2797,8 @@
           "Hidden damage and any additional work require a revised estimate and customer authorization."
         ],
         shopNotes: [
-          "Unsent Gmail draft from lee@yourcarguy806.com to Fransan Insurance at fransanins13@gmail.com has the current PDF attached. Do not send without instruction.",
-          "The handwritten insurance-photo sticky address 916 Main St #102 is not the claimant address and must not appear on the customer estimate."
+          "Obtain written authorization before sending the estimate or customer records.",
+          "Verify any billing or photo-delivery address with the customer before use."
         ],
         lines: referenceTotals.lines,
         fees: referenceTotals.fees,
@@ -6550,6 +6584,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function technicianCheckboxes(selectedIds, className, prefix) {
     const selected = new Set(selectedIds);
     const technicians = laborTechnicians();
+    for (const id of selected) {
+      if (!technicians.some((user) => user.id === id)) technicians.push({ id, techName: technicianName(id) });
+    }
     if (!technicians.length) return `<p class="labor-assignment-empty">No active technician profiles are available.</p>`;
     return technicians.map((user) => `<label><input type="checkbox" class="${className}" value="${escapeAttr(user.id)}" id="${escapeAttr(`${prefix}-${user.id}`)}" ${selected.has(user.id) ? "checked" : ""}/><span>${escapeHtml(user.techName)}</span></label>`).join("");
   }
@@ -6564,9 +6601,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function printJobCard(order) {
     const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
-    const technicianRows = laborLinePrintRows(estimate.lines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
+    const billableLines = billableEstimateLines(estimate.lines);
+    const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
     const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money2(line.laborRate)}</td><td>${money2(line.total)}</td></tr>`).join("");
-    const partRows = estimate.lines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.total)}</td></tr>`).join("");
+    const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
     const win = window.open("", "_blank");
     if (!win) return toast("Allow pop-ups to print the job card");
@@ -6593,8 +6631,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     render();
   }
   function estimateParty(estimate, fallback = {}) {
-    const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer || fallback.customer };
-    const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle || fallback.vehicle, vin: estimate.vin || fallback.vin };
+    const customer = typeof estimate.customer === "object" ? estimate.customer : { ...estimate.customerDetails || {}, name: estimate.customer || estimate.customerDetails?.name || fallback.customer, phone: estimate.phone || estimate.customerDetails?.phone || fallback.phone, email: estimate.email || estimate.customerDetails?.email, address: estimate.address || estimate.customerDetails?.address };
+    const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { ...estimate.vehicleDetails || {}, description: estimate.vehicle || estimate.vehicleDetails?.description || fallback.vehicle, vin: estimate.vin || estimate.vehicleDetails?.vin || fallback.vin, plate: estimate.plate || estimate.vehicleDetails?.plate || fallback.plate };
     return { customer, vehicle };
   }
   function estimateLinePresentation(line) {
@@ -6613,7 +6651,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const complaint = estimate.complaint || record.complaint || "";
     const number = estimate.number || record.estimateNumber || record.id || "";
     return `<section class="reference-estimate-document ${standalone ? "standalone" : ""}">
-    <header class="reference-estimate-header"><div><div class="eyebrow">Reliable Automotive Services</div><h2>Service estimate</h2><p>2312 118th Street Suite Q \xB7 Lubbock, Texas \xB7 (806) 776-4460</p></div><div><b>${escapeHtml(number)}</b><span>${locked ? "Approved lines locked" : "Draft \xB7 review before authorization"}</span></div></header>
+    <header class="reference-estimate-header"><div><div class="eyebrow">${escapeHtml(shopProfile().shopName)}</div><h2>Service estimate</h2><p>${escapeHtml(shopProfile().address || "")}${shopProfile().address && shopProfile().phone ? " \xB7 " : ""}${escapeHtml(shopProfile().phone || "")}</p></div><div><b>${escapeHtml(number)}</b><span>${locked ? "Approved lines locked" : "Draft \xB7 review before authorization"}</span></div></header>
     <div class="reference-party-grid">
       <section><span>Customer</span><h3>${escapeHtml(customer.name || "Customer not provided")}</h3><p>${escapeHtml(customer.phone || record.phone || "")}${customer.email ? `<br>${escapeHtml(customer.email)}` : ""}${customer.address ? `<br>${escapeHtml(customer.address)}` : ""}</p></section>
       <section><span>Vehicle</span><h3>${escapeHtml(vehicle.description || "Vehicle not provided")}</h3><p>${vehicle.vin ? `VIN ${escapeHtml(vehicle.vin)}` : "VIN not provided"}${vehicle.plate ? `<br>Plate ${escapeHtml(vehicle.plate)}` : ""}${insurance.policy ? `<br>${escapeHtml(insurance.company || "Insurance")} \xB7 Policy ${escapeHtml(insurance.policy)}` : ""}</p></section>
@@ -6782,7 +6820,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -7774,8 +7812,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           order.estimate.lines = order.estimate.lines.map((line) => line.type === "labor" ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] } : line);
           event.currentTarget.disabled = true;
           try {
-            const saved = !isOfflineDesktop() && !isLocalShell() ? await updateOrderInApi(order) : order;
-            state.orders[state.orders.indexOf(order)] = saved;
+            const saved = !isOfflineDesktop() && !isLocalShell() ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) }) : order;
+            state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
             save();
             closeModal();
             toast(`${order.id} technician assignments saved`);
@@ -7801,9 +7839,40 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           if (invoice && !invoice.signature) onsiteSignatureModal("invoice", invoice);
         });
       };
+      loadShopEntitiesWithTaxSettingsCore = loadShopEntities;
+      loadShopEntities = async function() {
+        const previousSettings = state.shopSettingsRecords;
+        await loadShopEntitiesWithTaxSettingsCore();
+        if (state.shopSettingsRecords === previousSettings) return;
+        const taxSettings = state.shopSettingsRecords.find((item) => item.id === "tax");
+        state.taxSettings = taxSettings ? { ...state.taxSettings, ...taxSettings } : { ...state.taxSettings, state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" };
+      };
       bindDurableRecordsCore = bind;
       bind = function() {
         bindDurableRecordsCore();
+        document.querySelector("#tax-settings-form")?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const data = Object.fromEntries(new FormData(event.target));
+          const existing = state.shopSettingsRecords.find((item) => item.id === "tax");
+          const record = {
+            ...state.taxSettings,
+            state: data.state,
+            taxId: data.taxId.trim(),
+            rate: Number(data.rate) || 0,
+            filingFrequency: data.filingFrequency,
+            id: "tax",
+            updatedAt: existing?.updatedAt ? now() : void 0
+          };
+          try {
+            const saved = await saveShopEntity("shopsettings", record);
+            state.taxSettings = { ...state.taxSettings, ...saved };
+            toast("Tax settings saved");
+            render();
+          } catch (error) {
+            toast(error.message || "Tax settings could not be saved");
+          }
+        }, { capture: true });
         document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
         document.querySelectorAll("[data-edit-order]").forEach((button) => {
           button.onclick = (event) => {
@@ -7930,7 +7999,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       savedEstimates = function() {
         const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} \xB7 ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money2(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
-        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money2(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button></div></td></tr>`).join("");
+        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money2(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${escapeAttr(estimate.id)}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
         return `${reference}<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Review the customer-facing document or explicitly fill a new work order.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
       };
       liveAssistant = function() {
@@ -7960,7 +8029,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           sendButton.disabled = true;
           append("user", message);
           try {
-            const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || void 0, history: assistantConversation.slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) });
+            const history = assistantConversation.slice(0, -1).slice(-10).map((item) => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] }));
+            const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || void 0, history }) });
             assistantSessionId = result.sessionId || assistantSessionId;
             const answer = result.message || "The assistant did not return an answer.";
             append("assistant", answer, result.actions || []);

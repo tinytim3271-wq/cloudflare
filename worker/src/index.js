@@ -30,8 +30,10 @@ import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
 import {
+  calculateVoiceCost,
   calculateTextCost,
   isAiEnabled,
+  readAudioWithinLimit,
   recordAiUsage,
   runAnthropicTurn,
   transcribeDeepgramAudio,
@@ -1025,6 +1027,7 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     history,
     requestedModel: options.requestedModel,
     autoEscalate: options.autoEscalate,
+    allowEstimatePreparation: options.source !== 'agentphone',
   });
   const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
   await recordAiUsage(env, {
@@ -1108,8 +1111,20 @@ async function handleVoiceTranscription(request, env, context) {
   }
   const contentLength = Number(request.headers.get('Content-Length') || 0);
   if (contentLength > 10 * 1024 * 1024) throw new HttpError(413, 'Recorded audio must be 10 MB or smaller');
-  const result = await transcribeDeepgramAudio(env, await request.arrayBuffer(), { contentType });
-  return json(result);
+  const audio = await readAudioWithinLimit(request.body);
+  const result = await transcribeDeepgramAudio(env, audio, { contentType });
+  const costs = calculateVoiceCost(env, result.voiceSeconds);
+  await recordAiUsage(env, {
+    shopId: context.shopId,
+    userId: context.userId,
+    channel: 'voice',
+    provider: 'deepgram',
+    model: result.model,
+    voiceSeconds: result.voiceSeconds,
+    ...costs,
+    metadata: { source: 'transcription' },
+  });
+  return json({ transcript: result.transcript, model: result.model });
 }
 
 async function saveIntegrationSecret(env, shopId, name, value) {

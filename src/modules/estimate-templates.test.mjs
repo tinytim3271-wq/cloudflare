@@ -6,6 +6,7 @@ import {
   estimateFromAssistantDraft,
   workOrderDraftFromEstimate,
 } from './estimate-templates.js';
+import { approvedEstimate } from './estimate-workflow.js';
 
 test('reference estimate matches the authoritative shop figures', () => {
   assert.equal(REFERENCE_ESTIMATE.parts, 1364.79);
@@ -15,6 +16,7 @@ test('reference estimate matches the authoritative shop figures', () => {
   assert.equal(REFERENCE_ESTIMATE.discountAmount, 212.68);
   assert.equal(REFERENCE_ESTIMATE.tax, 157.91);
   assert.equal(REFERENCE_ESTIMATE.total, 2072.02);
+  assert.equal(approvedEstimate(REFERENCE_ESTIMATE).total, REFERENCE_ESTIMATE.total);
   assert.deepEqual(
     REFERENCE_ESTIMATE.lines.find(line => line.type === 'labor').technicianIds,
     [],
@@ -39,14 +41,14 @@ test('shop rules apply supplies at three percent of labor capped at twenty dolla
 
 test('reference work-order fill is explicit data and preserves sensitive shop notes off the estimate', () => {
   const draft = workOrderDraftFromEstimate();
-  assert.equal(draft.customer, 'Adrianna Nichole Montemayor');
+  assert.equal(draft.customer, 'Jordan Example');
   assert.equal(draft.vehicle, '2016 Mercedes-Benz GLA250');
-  assert.equal(draft.vin, 'WDCTG4EB8GJ232287');
+  assert.equal(draft.vin, 'DEMO-VEHICLE-VIN');
   assert.equal(draft.estimate.total, 2072.02);
   assert.match(draft.complaint, /Open Labor Project/);
-  assert.match(draft.complaint, /Unsent Gmail draft/);
-  assert.match(draft.complaint, /916 Main St #102.*must not appear/);
-  assert.doesNotMatch(REFERENCE_ESTIMATE.complaint, /916 Main/);
+  assert.match(draft.complaint, /Obtain written authorization/);
+  assert.equal(REFERENCE_ESTIMATE.customer.email, 'customer@example.test');
+  assert.equal(REFERENCE_ESTIMATE.insurance.policy, 'TEST-POLICY-001');
   assert.equal('dob' in REFERENCE_ESTIMATE.customer, false);
   assert.equal('driverLicense' in REFERENCE_ESTIMATE.customer, false);
 });

@@ -1455,9 +1455,43 @@ bindEstimateActions = function () {
   });
 };
 
+const loadShopEntitiesWithTaxSettingsCore = loadShopEntities;
+loadShopEntities = async function () {
+  const previousSettings = state.shopSettingsRecords;
+  await loadShopEntitiesWithTaxSettingsCore();
+  if (state.shopSettingsRecords === previousSettings) return;
+  const taxSettings = state.shopSettingsRecords.find(item => item.id === "tax");
+  state.taxSettings = taxSettings
+    ? { ...state.taxSettings, ...taxSettings }
+    : { ...state.taxSettings, state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" };
+};
+
 const bindDurableRecordsCore = bind;
 bind = function () {
   bindDurableRecordsCore();
+  document.querySelector("#tax-settings-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const data = Object.fromEntries(new FormData(event.target));
+    const existing = state.shopSettingsRecords.find(item => item.id === "tax");
+    const record = {
+      ...state.taxSettings,
+      state: data.state,
+      taxId: data.taxId.trim(),
+      rate: Number(data.rate) || 0,
+      filingFrequency: data.filingFrequency,
+      id: "tax",
+      updatedAt: existing?.updatedAt ? now() : undefined,
+    };
+    try {
+      const saved = await saveShopEntity("shopsettings", record);
+      state.taxSettings = { ...state.taxSettings, ...saved };
+      toast("Tax settings saved");
+      render();
+    } catch (error) {
+      toast(error.message || "Tax settings could not be saved");
+    }
+  }, { capture: true });
   document.querySelector("#new-customer")?.addEventListener("click", () => openCustomerForm());
   document.querySelectorAll("[data-edit-order]").forEach(button => {
     button.onclick = event => {

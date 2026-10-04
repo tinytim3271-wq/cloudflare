@@ -1,5 +1,12 @@
 const roundMoney = value => Math.round((Number(value) || 0) * 100) / 100;
 
+export const SHOP_ESTIMATE_RULES = Object.freeze({
+  laborRate: 140,
+  taxRate: 8.25,
+  shopSuppliesRate: 3,
+  shopSuppliesCap: 20,
+});
+
 export function isDeclinedEstimateLine(line) {
   return line?.approvalStatus === 'declined';
 }
@@ -92,6 +99,40 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
   };
 }
 
+function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+  const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
+  let fees = estimate.fees || [];
+  let totals = calculateEstimate(lines, taxRate, fees);
+  const hasSuppliesFee = fees.some(fee => /shop supplies/i.test(fee.description));
+
+  if (repriceSupplies && hasSuppliesFee) {
+    const supplies = totals.labor > 0
+      ? roundMoney(Math.min(
+        SHOP_ESTIMATE_RULES.shopSuppliesCap,
+        totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
+      ))
+      : 0;
+    fees = fees.map(fee => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee)
+      .filter(fee => !/shop supplies/i.test(fee.description) || fee.amount > 0);
+    totals = calculateEstimate(lines, taxRate, fees);
+  }
+
+  const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+  const discountAmount = roundMoney(totals.subtotal * discountPercent / 100);
+  const subtotal = roundMoney(totals.subtotal - discountAmount);
+  const tax = roundMoney(subtotal * taxRate / 100);
+  return {
+    ...totals,
+    grossSubtotal: totals.subtotal,
+    discountPercent,
+    discountReason: String(estimate.discountReason || ''),
+    discountAmount,
+    subtotal,
+    tax,
+    total: roundMoney(subtotal + tax),
+  };
+}
+
 export function approvedEstimate(estimate = {}, decisions = {}) {
   const lines = (estimate.lines || []).map((line, index) => {
     const normalized = normalizeEstimateLine(line, index);
@@ -101,7 +142,7 @@ export function approvedEstimate(estimate = {}, decisions = {}) {
     };
   });
   const approvedLines = lines.filter(line => line.approvalStatus === 'approved');
-  const totals = calculateEstimate(approvedLines, estimate.taxRate, estimate.fees);
+  const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
   return {
     ...estimate,
     ...totals,
@@ -145,13 +186,11 @@ export function declinedEstimate(estimate = {}) {
 
 export function invoiceRecordForOrder(order, issuedAt = new Date()) {
   const source = order.estimate || {};
-  // Always recompute billable money from non-declined lines so stale/coherent
-  // full-card totals cannot inflate invoice subtotal/tax after partial approval.
-  const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+  const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
   const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, '').replace(/[^A-Za-z0-9-]/g, '')}`;
   const due = new Date(issuedAt);
   due.setDate(due.getDate() + 14);
-  const amount = roundMoney(order.total ?? estimate.total);
+  const amount = source.lines?.length ? estimate.total : roundMoney(order.total ?? estimate.total);
   return {
     id: number,
     number,
@@ -159,7 +198,12 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
     customer: order.customer,
     vehicle: order.vehicle,
     amount,
+    grossSubtotal: estimate.grossSubtotal,
     subtotal: estimate.subtotal,
+    discountPercent: estimate.discountPercent,
+    discountAmount: estimate.discountAmount,
+    discountReason: estimate.discountReason,
+    fees: estimate.fees,
     tax: estimate.tax,
     taxRate: Math.max(0, Number(estimate.taxRate) || 0),
     fees: estimate.fees,

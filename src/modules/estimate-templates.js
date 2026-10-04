@@ -1,11 +1,6 @@
-import { calculateEstimate, normalizeEstimateLine } from './estimate-workflow.js';
+import { calculateEstimate, normalizeEstimateLine, SHOP_ESTIMATE_RULES } from './estimate-workflow.js';
 
-export const SHOP_ESTIMATE_RULES = Object.freeze({
-  laborRate: 140,
-  taxRate: 8.25,
-  shopSuppliesRate: 3,
-  shopSuppliesCap: 20,
-});
+export { SHOP_ESTIMATE_RULES };
 
 const money = value => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -133,20 +128,20 @@ export const REFERENCE_ESTIMATE = Object.freeze({
   status: 'draft',
   template: true,
   customer: {
-    name: 'Adrianna Nichole Montemayor',
-    phone: '806-472-8455',
-    email: 'adriannamontemayordsi@gmail.com',
-    address: '2801 Amherst Street, Lubbock, Texas 79415',
+    name: 'Jordan Example',
+    phone: '555-0100',
+    email: 'customer@example.test',
+    address: '123 Example Street, Sample City, TX 00000',
     role: 'Claimant',
   },
   vehicle: {
     description: '2016 Mercedes-Benz GLA250',
-    vin: 'WDCTG4EB8GJ232287',
-    plate: 'XDH0971',
+    vin: 'DEMO-VEHICLE-VIN',
+    plate: 'DEMO-01',
   },
   insurance: {
-    company: 'Westlake Specialty Insurance Company',
-    policy: 'FSTX00012637',
+    company: 'Example Insurance',
+    policy: 'TEST-POLICY-001',
     claimNumber: '',
   },
   complaint: 'Deer collision. Claimant was not injured. No structural damage was found.',
@@ -165,8 +160,8 @@ export const REFERENCE_ESTIMATE = Object.freeze({
     'Hidden damage and any additional work require a revised estimate and customer authorization.',
   ],
   shopNotes: [
-    'Unsent Gmail draft from lee@yourcarguy806.com to Fransan Insurance at fransanins13@gmail.com has the current PDF attached. Do not send without instruction.',
-    'The handwritten insurance-photo sticky address 916 Main St #102 is not the claimant address and must not appear on the customer estimate.',
+    'Obtain written authorization before sending the estimate or customer records.',
+    'Verify any billing or photo-delivery address with the customer before use.',
   ],
   lines: referenceTotals.lines,
   fees: referenceTotals.fees,
