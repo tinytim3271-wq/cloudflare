@@ -7,6 +7,7 @@ import {
   greetingForNow,
   localIsoDate,
   mergeRemoteCollection,
+  pendingCreateIdsForCollection,
   sidebarCatalog,
   visibleSidebar,
 } from './home.js';
@@ -105,5 +106,19 @@ test('mergeRemoteCollection keeps only queued creates missing from remote data',
   assert.deepEqual(
     mergeRemoteCollection('orders', [], local, isSample, ['RO-3001']),
     [{ id: 'RO-3001', customer: 'Pending sync' }],
+  );
+});
+
+test('pendingCreateIdsForCollection reads only matching queued POST records', () => {
+  const queue = [
+    { method: 'POST', path: '/entities/orders', body: '{"id":"RO-3001"}' },
+    { method: 'PUT', path: '/entities/orders/RO-3002', body: '{"id":"RO-3002"}' },
+    { method: 'POST', path: '/entities/inspectiontemplates', body: '{"id":"template-1"}' },
+    { method: 'POST', path: '/entities/orders', body: '{' },
+  ];
+  assert.deepEqual(pendingCreateIdsForCollection('orders', queue), ['RO-3001']);
+  assert.deepEqual(
+    pendingCreateIdsForCollection('inspectionTemplates', queue, { inspectiontemplates: 'inspectionTemplates' }),
+    ['template-1'],
   );
 });

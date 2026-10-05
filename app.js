@@ -143,13 +143,14 @@
     const perMile = normalizeMileageRate(rate);
     const lines = miles > 0 ? [...baseLines, mileageLineItem(miles, perMile)] : [...baseLines];
     const labor = roundMoney(lines.reduce((sum, line) => sum + (Number(line.labor) || 0), 0));
-    const laborHours = roundMiles(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
+    const laborHours = roundMoney(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
     const parts = roundMoney(lines.reduce((sum, line) => sum + (Number(line.parts) || 0), 0));
     const feeAmount = Array.isArray(estimate.fees) ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0) : baseLines.length ? 12 : 0;
     const fees = feeAmount ? Array.isArray(estimate.fees) && estimate.fees.length ? estimate.fees : [{ description: "Shop supplies", amount: feeAmount }] : [];
     const taxRate = Number(taxRatePercent);
     const safeRate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 8.25;
-    const subtotal = roundMoney(labor + parts + feeAmount);
+    const discountAmount = roundMoney(estimate.discountAmount ?? baseLines.reduce((sum, line) => sum + (Number(line.discountAmount) || 0), 0));
+    const subtotal = roundMoney(labor + parts - discountAmount + feeAmount);
     const tax = roundMoney(subtotal * (safeRate / 100));
     const total = roundMoney(subtotal + tax);
     return {
@@ -195,6 +196,14 @@
       const labor = Number(baseEstimate.labor ?? order.labor) || 0;
       const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
       const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+      const aggregateCharge = Math.max(
+        0,
+        Number(order.total) > 0 ? Number(order.total) - (Number(order.tax) || 0) - priorCharge : (Number(baseEstimate.subtotal) || 0) - priorCharge
+      );
+      const aggregateOnly = !labor && !partsWithoutMileage && aggregateCharge > 0;
+      const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateCharge : 0);
+      const preserveAggregateTax = aggregateOnly && taxRate === void 0 && order.estimate?.taxRate == null && !(Number(order.tax) > 0);
+      const effectiveTaxRate = preserveAggregateTax ? 0 : taxRatePercent;
       const synthetic = {
         ...baseEstimate,
         lines: labor || partsWithoutMileage ? [{
@@ -204,13 +213,20 @@
           labor,
           parts: partsWithoutMileage,
           total: roundMoney(labor + partsWithoutMileage)
+        }] : aggregateOnly ? [{
+          service: "Imported charges",
+          hours: 0,
+          laborRate: 0,
+          labor: 0,
+          parts: aggregateCharge,
+          total: aggregateCharge
         }] : [],
         fees: baseEstimate.fees || [],
         labor,
         laborHours,
-        parts: partsWithoutMileage
+        parts: preservedParts
       };
-      const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, taxRatePercent);
+      const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, effectiveTaxRate);
       next.estimate = estimate2;
       next.labor = estimate2.labor;
       next.laborHours = estimate2.laborHours;
@@ -3631,7 +3647,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function applyRemoteList(key, records) {
     if (key === "shopSettingsRecords" && Array.isArray(records) && !records.length && (state.shopSettingsRecords || []).some((item) => item?.updatedAt)) return;
-    state[key] = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+    state[key] = mergeRemoteCollection2(key, records, state[key], localSampleRecord, pendingCreateIdsForCollection2(key, readMutationQueue(), shopEntityCollections));
     save();
   }
   function stampDemoAppointments() {
@@ -3665,7 +3681,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, pendingCreateIdsForCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3673,7 +3689,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_detect();
       init_utils();
       init_mileage();
-      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
+      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, pendingCreateIdsForCollection: pendingCreateIdsForCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
@@ -4497,18 +4513,34 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       isEmpty: orders2.length === 0 && invoices2.length === 0
     };
   }
-  function mergeRemoteCollection(key, remote, local, isSampleRecord) {
+  function mergeRemoteCollection(key, remote, local, isSampleRecord, pendingCreateIds = []) {
     if (!Array.isArray(remote)) return Array.isArray(local) ? local : [];
     const current = Array.isArray(local) ? local : [];
+    const pendingIds = new Set(pendingCreateIds);
     if (!remote.length) {
       if (current.length && typeof isSampleRecord === "function" && current.every((record) => isSampleRecord(key, record))) {
         return current;
       }
-      return remote;
+      const pendingCreates = current.filter((record) => record?.id && pendingIds.has(record.id));
+      return pendingCreates.length ? pendingCreates : remote;
     }
     const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
-    const localOnly = current.filter((record) => record?.id && !remoteIds.has(record.id) && !(typeof isSampleRecord === "function" && isSampleRecord(key, record)));
+    const localOnly = current.filter((record) => record?.id && !remoteIds.has(record.id) && !(typeof isSampleRecord === "function" && isSampleRecord(key, record)) && pendingIds.has(record.id));
     return localOnly.length ? [...localOnly, ...remote] : remote;
+  }
+  function pendingCreateIdsForCollection(collection, queue = [], entityCollections = {}) {
+    return (Array.isArray(queue) ? queue : []).flatMap((item) => {
+      if (item?.method !== "POST") return [];
+      const type = String(item.path || "").match(/^\/entities\/([^/]+)/i)?.[1]?.toLowerCase();
+      const target = type && Object.prototype.hasOwnProperty.call(entityCollections, type) ? entityCollections[type] : type;
+      if (target !== collection) return [];
+      try {
+        const id = JSON.parse(item.body)?.id;
+        return id ? [id] : [];
+      } catch {
+        return [];
+      }
+    });
   }
   var sidebarCatalog = [
     {
@@ -4564,6 +4596,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       greetingForNow,
       localIsoDate,
       mergeRemoteCollection,
+      pendingCreateIdsForCollection,
       sidebarCatalog,
       visibleSidebar
     };

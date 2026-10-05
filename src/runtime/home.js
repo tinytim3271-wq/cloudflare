@@ -125,7 +125,7 @@ export function mergeRemoteCollection(key, remote, local, isSampleRecord, pendin
     const pendingCreates = current.filter((record) => record?.id && pendingIds.has(record.id));
     return pendingCreates.length ? pendingCreates : remote;
   }
-  // Keep local-only rows that are not seed/demo data (e.g. offline-queued creates).
+  // Keep queued creates that are not yet present in the authoritative remote list.
   const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
   const localOnly = current.filter((record) => (
     record?.id
@@ -134,6 +134,23 @@ export function mergeRemoteCollection(key, remote, local, isSampleRecord, pendin
     && pendingIds.has(record.id)
   ));
   return localOnly.length ? [...localOnly, ...remote] : remote;
+}
+
+export function pendingCreateIdsForCollection(collection, queue = [], entityCollections = {}) {
+  return (Array.isArray(queue) ? queue : []).flatMap((item) => {
+    if (item?.method !== 'POST') return [];
+    const type = String(item.path || '').match(/^\/entities\/([^/]+)/i)?.[1]?.toLowerCase();
+    const target = type && Object.prototype.hasOwnProperty.call(entityCollections, type)
+      ? entityCollections[type]
+      : type;
+    if (target !== collection) return [];
+    try {
+      const id = JSON.parse(item.body)?.id;
+      return id ? [id] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** Plain-language navigation. Order is the shop day: today, counter, floor, office. */
@@ -195,6 +212,7 @@ if (typeof globalThis !== 'undefined') {
     greetingForNow,
     localIsoDate,
     mergeRemoteCollection,
+    pendingCreateIdsForCollection,
     sidebarCatalog,
     visibleSidebar,
   };
