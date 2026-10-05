@@ -1,8 +1,8 @@
 # ARI → MechPro customer field mapping
 
-**Prepared for:** Timothy Alderman  
-**Scope:** customer records only  
-**MechPro revision reviewed:** `7790dfb630576a692b53a45e76c5eaf554daadae` (`main`)  
+**Prepared for:** Timothy Alderman
+**Scope:** customer records only
+**MechPro revision reviewed:** `7790dfb630576a692b53a45e76c5eaf554daadae` (`main`)
 **Mode:** report/dry run only; no schema change, migration, import code, or data transfer
 
 ## Executive summary
@@ -229,4 +229,3 @@ No transfer should proceed merely because D1's JSON column can accept an undecla
 - [Reports Feature Improvements, ARI v14](https://ari.app/2024/04/reports-feature-improvements-ari-v-14/) — Clients data export and CSV/Excel/PDF workflow.
 - [Introducing Grid View](https://ari.app/2021/09/introducing-grid-view-to-ari/) — Clients grid support and full-list Excel export.
 - [Profile Setup](https://ari.app/features/profile-setup/) — shop labor rates, parts markups, taxes, and discount coupons; useful for distinguishing global settings from per-client overrides.
-
