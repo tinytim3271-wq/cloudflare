@@ -114,14 +114,16 @@ export function buildHomeModel({
   };
 }
 
-export function mergeRemoteCollection(key, remote, local, isSampleRecord) {
+export function mergeRemoteCollection(key, remote, local, isSampleRecord, pendingCreateIds = []) {
   if (!Array.isArray(remote)) return Array.isArray(local) ? local : [];
   const current = Array.isArray(local) ? local : [];
+  const pendingIds = new Set(pendingCreateIds);
   if (!remote.length) {
     if (current.length && typeof isSampleRecord === 'function' && current.every((record) => isSampleRecord(key, record))) {
       return current;
     }
-    return remote;
+    const pendingCreates = current.filter((record) => record?.id && pendingIds.has(record.id));
+    return pendingCreates.length ? pendingCreates : remote;
   }
   // Keep local-only rows that are not seed/demo data (e.g. offline-queued creates).
   const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
@@ -129,6 +131,7 @@ export function mergeRemoteCollection(key, remote, local, isSampleRecord) {
     record?.id
     && !remoteIds.has(record.id)
     && !(typeof isSampleRecord === 'function' && isSampleRecord(key, record))
+    && pendingIds.has(record.id)
   ));
   return localOnly.length ? [...localOnly, ...remote] : remote;
 }
@@ -196,4 +199,3 @@ if (typeof globalThis !== 'undefined') {
     visibleSidebar,
   };
 }
-

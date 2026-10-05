@@ -132,6 +132,19 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
     const labor = Number(baseEstimate.labor ?? order.labor) || 0;
     const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
     const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+    const aggregateCharge = Math.max(
+      0,
+      Number(order.total) > 0
+        ? Number(order.total) - (Number(order.tax) || 0) - priorCharge
+        : (Number(baseEstimate.subtotal) || 0) - priorCharge,
+    );
+    const aggregateOnly = !labor && !partsWithoutMileage && aggregateCharge > 0;
+    const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateCharge : 0);
+    const preserveAggregateTax = aggregateOnly
+      && taxRate === undefined
+      && order.estimate?.taxRate == null
+      && !(Number(order.tax) > 0);
+    const effectiveTaxRate = preserveAggregateTax ? 0 : taxRatePercent;
     const synthetic = {
       ...baseEstimate,
       lines: labor || partsWithoutMileage
@@ -143,13 +156,22 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
           parts: partsWithoutMileage,
           total: roundMoney(labor + partsWithoutMileage),
         }]
+        : aggregateOnly
+        ? [{
+          service: 'Imported charges',
+          hours: 0,
+          laborRate: 0,
+          labor: 0,
+          parts: aggregateCharge,
+          total: aggregateCharge,
+        }]
         : [],
       fees: baseEstimate.fees || [],
       labor,
       laborHours,
-      parts: partsWithoutMileage,
+      parts: preservedParts,
     };
-    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, taxRatePercent);
+    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, effectiveTaxRate);
     next.estimate = estimate;
     next.labor = estimate.labor;
     next.laborHours = estimate.laborHours;

@@ -78,3 +78,27 @@ test('applyMileageToOrder stores trip fields and invoice-ready estimate', () => 
   assert.equal(order.estimate.lines.at(-1).kind, 'mileage');
   assert.equal(order.total, order.estimate.total);
 });
+
+test('applyMileageToOrder preserves aggregate-only imported charges', () => {
+  const order = applyMileageToOrder({
+    total: 89.95,
+    labor: 0,
+    laborHours: 0,
+    parts: 0,
+    tax: 0,
+  }, { oneWayMiles: 0 });
+
+  assert.equal(order.estimate.subtotal, 89.95);
+  assert.equal(order.total, 89.95);
+  assert.equal(order.tax, 0);
+
+  const withMileage = applyMileageToOrder({
+    total: 89.95,
+    labor: 0,
+    laborHours: 0,
+    parts: 0,
+    tax: 0,
+  }, { oneWayMiles: 10 });
+  assert.equal(withMileage.estimate.subtotal, 103.55);
+  assert.equal(withMileage.total, 103.55);
+});
