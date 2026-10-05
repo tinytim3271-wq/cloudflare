@@ -76,7 +76,8 @@ export function applyMileageToEstimate(estimate = {}, tripMiles = 0, rate = DEFA
     : [];
   const taxRate = Number(taxRatePercent);
   const safeRate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 8.25;
-  const subtotal = roundMoney(labor + parts + feeAmount);
+  const discountAmount = roundMoney(estimate.discountAmount ?? baseLines.reduce((sum, line) => sum + (Number(line.discountAmount) || 0), 0));
+  const subtotal = roundMoney(labor + parts - discountAmount + feeAmount);
   const tax = roundMoney(subtotal * (safeRate / 100));
   const total = roundMoney(subtotal + tax);
   return {
