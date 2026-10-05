@@ -184,7 +184,7 @@
       lines: [],
       labor: Number(order.labor) || 0,
       laborHours: Number(order.laborHours) || 0,
-      parts: Math.max(0, (Number(order.parts) || 0) - (Number(order.mileageCharge) || 0)),
+      parts: Number(order.parts) || 0,
       fees: [],
       subtotal: Math.max(0, (Number(order.total) || 0) - (Number(order.tax) || 0) - (Number(order.mileageCharge) || 0)),
       tax: Number(order.tax) || 0,
@@ -195,7 +195,7 @@
       const priorCharge = Number(order.mileageCharge) || 0;
       const labor = Number(baseEstimate.labor ?? order.labor) || 0;
       const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
-      const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+      const partsWithoutMileage = Math.max(0, Number(baseEstimate.parts ?? order.parts) || 0);
       const aggregateCharge = Math.max(
         0,
         Number(order.total) > 0 ? Number(order.total) - (Number(order.tax) || 0) - priorCharge : (Number(baseEstimate.subtotal) || 0) - priorCharge
@@ -229,7 +229,7 @@
       const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, effectiveTaxRate);
       next.estimate = estimate2;
       next.labor = estimate2.labor;
-      next.laborHours = estimate2.laborHours;
+      next.laborHours = order.laborHours ?? estimate2.laborHours;
       next.parts = estimate2.parts;
       next.tax = estimate2.tax;
       next.total = estimate2.total;
@@ -238,7 +238,7 @@
     const estimate = applyMileageToEstimate(baseEstimate, tripMiles, perMile, taxRatePercent);
     next.estimate = estimate;
     next.labor = estimate.labor;
-    next.laborHours = estimate.laborHours;
+    next.laborHours = order.laborHours ?? estimate.laborHours;
     next.parts = estimate.parts;
     next.tax = estimate.tax;
     next.total = estimate.total;

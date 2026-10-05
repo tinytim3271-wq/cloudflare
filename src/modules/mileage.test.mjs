@@ -79,6 +79,48 @@ test('applyMileageToOrder stores trip fields and invoice-ready estimate', () => 
   assert.equal(order.total, order.estimate.total);
 });
 
+test('applyMileageToOrder preserves parts when recalculating mileage without an estimate', () => {
+  const order = applyMileageToOrder({
+    labor: 0,
+    laborHours: 0,
+    parts: 50,
+    tax: 0,
+    total: 63.6,
+    mileageCharge: 13.6,
+  }, { oneWayMiles: 10, rate: 0.68, taxRate: 0 });
+
+  assert.equal(order.estimate.parts, 63.6);
+  assert.equal(order.total, 63.6);
+});
+
+test('applyMileageToOrder preserves stored work-order hours over estimate hours', () => {
+  const withLines = applyMileageToOrder({
+    laborHours: 3,
+    estimate: {
+      lines: [{ service: 'Diag', hours: 1, labor: 165, parts: 0, total: 165 }],
+      labor: 165,
+      laborHours: 1,
+      parts: 0,
+      fees: [],
+    },
+  }, { oneWayMiles: 0 });
+  const snapshot = applyMileageToOrder({
+    laborHours: 3,
+    estimate: {
+      lines: [],
+      labor: 165,
+      laborHours: 1,
+      parts: 0,
+      subtotal: 165,
+      tax: 0,
+      total: 165,
+    },
+  }, { oneWayMiles: 0 });
+
+  assert.equal(withLines.laborHours, 3);
+  assert.equal(snapshot.laborHours, 3);
+});
+
 test('applyMileageToOrder preserves aggregate-only imported charges', () => {
   const order = applyMileageToOrder({
     total: 89.95,

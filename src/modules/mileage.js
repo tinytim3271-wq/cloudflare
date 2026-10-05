@@ -131,7 +131,7 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
     const priorCharge = Number(order.mileageCharge) || 0;
     const labor = Number(baseEstimate.labor ?? order.labor) || 0;
     const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
-    const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+    const partsWithoutMileage = Math.max(0, Number(baseEstimate.parts ?? order.parts) || 0);
     const aggregateCharge = Math.max(
       0,
       Number(order.total) > 0
