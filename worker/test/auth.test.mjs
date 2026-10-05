@@ -240,6 +240,97 @@ test('magic-link callback refuses to mint a session for a disabled user', async 
   assert.equal(insertedSession, false);
 });
 
+function callbackDb({ sessionError = null } = {}) {
+  let batchCalls = 0;
+  return {
+    get batchCalls() { return batchCalls; },
+    prepare(sql) {
+      return {
+        sql,
+        bind(...args) {
+          return {
+            sql,
+            args,
+            async first() {
+              if (/FROM login_tokens/.test(sql)) {
+                return {
+                  id: 'login-1',
+                  email: 'owner@example.test',
+                  return_to: '/app',
+                  expires_at: new Date(Date.now() + 60_000).toISOString(),
+                  used_at: null,
+                  auth_method: 'magic_link',
+                };
+              }
+              if (/FROM users WHERE email/.test(sql)) {
+                return {
+                  id: 'user-1',
+                  email: 'owner@example.test',
+                  shop_id: 'shop-1',
+                  role: 'admin',
+                  name: 'Owner',
+                  enabled: 1,
+                };
+              }
+              if (/FROM founding_invites/.test(sql)) {
+                throw new Error('D1_ERROR: no such table: founding_invites: SQLITE_ERROR');
+              }
+              assert.fail(`unexpected callback query: ${sql}`);
+            },
+          };
+        },
+      };
+    },
+    async batch(statements) {
+      batchCalls += 1;
+      assert.match(statements[0].sql, /INSERT INTO sessions/);
+      assert.match(statements[1].sql, /UPDATE login_tokens SET used_at/);
+      if (sessionError) throw sessionError;
+      return [{ success: true }, { success: true }];
+    },
+  };
+}
+
+test('magic-link callback creates a session when optional founding tables are absent', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const DB = callbackDb();
+  const response = await worker.fetch(
+    new Request(`https://app.example.test/api/auth/callback?token=${'c'.repeat(32)}`),
+    { DB },
+  );
+
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get('Location'), 'https://app.example.test/app');
+  assert.match(response.headers.get('Set-Cookie') || '', /^mechpro_session=/);
+  assert.equal(DB.batchCalls, 1);
+});
+
+test('auth callback reports schema failures safely and does not issue a session cookie', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const errors = t.mock.method(console, 'error', () => {});
+  const DB = callbackDb({
+    sessionError: new Error('D1_ERROR: no such table: sessions: SQLITE_ERROR'),
+  });
+  const response = await worker.fetch(
+    new Request(`https://app.example.test/api/auth/callback?token=${'d'.repeat(32)}`),
+    { DB },
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Retry-After'), '60');
+  assert.ok(response.headers.get('X-Request-ID'));
+  assert.match(payload.message, /Sign-in is temporarily unavailable/);
+  assert.equal(payload.requestId, response.headers.get('X-Request-ID'));
+  assert.doesNotMatch(JSON.stringify(payload), /sessions|D1_ERROR|SQLITE/i);
+  assert.equal(response.headers.get('Set-Cookie'), null);
+  assert.equal(DB.batchCalls, 1);
+  assert.equal(errors.mock.callCount(), 1);
+  const serverLog = JSON.parse(errors.mock.calls[0].arguments[0]);
+  assert.match(serverLog.error, /no such table: sessions/);
+  assert.equal(serverLog.requestId, payload.requestId);
+});
+
 test('cookie sessions for disabled users are rejected on API routes', async (t) => {
   t.mock.method(console, 'error', () => {});
   const sessionToken = 'b'.repeat(32);
@@ -277,6 +368,7 @@ test('cookie sessions for disabled users are rejected on API routes', async (t) 
 });
 
 test('Google sign-in validates the ID token and creates a one-time desktop handoff', async (t) => {
+  t.mock.method(console, 'warn', () => {});
   const clientId = 'google-client.apps.googleusercontent.com';
   const keyPair = await crypto.subtle.generateKey(
     { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
@@ -294,7 +386,9 @@ test('Google sign-in validates the ID token and creates a one-time desktop hando
           bind(...args) {
             return {
               async first() {
-                if (/FROM founding_invites/i.test(sql)) return null;
+                if (/FROM founding_invites/i.test(sql)) {
+                  throw new Error('D1_ERROR: no such table: founding_invites: SQLITE_ERROR');
+                }
                 assert.match(sql, /FROM users WHERE email/);
                 assert.equal(args[0], 'owner@example.test');
                 return {

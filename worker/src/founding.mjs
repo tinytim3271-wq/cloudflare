@@ -2,6 +2,11 @@ import { isFoundingPlan } from './plans.mjs';
 
 const FOUNDING_TRIAL_DAYS = 14;
 
+function missingFoundingSchema(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such table:\s*(?:main\.)?founding_invites\b/i.test(message);
+}
+
 /**
  * Interpret the two-statement founding claim batch.
  * Partial success must be compensated so invites are not burned without a
@@ -27,14 +32,25 @@ export async function applyPendingFoundingClaim(env, { email, shopId, ownerName,
   const targetShopId = String(shopId || '').trim();
   if (!normalized || !targetShopId) return null;
 
-  const invite = await env.DB.prepare(`
-    SELECT token, plan_id
-    FROM founding_invites
-    WHERE used_at IS NOT NULL
-      AND plan_id IS NOT NULL
-      AND lower(trim(used_by_shop_id)) = ?
-    LIMIT 1
-  `).bind(normalized).first();
+  let invite;
+  try {
+    invite = await env.DB.prepare(`
+      SELECT token, plan_id
+      FROM founding_invites
+      WHERE used_at IS NOT NULL
+        AND plan_id IS NOT NULL
+        AND lower(trim(used_by_shop_id)) = ?
+      LIMIT 1
+    `).bind(normalized).first();
+  } catch (error) {
+    if (!missingFoundingSchema(error)) throw error;
+    console.warn(JSON.stringify({
+      message: 'optional founding schema unavailable',
+      feature: 'founding_claim',
+      table: 'founding_invites',
+    }));
+    return null;
+  }
 
   const planId = String(invite?.plan_id || '').trim();
   if (!invite?.token || !isFoundingPlan(planId)) return null;

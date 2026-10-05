@@ -159,3 +159,51 @@ test('applyPendingFoundingClaim is a no-op without a pending email-linked invite
   assert.equal(state.accounts.length, 0);
   assert.equal(state.subscriptions.length, 0);
 });
+
+test('applyPendingFoundingClaim is a no-op when the optional founding schema is not installed', async (t) => {
+  const warnings = t.mock.method(console, 'warn', () => {});
+  const DB = {
+    prepare(sql) {
+      assert.match(sql, /FROM founding_invites/i);
+      return {
+        bind() {
+          return {
+            async first() {
+              throw new Error('D1_ERROR: no such table: founding_invites: SQLITE_ERROR');
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const result = await applyPendingFoundingClaim({ DB }, {
+    email: 'owner@shop.test',
+    shopId: 'shop-abc',
+  });
+
+  assert.equal(result, null);
+  assert.equal(warnings.mock.callCount(), 1);
+  assert.doesNotMatch(warnings.mock.calls[0].arguments[0], /owner@shop\.test/);
+});
+
+test('applyPendingFoundingClaim does not hide unrelated database failures', async () => {
+  const DB = {
+    prepare() {
+      return {
+        bind() {
+          return {
+            async first() {
+              throw new Error('D1_ERROR: database is locked: SQLITE_BUSY');
+            },
+          };
+        },
+      };
+    },
+  };
+
+  await assert.rejects(
+    applyPendingFoundingClaim({ DB }, { email: 'owner@shop.test', shopId: 'shop-abc' }),
+    /database is locked/,
+  );
+});

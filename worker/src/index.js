@@ -220,6 +220,27 @@ function safeReturnPath(value, fallback = '/app') {
   }
 }
 
+function isAuthCallbackPath(path) {
+  return path === '/api/auth/callback' || path === '/api/auth/google/callback';
+}
+
+function isDatabaseOperationalError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return error?.name === 'D1Error'
+    || /\bD1_ERROR\b|\bSQLITE_(?:ERROR|BUSY|CORRUPT|FULL|IOERR|LOCKED|READONLY)\b|no such (?:table|column):/i.test(message);
+}
+
+function publicRequestError(error, path) {
+  if (!(error instanceof HttpError) && isAuthCallbackPath(path) && isDatabaseOperationalError(error)) {
+    return new HttpError(
+      503,
+      'Sign-in is temporarily unavailable. Please try again later or contact support if the problem continues.',
+      { 'Retry-After': '60' },
+    );
+  }
+  return error;
+}
+
 async function resolveAppSession(request, env) {
   const token = getCookieValue(request, APP_SESSION_COOKIE);
   if (!token) return null;
@@ -2237,24 +2258,34 @@ export default {
       const response = await route(request, env, analytics);
       return response.status === 101 ? response : withCors(response, request, env);
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
+      const path = new URL(request.url).pathname;
+      const publicError = publicRequestError(error, path);
+      const status = publicError instanceof HttpError ? publicError.status : 500;
+      const requestId = request.headers.get('Cf-Ray') || crypto.randomUUID();
       posthog?.captureException(error, analytics.distinctId, {
         method: request.method,
-        path: new URL(request.url).pathname,
+        path,
         status,
+        request_id: requestId,
       });
       console.error(JSON.stringify({
         message: 'request failed',
+        requestId,
         method: request.method,
-        path: new URL(request.url).pathname,
+        path,
         status,
+        errorName: error instanceof Error ? error.name : typeof error,
         error: error instanceof Error ? error.message : String(error),
       }));
       return withCors(json({
         message: status === 500
           ? (env.AUTH_EXPOSE_LOGIN_LINK === '1' && error instanceof Error ? error.message : 'Internal error')
-          : error.message,
-      }, status, error instanceof HttpError && error.headers ? error.headers : {}), request, env);
+          : publicError.message,
+        ...(publicError !== error ? { requestId } : {}),
+      }, status, {
+        ...(publicError instanceof HttpError && publicError.headers ? publicError.headers : {}),
+        'X-Request-ID': requestId,
+      }), request, env);
     } finally {
       if (posthog) {
         const flush = posthog.flush().catch((error) => {
