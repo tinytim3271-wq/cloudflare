@@ -10,6 +10,14 @@ function mockEnvironment() {
   const links = [];
   const files = new Map();
   const key = (shopId, type, id) => `${shopId}:${type}:${id}`;
+  const fixture = {
+    staleEntityReads: 0,
+    staleEntitySnapshot: null,
+  };
+  const isEstimateLocked = document => Boolean(
+    document?.linesLockedAt
+    || ['approved', 'declined'].includes(document?.estimateApproval?.status),
+  );
   const DB = {
     prepare(sql) {
       return {
@@ -17,6 +25,14 @@ function mockEnvironment() {
           return {
             async first() {
               if (/FROM entities/i.test(sql)) {
+                if (fixture.staleEntityReads > 0 && fixture.staleEntitySnapshot) {
+                  fixture.staleEntityReads -= 1;
+                  return {
+                    data_json: JSON.stringify(fixture.staleEntitySnapshot),
+                    created_by: 'writer-1',
+                    created_at: fixture.staleEntitySnapshot.createdAt,
+                  };
+                }
                 const record = entities.get(key(args[0], args[1], args[2]));
                 return record ? { data_json: JSON.stringify(record), created_by: 'writer-1', created_at: record.createdAt } : null;
               }
@@ -41,8 +57,27 @@ function mockEnvironment() {
                 });
                 return { success: true, meta: { changes: 1 } };
               } else if (/UPDATE entities SET/i.test(sql)) {
+                const existing = entities.get(key(args[2], args[3], args[4]));
+                if (/json_extract/i.test(sql) && existing && isEstimateLocked(existing)) {
+                  return { success: true, meta: { changes: 0 } };
+                }
                 entities.set(key(args[2], args[3], args[4]), JSON.parse(args[0]));
                 return { success: true, meta: { changes: 1 } };
+              } else if (/UPDATE customer_document_links SET/i.test(sql) && /id != \?/i.test(sql)) {
+                let changes = 0;
+                for (const item of links) {
+                  if (
+                    item.shop_id === args[2]
+                    && item.document_type === args[3]
+                    && item.document_id === args[4]
+                    && item.id !== args[5]
+                    && !item.consumed_at
+                  ) {
+                    Object.assign(item, { consumed_at: args[0], result: args[1] });
+                    changes += 1;
+                  }
+                }
+                return { success: true, meta: { changes } };
               } else if (/UPDATE customer_document_links SET/i.test(sql)) {
                 const link = links.find(item => item.id === args[2]);
                 if (link && !link.consumed_at) {
@@ -58,7 +93,7 @@ function mockEnvironment() {
       };
     },
   };
-  return {
+  Object.assign(fixture, {
     env: {
       DB,
       FILES: {
@@ -71,7 +106,8 @@ function mockEnvironment() {
     links,
     files,
     key,
-  };
+  });
+  return fixture;
 }
 
 const context = {
@@ -331,6 +367,58 @@ test('remote decline-all marks every line declined, zeros money, and locks the e
     () => issueLink(fixture, 'estimate', 'RO-1100'),
     error => error.status === 409 && /already locked/i.test(error.message),
   );
+});
+
+test('email and SMS estimate links cannot race to overwrite each other', async () => {
+  const fixture = mockEnvironment();
+  const unlocked = estimateOrder();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), unlocked);
+  const emailLink = await issueLink(fixture, 'estimate', 'RO-1100');
+  const smsLink = await issueLink(fixture, 'estimate', 'RO-1100');
+  const emailToken = new URL(emailLink.url).pathname.split('/').pop();
+  const smsToken = new URL(smsLink.url).pathname.split('/').pop();
+  const signatureDataUrl = `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`;
+
+  // Both requests read the unlocked order before either write commits (email + SMS race).
+  fixture.staleEntitySnapshot = structuredClone(unlocked);
+  fixture.staleEntityReads = 2;
+
+  const outcomes = await Promise.allSettled([
+    handleCustomerDocument(new Request(emailLink.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl,
+        decisions: { labor: 'approved', part: 'declined' },
+      }),
+    }), fixture.env, emailToken),
+    handleCustomerDocument(new Request(smsLink.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'decline' }),
+    }), fixture.env, smsToken),
+  ]);
+
+  const fulfilled = outcomes.filter(item => item.status === 'fulfilled');
+  const rejected = outcomes.filter(item => item.status === 'rejected');
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(fulfilled[0].value.status, 200);
+  assert.equal(rejected[0].reason.status, 409);
+  assert.match(rejected[0].reason.message, /already been approved or declined/i);
+
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.ok(['approved', 'declined'].includes(saved.estimateApproval.status));
+  if (saved.estimateApproval.status === 'approved') {
+    assert.equal(saved.estimateApproval.authorizationName, 'Pat Customer');
+    assert.equal(saved.total, 165);
+  } else {
+    assert.equal(saved.estimateApproval.source, 'remote');
+    assert.equal(saved.status, 'estimate');
+  }
+  assert.ok(fixture.links.every(item => item.consumed_at));
 });
 
 test('losing claim on an unused token returns 409 before writing the document', async () => {
