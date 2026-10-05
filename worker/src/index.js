@@ -663,6 +663,54 @@ async function handleAuthSession(context, analytics) {
   });
 }
 
+async function geocodeAddress(address) {
+  const query = String(address || '').trim();
+  if (!query) return null;
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'MechProShopOS/1.0 (mileage; https://www.yourcarguy806.com)',
+    },
+  });
+  if (!response.ok) throw new HttpError(502, 'Address lookup is unavailable');
+  const results = await response.json();
+  const hit = Array.isArray(results) ? results[0] : null;
+  if (!hit?.lat || !hit?.lon) return null;
+  return { lat: Number(hit.lat), lon: Number(hit.lon), label: hit.display_name || query };
+}
+
+async function drivingMiles(from, to) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
+  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new HttpError(502, 'Route calculation is unavailable');
+  const payload = await response.json();
+  const meters = Number(payload?.routes?.[0]?.distance);
+  if (!Number.isFinite(meters) || meters <= 0) throw new HttpError(422, 'No driving route found between those addresses');
+  return Math.round((meters / 1609.344) * 10) / 10;
+}
+
+async function handleMileageCalculate(request, env, context) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'technician', 'service_writer', 'office']);
+  const body = await requestJson(request);
+  const fromAddress = String(body.from || body.shopAddress || '').trim();
+  const toAddress = String(body.to || body.jobAddress || '').trim();
+  if (!fromAddress || !toAddress) throw new HttpError(400, 'Shop address and job site address are required');
+  const [from, to] = await Promise.all([geocodeAddress(fromAddress), geocodeAddress(toAddress)]);
+  if (!from) throw new HttpError(422, 'Could not locate the shop address');
+  if (!to) throw new HttpError(422, 'Could not locate the job site address');
+  const oneWayMiles = await drivingMiles(from, to);
+  const roundTripMiles = Math.round(oneWayMiles * 2 * 10) / 10;
+  return json({
+    from: from.label,
+    to: to.label,
+    oneWayMiles,
+    roundTripMiles,
+    source: 'OSRM driving route',
+  });
+}
+
 async function handleVin(request, env, context, vin) {
   if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
   vin = String(vin || '').trim().toUpperCase();
@@ -1768,11 +1816,21 @@ async function handleBilling(request, env, context, segments) {
     const planId = String(body.planId || 'starter').trim() || 'starter';
     if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
     if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
-    const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
+    const plan = await env.DB.prepare('SELECT * FROM plans WHERE (id = ? OR stripe_price_id = ?) AND active = 1 LIMIT 1').bind(planId, planId).first();
     if (!plan) throw new HttpError(404, 'Billing plan not found');
+    if (plan.id === 'enterprise' || Number(plan.monthly_price_cents) <= 0) {
+      throw new HttpError(400, 'Enterprise plans are arranged with MechPro. Start a trial and tell us the shop name.');
+    }
     const stripeKey = env.STRIPE_SECRET_KEY || '';
     const priceId = String(plan.stripe_price_id || '').trim();
-    if (stripeKey && priceId && !priceId.startsWith('price_placeholder') && !priceId.startsWith('price_starter') && !priceId.startsWith('price_growth')) {
+    const placeholderPrice = !priceId
+      || priceId.startsWith('price_placeholder')
+      || priceId.startsWith('price_starter')
+      || priceId.startsWith('price_growth')
+      || priceId.startsWith('price_shop')
+      || priceId.startsWith('price_pro')
+      || priceId.startsWith('price_enterprise');
+    if (stripeKey && priceId && !placeholderPrice) {
       const origin = new URL(request.url).origin;
       const successUrl = String(body.successUrl || `${origin}/?billing=success`);
       const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
@@ -1924,6 +1982,7 @@ async function route(request, env, analytics) {
   if (path === '/auth/session') return handleAuthSession(context, analytics);
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
+  if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);

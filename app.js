@@ -77,6 +77,232 @@
     }
   });
 
+  // src/modules/mileage.js
+  var mileage_exports = {};
+  __export(mileage_exports, {
+    DEFAULT_MILEAGE_RATE: () => DEFAULT_MILEAGE_RATE,
+    applyMileageToEstimate: () => applyMileageToEstimate,
+    applyMileageToOrder: () => applyMileageToOrder,
+    mileageCharge: () => mileageCharge,
+    mileageLineItem: () => mileageLineItem,
+    mileagePanelMarkup: () => mileagePanelMarkup,
+    newOrderMileageMarkup: () => newOrderMileageMarkup,
+    normalizeMileageRate: () => normalizeMileageRate,
+    normalizeOneWayMiles: () => normalizeOneWayMiles,
+    refreshMileagePreview: () => refreshMileagePreview,
+    roundMiles: () => roundMiles,
+    roundMoney: () => roundMoney,
+    roundTripMiles: () => roundTripMiles,
+    stripMileageLines: () => stripMileageLines
+  });
+  function roundMoney(value2) {
+    return Math.round((Number(value2) || 0) * 100) / 100;
+  }
+  function roundMiles(value2) {
+    return Math.round((Number(value2) || 0) * 10) / 10;
+  }
+  function normalizeMileageRate(value2) {
+    const rate = Number(value2);
+    return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_MILEAGE_RATE;
+  }
+  function normalizeOneWayMiles(value2) {
+    const miles = Number(value2);
+    if (!Number.isFinite(miles) || miles <= 0) return 0;
+    return roundMiles(miles);
+  }
+  function roundTripMiles(oneWayMiles) {
+    return roundMiles(normalizeOneWayMiles(oneWayMiles) * 2);
+  }
+  function mileageCharge(miles, rate = DEFAULT_MILEAGE_RATE) {
+    return roundMoney(roundMiles(miles) * normalizeMileageRate(rate));
+  }
+  function mileageLineItem(miles, rate = DEFAULT_MILEAGE_RATE) {
+    const tripMiles = roundMiles(miles);
+    const perMile = normalizeMileageRate(rate);
+    const total = mileageCharge(tripMiles, perMile);
+    return {
+      service: "Travel mileage (to and from job)",
+      notes: `${tripMiles.toFixed(1)} miles @ $${perMile.toFixed(2)}/mi`,
+      explanation: `${tripMiles.toFixed(1)} round-trip miles billed at $${perMile.toFixed(2)} per mile`,
+      hours: 0,
+      laborRate: 0,
+      labor: 0,
+      parts: total,
+      total,
+      kind: "mileage",
+      miles: tripMiles,
+      rate: perMile
+    };
+  }
+  function stripMileageLines(lines = []) {
+    return (Array.isArray(lines) ? lines : []).filter((line) => line?.kind !== "mileage");
+  }
+  function applyMileageToEstimate(estimate = {}, tripMiles = 0, rate = DEFAULT_MILEAGE_RATE, taxRatePercent = 8.25) {
+    const baseLines = stripMileageLines(estimate.lines);
+    const miles = roundMiles(tripMiles);
+    const perMile = normalizeMileageRate(rate);
+    const lines = miles > 0 ? [...baseLines, mileageLineItem(miles, perMile)] : [...baseLines];
+    const labor = roundMoney(lines.reduce((sum, line) => sum + (Number(line.labor) || 0), 0));
+    const laborHours = roundMiles(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
+    const parts = roundMoney(lines.reduce((sum, line) => sum + (Number(line.parts) || 0), 0));
+    const feeAmount = Array.isArray(estimate.fees) ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0) : baseLines.length ? 12 : 0;
+    const fees = feeAmount ? Array.isArray(estimate.fees) && estimate.fees.length ? estimate.fees : [{ description: "Shop supplies", amount: feeAmount }] : [];
+    const taxRate = Number(taxRatePercent);
+    const safeRate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 8.25;
+    const subtotal = roundMoney(labor + parts + feeAmount);
+    const tax = roundMoney(subtotal * (safeRate / 100));
+    const total = roundMoney(subtotal + tax);
+    return {
+      ...estimate,
+      lines,
+      labor,
+      laborHours,
+      parts,
+      fees,
+      subtotal,
+      tax,
+      taxRate: safeRate,
+      total,
+      mileageMiles: miles,
+      mileageRate: perMile,
+      mileageCharge: mileageCharge(miles, perMile)
+    };
+  }
+  function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate, taxRate } = {}) {
+    const next = { ...order };
+    const oneWay = oneWayMiles === void 0 ? normalizeOneWayMiles(order.tripMilesOneWay) : normalizeOneWayMiles(oneWayMiles);
+    const tripMiles = roundTripMiles(oneWay);
+    const perMile = normalizeMileageRate(rate ?? order.mileageRate);
+    const taxRatePercent = taxRate ?? order.estimate?.taxRate ?? 8.25;
+    if (jobAddress !== void 0) next.jobAddress = String(jobAddress || "").trim();
+    next.tripMilesOneWay = oneWay;
+    next.tripMiles = tripMiles;
+    next.mileageRate = perMile;
+    next.mileageCharge = mileageCharge(tripMiles, perMile);
+    const baseEstimate = order.estimate && typeof order.estimate === "object" ? order.estimate : {
+      lines: [],
+      labor: Number(order.labor) || 0,
+      laborHours: Number(order.laborHours) || 0,
+      parts: Math.max(0, (Number(order.parts) || 0) - (Number(order.mileageCharge) || 0)),
+      fees: [],
+      subtotal: Math.max(0, (Number(order.total) || 0) - (Number(order.tax) || 0) - (Number(order.mileageCharge) || 0)),
+      tax: Number(order.tax) || 0,
+      taxRate: taxRatePercent,
+      total: Number(order.total) || 0
+    };
+    if (!stripMileageLines(baseEstimate.lines).length) {
+      const priorCharge = Number(order.mileageCharge) || 0;
+      const labor = Number(baseEstimate.labor ?? order.labor) || 0;
+      const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
+      const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+      const synthetic = {
+        ...baseEstimate,
+        lines: labor || partsWithoutMileage ? [{
+          service: "Repair services",
+          hours: laborHours,
+          laborRate: laborHours ? roundMoney(labor / laborHours) : 0,
+          labor,
+          parts: partsWithoutMileage,
+          total: roundMoney(labor + partsWithoutMileage)
+        }] : [],
+        fees: baseEstimate.fees || [],
+        labor,
+        laborHours,
+        parts: partsWithoutMileage
+      };
+      const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, taxRatePercent);
+      next.estimate = estimate2;
+      next.labor = estimate2.labor;
+      next.laborHours = estimate2.laborHours;
+      next.parts = estimate2.parts;
+      next.tax = estimate2.tax;
+      next.total = estimate2.total;
+      return next;
+    }
+    const estimate = applyMileageToEstimate(baseEstimate, tripMiles, perMile, taxRatePercent);
+    next.estimate = estimate;
+    next.labor = estimate.labor;
+    next.laborHours = estimate.laborHours;
+    next.parts = estimate.parts;
+    next.tax = estimate.tax;
+    next.total = estimate.total;
+    return next;
+  }
+  function mileagePanelMarkup({
+    jobAddress = "",
+    oneWayMiles = "",
+    roundTrip = 0,
+    rate = DEFAULT_MILEAGE_RATE,
+    charge = 0,
+    shopAddress = "",
+    canEdit = true
+  } = {}) {
+    const disabled = canEdit ? "" : "disabled";
+    return `<section class="mileage-panel" id="mileage-panel">
+    <div class="mileage-panel-head">
+      <div>
+        <h3>Travel mileage</h3>
+        <p>Round-trip (to and from the job) is billed at $${normalizeMileageRate(rate).toFixed(2)}/mi. Shop base: ${escapePlain(shopAddress || "Set shop address in Settings")}.</p>
+      </div>
+      <div class="mileage-charge">${formatMoney(charge)}<small>${Number(roundTrip || 0).toFixed(1)} mi round trip</small></div>
+    </div>
+    <div class="form-grid mileage-fields">
+      <label class="full">Job site address<input id="detail-job-address" name="jobAddress" value="${escapeAttr2(jobAddress)}" placeholder="Customer / job site address" ${disabled}/></label>
+      <label>One-way miles<input id="detail-one-way-miles" name="tripMilesOneWay" type="number" min="0" step="0.1" value="${oneWayMiles === "" || oneWayMiles == null ? "" : Number(oneWayMiles)}" ${disabled}/></label>
+      <label>Round-trip miles<input id="detail-round-trip-miles" type="number" min="0" step="0.1" value="${Number(roundTrip || 0).toFixed(1)}" readonly/></label>
+      <label>Mileage charge<input id="detail-mileage-charge" type="text" value="${formatMoney(charge)}" readonly/></label>
+      ${canEdit ? `<div class="full mileage-actions"><button type="button" class="secondary" id="calculate-mileage">Calculate from addresses</button><span id="mileage-status"></span></div>` : ""}
+    </div>
+  </section>`;
+  }
+  function newOrderMileageMarkup({ rate = DEFAULT_MILEAGE_RATE, shopAddress = "" } = {}) {
+    return `<h3>Travel mileage</h3>
+<section class="mileage-panel">
+  <div class="mileage-panel-head">
+    <div>
+      <p>Standard billing: round-trip miles \xD7 $${normalizeMileageRate(rate).toFixed(2)}. Shop base: ${escapePlain(shopAddress || "Set shop address in Settings")}.</p>
+    </div>
+    <div class="mileage-charge" id="new-mileage-charge">$0.00<small>0.0 mi round trip</small></div>
+  </div>
+  <div class="form-grid mileage-fields">
+    <label class="full">Job site address<input name="jobAddress" placeholder="Customer / job site address"/></label>
+    <label>One-way miles<input name="tripMilesOneWay" id="new-one-way-miles" type="number" min="0" step="0.1" value=""/></label>
+    <label>Round-trip miles<input id="new-round-trip-miles" type="number" min="0" step="0.1" value="0.0" readonly/></label>
+    <label>Mileage charge<input id="new-mileage-charge-input" type="text" value="$0.00" readonly/></label>
+    <div class="full mileage-actions"><button type="button" class="secondary" id="new-calculate-mileage">Calculate from addresses</button><span id="new-mileage-status"></span></div>
+  </div>
+</section>`;
+  }
+  function formatMoney(value2) {
+    return `$${roundMoney(value2).toFixed(2)}`;
+  }
+  function escapePlain(value2) {
+    return String(value2 || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function escapeAttr2(value2) {
+    return escapePlain(value2).replace(/'/g, "&#39;");
+  }
+  function refreshMileagePreview(root, { rate = DEFAULT_MILEAGE_RATE } = {}) {
+    if (!root) return { oneWay: 0, roundTrip: 0, charge: 0 };
+    const oneWayInput = root.querySelector('#detail-one-way-miles, #new-one-way-miles, [name="tripMilesOneWay"]');
+    const oneWay = normalizeOneWayMiles(oneWayInput?.value);
+    const roundTrip = roundTripMiles(oneWay);
+    const charge = mileageCharge(roundTrip, rate);
+    const roundTripInput = root.querySelector("#detail-round-trip-miles, #new-round-trip-miles");
+    const chargeInput = root.querySelector("#detail-mileage-charge, #new-mileage-charge-input");
+    const chargeBadge = root.querySelector(".mileage-charge, #new-mileage-charge");
+    if (roundTripInput) roundTripInput.value = roundTrip.toFixed(1);
+    if (chargeInput) chargeInput.value = formatMoney(charge);
+    if (chargeBadge) chargeBadge.innerHTML = `${formatMoney(charge)}<small>${roundTrip.toFixed(1)} mi round trip</small>`;
+    return { oneWay, roundTrip, charge };
+  }
+  var DEFAULT_MILEAGE_RATE;
+  var init_mileage = __esm({
+    "src/modules/mileage.js"() {
+      DEFAULT_MILEAGE_RATE = 0.68;
+    }
+  });
+
   // src/modules/chat/utils.js
   function cleanEmail(value2) {
     return String(value2 || "").trim().toLowerCase();
@@ -488,7 +714,7 @@
           const order = state.orders.find((item) => item.id === estimate.workOrderId);
           if (order && order.status === "estimate") {
             order.status = "approved";
-            updateOrderInApi(order);
+            void updateOrderInApi(order).catch((error) => toast(error.message || "Work order could not be saved"));
           }
         }
         updateEstimateInApi(estimate);
@@ -545,9 +771,15 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flushStateSave, 120);
   }
+  function sessionClaimRole(claims) {
+    return claims?.role || claims?.["custom:role"] || "technician";
+  }
+  function sessionClaimShopId(claims) {
+    return claims?.shopId || claims?.["custom:shopId"] || "";
+  }
   function localAccessSession() {
     const expires = Math.floor(Date.now() / 1e3) + 86400;
-    return { claims: { sub: "local-development", email: "admin@example.com", name: "Demo Admin", "custom:shopId": "local-shop", "custom:role": "admin", exp: expires }, expiresAt: expires * 1e3 };
+    return { claims: { sub: "local-development", email: "admin@example.com", name: "Demo Admin", shopId: "local-shop", role: "admin", exp: expires }, expiresAt: expires * 1e3 };
   }
   function isLocalShell() {
     return location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
@@ -716,7 +948,13 @@
     try {
       const response = await authorizedApiRequest(path, mutation.options);
       if (!response.ok) {
-        const error = new Error(`API request failed: ${response.status}`);
+        let detail = "";
+        try {
+          const payload = await response.json();
+          if (payload?.message) detail = `: ${payload.message}`;
+        } catch {
+        }
+        const error = new Error(`API request failed: ${response.status}${detail}`);
         error.retryable = response.status >= 500;
         throw error;
       }
@@ -749,16 +987,20 @@
   }
   async function pushOrderToApi(record) {
     try {
-      await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
+      const saved = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
+      return saved?.queued ? record : saved || record;
     } catch (error) {
       console.error("Failed to sync order to API", error);
+      throw error;
     }
   }
   async function updateOrderInApi(record) {
     try {
-      await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
+      const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
+      return saved?.queued ? record : saved || record;
     } catch (error) {
       console.error("Failed to sync order update to API", error);
+      throw error;
     }
   }
   async function deleteOrderInApi(id) {
@@ -944,7 +1186,7 @@
     const email = String(session.claims.email || "").trim().toLowerCase();
     const profile = state.users.find((user) => user.id === state.currentUserId && user.active && user.email.toLowerCase() === email) || null;
     if (!profile) return null;
-    const jwtRole = session.claims["custom:role"];
+    const jwtRole = sessionClaimRole(session.claims);
     return jwtRole && jwtRole !== profile.role ? { ...profile, role: jwtRole } : profile;
   }
   function canAccess(route) {
@@ -1055,7 +1297,7 @@
     entry.hours = hoursBetween(entry.clockIn, entry.clockOut);
     order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100;
     updateJobClockEntryInApi(entry);
-    updateOrderInApi(order);
+    void updateOrderInApi(order).catch((error) => toast(error.message || "Work order could not be saved"));
     save();
     toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`);
     render();
@@ -1882,7 +2124,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
-    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
+    showModal(`<form class="modal wide" id="customer-account-form"><div class="modal-head"><h2>Create customer shop</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Shop name *<input name="shopName" required placeholder="High Plains Auto"/></label><label>Shop ID *<input name="shopId" required pattern="[a-z0-9][a-z0-9-]{2,63}" placeholder="high-plains-auto"/></label><label>Owner name *<input name="ownerName" required/></label><label>Owner email *<input name="email" type="email" required/></label><label>Account type *<select name="accountMode"><option value="trialing">Free / tester</option><option value="comped">Comped (no expiry)</option><option value="active">Paid</option></select></label><label>Free term (days)<input name="trialDays" type="number" min="0" max="3650" value="30" placeholder="30"/><small>Use 0 or leave blank with Comped for no end date. Paid ignores this.</small></label><label>Plan<select name="planId"><option value="starter">Starter \xB7 $49</option><option value="shop">Shop \xB7 $149</option><option value="pro">Pro \xB7 $299</option><option value="enterprise">Enterprise \xB7 Custom</option></select></label></div><div class="ledger-note">${icon("mail", 15)} The owner signs in with this work email. You can convert free shops to paid later from this console.</div><p class="login-error" id="customer-account-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("user-plus", 14)} Create shop</button></div></form>`);
     const form = document.querySelector("#customer-account-form"), mode = form.elements.accountMode, days = form.elements.trialDays;
     const syncMode = () => {
       days.disabled = mode.value === "active";
@@ -1930,7 +2172,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     };
   }
   function openConvertPaid(shopId, shopName) {
-    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="starter">Starter</option><option value="growth">Growth</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
+    showModal(`<form class="modal" id="convert-paid-form"><div class="modal-head"><h2>Convert to paid</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(shopName)}</span><strong>${escapeHtml(shopId)}</strong></div><div class="form-grid"><label>Plan<select name="planId"><option value="starter">Starter \xB7 $49</option><option value="shop">Shop \xB7 $149</option><option value="pro">Pro \xB7 $299</option><option value="enterprise">Enterprise \xB7 Custom</option></select></label></div><div class="ledger-note">${icon("sparkles", 15)} Marks this shop as a paid account with no free-term expiry. Stripe card checkout can be connected later with live SaaS price IDs.</div><p class="login-error" id="convert-paid-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("badge-check", 14)} Make paid</button></div></form>`);
     document.querySelector("#convert-paid-form").onsubmit = async (event) => {
       event.preventDefault();
       const button = event.target.querySelector("button[type=submit]"), error = document.querySelector("#convert-paid-error"), data = Object.fromEntries(new FormData(event.target));
@@ -2161,7 +2403,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
         await loadCustomersFromApi();
         render();
       }
-      if (x.dataset.route === "shopops") {
+      if (x.dataset.route === "shopops" || x.dataset.route === "settings") {
         await loadShopEntities();
         render();
       }
@@ -2181,6 +2423,18 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       }
       if (x.dataset.route === "payroll") {
         await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]);
+        render();
+      }
+      if (x.dataset.route === "employees") {
+        try {
+          const employees2 = await apiFetch("/entities/employees");
+          if (Array.isArray(employees2)) {
+            state.users = sanitizeUsers(employees2);
+            save();
+          }
+        } catch (error) {
+          console.error("Failed to load employees", error);
+        }
         render();
       }
     });
@@ -2221,9 +2475,12 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       order.total = aiResult.estimate.total;
       order.notes = `${order.notes || ""}
 AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim();
-      updateOrderInApi(order);
-      save();
-      toast(`${order.id} updated with AI workflow`);
+      void updateOrderInApi(order).then((saved) => {
+        if (saved && typeof saved === "object") Object.assign(order, saved);
+        save();
+        toast(`${order.id} updated with AI workflow`);
+        render();
+      }).catch((error) => toast(error.message || "Work order could not be saved"));
       render();
     });
     document.querySelectorAll("[data-order]").forEach((x) => x.onclick = () => openOrder(x.dataset.order));
@@ -2259,13 +2516,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.querySelector("#accounting-export")?.addEventListener("click", exportLedger);
     document.querySelector("#record-expense")?.addEventListener("click", openExpense);
     document.querySelector("#journal-entry")?.addEventListener("click", openJournal);
-    document.querySelector("#tax-settings-form")?.addEventListener("submit", (event) => {
+    document.querySelector("#tax-settings-form")?.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency };
-      save();
-      toast("Tax settings saved");
-      render();
+      const data = Object.fromEntries(new FormData(event.target)), taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency };
+      try {
+        await saveShopEntity("shopsettings", { ...taxSettings, id: "tax", updatedAt: now() });
+        state.taxSettings = taxSettings;
+        toast("Tax settings saved");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not save tax settings");
+      }
     });
     document.querySelector("#tax-report-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -2455,28 +2716,42 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function openNew() {
     const promiseDefault = relativePromiseHint();
-    showModal(`<form class="modal wide" id="new-form"><div class="modal-head"><h2>New work order</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customerSelect" required><option value="__new__">+ New customer</option>${customerOptions()}</select></label><label>Customer name (new)<input name="customer" hidden/></label><label>Phone<input name="phone"/></label><label class="full">Linked vehicle<select name="vehicleSelect">${vehicleOptionsForCustomer("")}</select></label><label class="full">Vehicle description *<input name="vehicle" required placeholder="Year, make, model, trim"/></label><label class="full">VIN<input name="vin" maxlength="17" pattern="[A-HJ-NPR-Z0-9]{0,17}"/></label><div class="full vin-actions"><button class="secondary" type="button" id="new-ro-decode-vin">${icon("scan-line", 14)} Decode VIN with NHTSA</button><span id="new-ro-vin-status"></span></div></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required></textarea></label><label>Status<select name="status"><option value="estimate">Estimate</option><option value="approved">Approved</option><option value="in_progress">In progress</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label><label>Technician<select name="tech">${techOptions()}</select></label><label>Assignment<select name="bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label><label>Promise time<input name="promise" value="${escapeHtml(promiseDefault)}"/></label><label>Estimate total<input id="new-estimate-total" name="total" type="number" value="0.00" readonly/></label></div><h3>AI service estimate</h3><section class="new-order-estimator"><div class="estimator-prompt"><label>Requested services, one per line<textarea name="requestedServices" placeholder="Front brake pads and rotors&#10;Synthetic oil and filter service"></textarea></label><button class="primary" id="generate-new-estimate" type="button">${icon("sparkles", 15)} Generate with AI</button></div><div class="estimator-toolbar"><p>Edit the generated prices and included-work explanations before creating the order.</p><button class="secondary" id="add-estimate-line" type="button">${icon("plus", 14)} Add service</button></div><div id="new-estimate-lines"></div><div class="new-estimate-summary" id="new-estimate-summary"></div></section></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("plus", 15)} Create work order</button></div></form>`);
+    showModal(`<form class="modal wide" id="new-form"><div class="modal-head"><h2>New work order</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customerSelect" required><option value="__new__">+ New customer</option>${customerOptions()}</select></label><label>Customer name (new)<input name="customer" hidden/></label><label>Phone<input name="phone"/></label><label class="full">Linked vehicle<select name="vehicleSelect">${vehicleOptionsForCustomer("")}</select></label><label class="full">Vehicle description *<input name="vehicle" required placeholder="Year, make, model, trim"/></label><label class="full">VIN<input name="vin" maxlength="17" pattern="[A-HJ-NPR-Z0-9]{0,17}"/></label><div class="full vin-actions"><button class="secondary" type="button" id="new-ro-decode-vin">${icon("scan-line", 14)} Decode VIN with NHTSA</button><span id="new-ro-vin-status"></span></div></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required></textarea></label><label>Status<select name="status"><option value="estimate">Estimate</option><option value="approved">Approved</option><option value="in_progress">In progress</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label><label>Technician<select name="tech">${techOptions()}</select></label><label>Assignment<select name="bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label><label>Promise time<input name="promise" value="${escapeHtml(promiseDefault)}"/></label><label>Estimate total<input id="new-estimate-total" name="total" type="number" value="0.00" readonly/></label></div><h3>AI service estimate</h3><section class="new-order-estimator"><div class="estimator-prompt"><label>Requested services, one per line<textarea name="requestedServices" placeholder="Front brake pads and rotors&#10;Synthetic oil and filter service"></textarea></label><button class="primary" id="generate-new-estimate" type="button">${icon("sparkles", 15)} Generate with AI</button></div><div class="estimator-toolbar"><p>Edit the generated prices and included-work explanations before creating the order.</p><button class="secondary" id="add-estimate-line" type="button">${icon("plus", 14)} Add service</button></div><div id="new-estimate-lines"></div><div class="new-estimate-summary" id="new-estimate-summary"></div></section>${newOrderMileageMarkup({ rate: normalizeMileageRate(typeof shopProfile === "function" ? shopProfile().mileageRate : 0.68), shopAddress: typeof shopProfile === "function" ? shopProfile().address : "" })}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("plus", 15)} Create work order</button></div></form>`);
     bindNewOrderEstimator();
+    bindWorkOrderMileage("#new-form");
     bindNewOrderCustomerPickers();
-    document.querySelector("#new-form").onsubmit = (e) => {
+    document.querySelector("#new-form").onsubmit = async (e) => {
       e.preventDefault();
-      const data = Object.fromEntries(new FormData(e.target)), customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+      const submitButton = e.target.querySelector("button.primary"), data = Object.fromEntries(new FormData(e.target)), customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
       if (!customerName) {
         toast("Select or enter a customer name");
         return;
       }
-      const estimate = readNewOrderEstimate(), id = `RO-${Math.max(1040, ...state.orders.map((x) => Number(x.id.split("-")[1]) || 0)) + 1}`, order = { id, customer: customerName, phone: data.phone, vehicle: data.vehicle, vin: String(data.vin || "").trim().toUpperCase() || "VIN pending", complaint: data.complaint, status: data.status, priority: data.priority, tech: data.tech, bay: data.bay, mobile: data.bay === "Mobile", promise: data.promise, total: estimate.total, scheduled: "Unscheduled", notes: "New intake. Diagnosis pending.", labor: estimate.labor, laborHours: estimate.laborHours, parts: estimate.parts, tax: estimate.tax, estimate: { ...estimate, generatedAt: now(), summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.` } };
-      state.orders.unshift(order);
-      pushOrderToApi(order);
-      if (!state.customers.some((x) => x.name.toLowerCase() === customerName.toLowerCase())) {
-        const record = { name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
-        state.customers.unshift(record);
-        pushCustomerToApi(record);
+      const estimate = readNewOrderEstimate(), id = `RO-${Math.max(1040, ...state.orders.map((x) => Number(x.id.split("-")[1]) || 0)) + 1}`;
+      let order = { id, customer: customerName, phone: data.phone, vehicle: data.vehicle, vin: String(data.vin || "").trim().toUpperCase() || "VIN pending", complaint: data.complaint, status: data.status, priority: data.priority, tech: data.tech, bay: data.bay, mobile: data.bay === "Mobile", promise: data.promise, total: estimate.total, scheduled: "Unscheduled", notes: "New intake. Diagnosis pending.", labor: estimate.labor, laborHours: estimate.laborHours, parts: estimate.parts, tax: estimate.tax, jobAddress: String(data.jobAddress || "").trim(), tripMilesOneWay: Number(data.tripMilesOneWay) || 0, estimate: { ...estimate, generatedAt: now(), summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.` } };
+      order = applyMileageToOrder(order, { oneWayMiles: order.tripMilesOneWay, jobAddress: order.jobAddress, rate: shopMileageRate(), taxRate: state.taxSettings.rate });
+      if (submitButton) submitButton.disabled = true;
+      try {
+        const saved = await pushOrderToApi(order);
+        state.orders.unshift(saved || order);
+        if (!state.customers.some((x) => x.name.toLowerCase() === customerName.toLowerCase())) {
+          const record = { name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
+          state.customers.unshift(record);
+          try {
+            await pushCustomerToApi(record);
+          } catch (customerError) {
+            console.error("Failed to sync customer", customerError);
+          }
+        }
+        save();
+        closeModal();
+        toast(`${id} created successfully`);
+        render();
+      } catch (error) {
+        toast(error.message || "Work order could not be saved");
+      } finally {
+        if (submitButton) submitButton.disabled = false;
       }
-      save();
-      closeModal();
-      toast(`${id} created successfully`);
-      render();
     };
   }
   async function commitLinkedInventory(order) {
@@ -2511,27 +2786,40 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const item = state.inventory.find((record) => record.id === line.inventoryId || line.inventorySku && record.sku === line.inventorySku);
       return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> \xB7 ${escapeHtml(item?.name || line.service)} \xB7 ${Number(line.committedQuantity || 0)} committed</p>`;
     }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map((t) => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map((h) => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`;
-    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><section><h3>Customer complaint</h3><p>${escapeHtml(x.complaint)}</p></section><section><h3>Technician notes</h3><p>${escapeHtml(x.notes)}</p></section><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}${jobClockControl}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
-    if (canManage) document.querySelector("#save-order").onclick = async (event) => {
-      const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status);
-      button.disabled = true;
-      try {
-        if (firstCompletion && !await commitLinkedInventory(x)) return;
-        x.status = nextStatus;
-        x.tech = document.querySelector("#detail-tech").value;
-        x.laborHours = Number(document.querySelector("#detail-hours").value);
-        syncPayroll(x);
-        await updateOrderInApi(x);
-        save();
-        closeModal();
-        toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : `${x.id} updated`);
-        render();
-      } catch (error) {
-        toast(error.message || "Inventory could not be committed");
-      } finally {
-        button.disabled = false;
-      }
-    };
+    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
+    bindWorkOrderMileage(".modal");
+    if (canManage) {
+      const baySelect = document.querySelector("#detail-bay");
+      if (baySelect) baySelect.value = x.bay || "Unassigned";
+      document.querySelector("#save-order").onclick = async (event) => {
+        const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt };
+        button.disabled = true;
+        try {
+          if (firstCompletion && !await commitLinkedInventory(x)) return;
+          x.status = nextStatus;
+          x.tech = document.querySelector("#detail-tech")?.value || x.tech;
+          x.laborHours = Number(document.querySelector("#detail-hours")?.value || x.laborHours || 0);
+          x.complaint = document.querySelector("#detail-complaint")?.value?.trim() || x.complaint;
+          x.notes = document.querySelector("#detail-notes")?.value?.trim() || "";
+          x.promise = document.querySelector("#detail-promise")?.value?.trim() || x.promise;
+          x.bay = document.querySelector("#detail-bay")?.value || x.bay;
+          x.mobile = x.bay === "Mobile";
+          Object.assign(x, applyMileageToOrder(x, { oneWayMiles: document.querySelector("#detail-one-way-miles")?.value, jobAddress: document.querySelector("#detail-job-address")?.value, rate: shopMileageRate(), taxRate: state.taxSettings.rate }));
+          syncPayroll(x);
+          const saved = await updateOrderInApi(x);
+          if (saved && typeof saved === "object") Object.assign(x, saved);
+          save();
+          closeModal();
+          toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : `${x.id} updated`);
+          render();
+        } catch (error) {
+          Object.assign(x, previous);
+          toast(error.message || "Work order could not be saved");
+        } finally {
+          button.disabled = false;
+        }
+      };
+    }
     document.querySelector("#delete-order")?.addEventListener("click", () => {
       if (confirm(`Delete ${x.id}?`)) {
         state.orders = state.orders.filter((o) => o.id !== id);
@@ -2702,7 +2990,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     };
   }
   async function resolveAuthenticatedProfile(session) {
-    const claims = session.claims, normalized = String(claims.email || "").trim().toLowerCase(), role = claims["custom:role"] || "technician";
+    const claims = session.claims, normalized = String(claims.email || "").trim().toLowerCase(), role = sessionClaimRole(claims);
     sessionStorage.setItem(storageKeys.session, JSON.stringify(session));
     pendingAuthProfile = null;
     if (role === "super_admin") {
@@ -2737,7 +3025,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       return null;
     }
     if (role === "admin") {
-      const profile = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify({ id: `owner-${claims["custom:shopId"]}`, name: claims.name || normalized.split("@")[0], email: normalized, role: "admin", title: "Owner", department: "Administration", active: true, createdAt: now() }) });
+      const profile = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify({ id: `owner-${sessionClaimShopId(claims)}`, name: claims.name || normalized.split("@")[0], email: normalized, role: "admin", title: "Owner", department: "Administration", active: true, createdAt: now() }) });
       state.users = sanitizeUsers([...employees2, profile]);
       return profile;
     }
@@ -2775,6 +3063,48 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const stored = state.shopSettingsRecords.find((item) => item.id === "profile") || {}, themeMode = ["device", "light", "dark"].includes(stored.themeMode) ? stored.themeMode : "device";
     return { ...shopProfileDefaults, ...stored, logoUrl: safeHttpUrl(stored.logoUrl) || shopProfileDefaults.logoUrl, brandColor: safeHexColor(stored.brandColor, shopProfileDefaults.brandColor), accentColor: safeHexColor(stored.accentColor, shopProfileDefaults.accentColor), themeMode, coupons: normalizedCoupons(stored.coupons), defaultVendor: String(stored.defaultVendor || ""), defaultVendorByKind: stored.defaultVendorByKind && typeof stored.defaultVendorByKind === "object" ? stored.defaultVendorByKind : {} };
   }
+  function shopMileageRate() {
+    return normalizeMileageRate(shopProfile().mileageRate);
+  }
+  function bindWorkOrderMileage(rootSelector) {
+    const root = typeof rootSelector === "string" ? document.querySelector(rootSelector) : rootSelector;
+    if (!root || root.dataset.mileageBound === "1") return;
+    root.dataset.mileageBound = "1";
+    const rate = () => shopMileageRate();
+    const refresh = () => refreshMileagePreview(root, { rate: rate() });
+    root.querySelectorAll("#detail-one-way-miles, #new-one-way-miles, [name=tripMilesOneWay]").forEach((input) => input.addEventListener("input", refresh));
+    refresh();
+    const calcButton = root.querySelector("#calculate-mileage, #new-calculate-mileage");
+    const status = root.querySelector("#mileage-status, #new-mileage-status");
+    calcButton?.addEventListener("click", async () => {
+      const jobAddress = root.querySelector("#detail-job-address, [name=jobAddress]")?.value?.trim() || "";
+      const shopAddress = shopProfile().address || "";
+      if (!jobAddress) {
+        toast("Enter the job site address first");
+        return;
+      }
+      if (!shopAddress) {
+        toast("Set the shop address in Settings before calculating mileage");
+        return;
+      }
+      calcButton.disabled = true;
+      if (status) status.textContent = "Calculating\u2026";
+      try {
+        const result = await apiFetch("/mileage/calculate", { method: "POST", body: JSON.stringify({ from: shopAddress, to: jobAddress }) });
+        const oneWay = normalizeOneWayMiles(result?.oneWayMiles);
+        const oneWayInput = root.querySelector("#detail-one-way-miles, #new-one-way-miles, [name=tripMilesOneWay]");
+        if (oneWayInput) oneWayInput.value = String(oneWay);
+        refresh();
+        if (status) status.textContent = result?.source ? `Calculated via ${result.source}` : "Calculated";
+        toast(`Round trip ${roundTripMiles(oneWay).toFixed(1)} mi @ $${rate().toFixed(2)}/mi`);
+      } catch (error) {
+        if (status) status.textContent = "";
+        toast(error.message || "Could not calculate mileage. Enter one-way miles manually.");
+      } finally {
+        calcButton.disabled = false;
+      }
+    });
+  }
   function applyAppearance(mode = shopProfile().themeMode) {
     const selected = ["device", "light", "dark"].includes(mode) ? mode : "device", resolved = selected === "device" ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light" : selected;
     document.documentElement.dataset.theme = resolved;
@@ -2795,7 +3125,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return state.vendors.some((vendor) => vendor.name === specific) ? specific : state.vendors.some((vendor) => vendor.name === profile.defaultVendor) ? profile.defaultVendor : "";
   }
   async function saveProfilePatch(patch) {
-    const current = shopProfile(), record = { ...current, ...patch, id: "profile", updatedAt: current.updatedAt ? now() : void 0 };
+    const current = shopProfile(), record = { ...current, ...patch, id: "profile", updatedAt: now() };
     return saveShopEntity("shopsettings", record);
   }
   function employees() {
@@ -2816,11 +3146,18 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money(user.payRate) + " / year" : money(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
   }
   function openEmployee() {
-    showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full">Email address *<input type="email" name="email" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
-    document.querySelector("#employee-form").onsubmit = (event) => {
+    showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="tech@yourshop.com" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
+    document.querySelector("#employee-email")?.focus({ preventScroll: true });
+    document.querySelector("#employee-email")?.addEventListener("focus", (event) => event.currentTarget.scrollIntoView({ block: "center", behavior: "smooth" }));
+    document.querySelector("#employee-form").onsubmit = async (event) => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target)), email = data.email.trim().toLowerCase();
-      if (state.users.some((user) => user.email.toLowerCase() === email)) {
+      const form = event.target, data = Object.fromEntries(new FormData(form)), email = String(data.workEmail || data.email || "").trim().toLowerCase(), button = form.querySelector("button.primary");
+      if (!email || !email.includes("@")) {
+        toast("Enter a valid work email address");
+        document.querySelector("#employee-email")?.focus();
+        return;
+      }
+      if (state.users.some((user) => String(user.email || "").toLowerCase() === email)) {
         toast("An employee profile already uses that email");
         return;
       }
@@ -2828,15 +3165,24 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         toast("An employee already uses that employee ID");
         return;
       }
-      if (data.role === "technician" && !data.techName.trim()) {
+      if (data.role === "technician" && !String(data.techName || "").trim()) {
         toast("Add the technician dispatch name to create this profile");
         return;
       }
-      state.users.push({ id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(), active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate, employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(), emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus });
-      save();
-      closeModal();
-      toast(`${data.name} profile created as ${roleLabel[data.role]}`);
-      render();
+      const record = { id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(), active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate, employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(), emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus };
+      if (button) button.disabled = true;
+      try {
+        const saved = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify(record) }), value2 = saved?.queued ? record : saved || record;
+        state.users.push(value2);
+        save();
+        closeModal();
+        toast(`${value2.name || data.name} profile created as ${roleLabel[value2.role || data.role]}`);
+        render();
+      } catch (error) {
+        toast(error.message || "Employee could not be saved");
+      } finally {
+        if (button) button.disabled = false;
+      }
     };
   }
   function paymentRecords() {
@@ -2913,7 +3259,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function imports() {
     const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join("");
-    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>Imports are stored in this browser. Review each batch before confirming it.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
+    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>ARI exports: convert with <code>npm run convert:ari</code>, then upload customers \u2192 vehicles \u2192 work orders from the generated folder. ARI column names are also accepted on these templates.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
   }
   function entityName(type) {
     return type === "orders" ? "work order" : type.slice(0, -1);
@@ -2965,23 +3311,26 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const rows = rowData(text);
     if (!rows.length) return { type, records, errors: ["The file needs a header row and at least one data row."], skipped };
     rows.forEach((row, index) => {
-      const line = index + 2, customer = value(row, "customer", "customer_name", "name"), amount = Number(value(row, "amount", "total").replace(/[$,]/g, ""));
+      const line = index + 2, customer = value(row, "customer", "customer_name", "name", "owner", "bill_name"), amount = Number(value(row, "amount", "total", "paidamount").replace(/[$,]/g, ""));
       let record, error = "";
       if (type === "customers") {
-        const name = value(row, "name", "customer", "customer_name");
+        const name = value(row, "name", "customer", "customer_name", "bill_name");
         if (!name) error = "Customer name is required";
         else if (state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) skipped++;
-        else record = { name, phone: value(row, "phone", "mobile"), email: value(row, "email"), vehicles: 0, visits: 0, spend: 0 };
+        else {
+          const addressParts = [value(row, "address", "bill_address"), [value(row, "city"), value(row, "state")].filter(Boolean).join(", "), value(row, "zip")].filter(Boolean);
+          record = { name, phone: value(row, "phone", "mobile"), email: value(row, "email"), billingAddress: value(row, "address") ? addressParts.join(", ") : value(row, "billing_address", "address"), vehicles: 0, visits: 0, spend: 0 };
+        }
       } else if (type === "vehicles") {
         const year = value(row, "year"), make = value(row, "make"), model = value(row, "model"), vin = value(row, "vin");
         if (!customer || !year || !make || !model) error = "Customer, year, make, and model are required";
-        else if (vin && state.vehicles.some((item) => item.vin.toLowerCase() === vin.toLowerCase())) skipped++;
-        else record = { customer, year, make, model, vin, plate: value(row, "plate", "license_plate") };
+        else if (vin && state.vehicles.some((item) => item.vin && item.vin.toLowerCase() === vin.toLowerCase())) skipped++;
+        else record = { customer, year, make, model, vin, plate: value(row, "plate", "license_plate", "reg_num", "regnum"), mileage: Number(value(row, "mileage", "milage")) || void 0, color: value(row, "color") || void 0 };
       } else if (type === "orders") {
-        const id = value(row, "ro_number", "ro", "work_order") || nextRo(), vehicle = value(row, "vehicle", "vehicle_description"), status = value(row, "status").toLowerCase().replace(/\s+/g, "_") || "estimate";
-        if (!customer || !vehicle || !value(row, "complaint", "description", "concern")) error = "Customer, vehicle, and complaint are required";
+        const idRaw = value(row, "ro_number", "ro", "work_order", "id"), id = idRaw ? /^ro-/i.test(idRaw) ? idRaw : `RO-${idRaw}` : nextRo(), vehicleRaw = value(row, "vehicle", "vehicle_description"), vehicle = vehicleRaw.replaceAll("|", " ").replace(/\s+/g, " ").trim() || [value(row, "year"), value(row, "make"), value(row, "model")].filter(Boolean).join(" "), statusRaw = value(row, "status", "job_status", "inv_status").toLowerCase().replace(/\s+/g, "_"), status = statusRaw === "paid" || statusRaw === "completed" ? "completed" : statusRaw === "sent" ? "estimate" : ["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(statusRaw) ? statusRaw : "estimate";
+        if (!customer || !vehicle) error = "Customer and vehicle are required";
         else if (state.orders.some((item) => item.id.toLowerCase() === id.toLowerCase())) skipped++;
-        else record = { id, customer, phone: value(row, "phone"), vehicle, vin: value(row, "vin") || "VIN pending", complaint: value(row, "complaint", "description", "concern"), status: ["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(status) ? status : "estimate", priority: "normal", tech: value(row, "tech", "technician") || "Unassigned", bay: value(row, "bay") || "Unassigned", mobile: value(row, "mobile").toLowerCase() === "true", promise: value(row, "promise") || "Unscheduled", total: Number.isFinite(amount) ? amount : 0, scheduled: value(row, "scheduled") || "Unscheduled", notes: value(row, "notes"), labor: 0, parts: 0, tax: 0 };
+        else record = { id, customer, phone: value(row, "phone"), vehicle, vin: value(row, "vin") || "VIN pending", complaint: value(row, "complaint", "description", "concern") || (status === "estimate" ? "Imported ARI estimate" : "Imported from ARI"), status, priority: "normal", tech: value(row, "tech", "technician") || "Unassigned", bay: value(row, "bay") || "Unassigned", mobile: value(row, "mobile").toLowerCase() === "true", promise: value(row, "promise", "date", "invoice_date") || "Unscheduled", total: Number.isFinite(amount) ? amount : 0, scheduled: value(row, "scheduled") || "Unscheduled", notes: value(row, "notes"), labor: 0, parts: 0, tax: 0 };
       } else {
         if (!value(row, "vendor", "payee") || !Number.isFinite(amount)) error = "Vendor and numeric amount are required";
         else record = { date: value(row, "date") || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), vendor: value(row, "vendor", "payee"), category: value(row, "category") || "Uncategorized", memo: value(row, "memo", "description", "notes"), amount };
@@ -3073,6 +3422,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (!["completed", "invoiced"].includes(order.status)) return null;
     const existing = state.invoices.find((invoice2) => invoice2.ro === order.id);
     if (existing) return existing;
+    Object.assign(order, applyMileageToOrder(order, { rate: shopMileageRate(), taxRate: state.taxSettings.rate }));
     const number = invoiceNumberForOrder(order), estimate = order.estimate || {}, amount = Math.max(0, Number(order.total ?? estimate.total) || 0), tax = Math.max(0, Number(order.tax ?? estimate.tax) || 0), subtotal = Math.max(0, Number(estimate.subtotal) || Math.max(0, amount - tax)), issued = /* @__PURE__ */ new Date(), due = new Date(issued);
     due.setDate(due.getDate() + 14);
     const invoice = { id: number, number, ro: order.id, customer: order.customer, vehicle: order.vehicle, amount, subtotal, tax, taxRate: Number(estimate.taxRate ?? state.taxSettings.rate) || 0, status: "sent", date: issued.toISOString().slice(0, 10), due: due.toISOString().slice(0, 10), lines: estimate.lines || [], createdAt: now() };
@@ -3280,6 +3630,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function applyRemoteList(key, records) {
+    if (key === "shopSettingsRecords" && Array.isArray(records) && !records.length && (state.shopSettingsRecords || []).some((item) => item?.updatedAt)) return;
     state[key] = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
     save();
   }
@@ -3310,6 +3661,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         clearAuthSession();
       }
     }
+    if (currentUser()) await loadShopEntities();
     save();
     render();
   }
@@ -3320,6 +3672,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_html();
       init_detect();
       init_utils();
+      init_mileage();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -3461,7 +3814,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join("");
-        return shell(`${heading("Administration", "Shop settings", "Branding, invoice defaults, tax, and optional provider readiness.", false)}<form class="settings-panel form-grid" id="shop-profile-form"><label>Shop name<input name="shopName" value="${escapeHtml(profile.shopName)}" required/></label><label>Phone<input name="phone" value="${escapeHtml(profile.phone)}"/></label><label class="full">Address<input name="address" value="${escapeHtml(profile.address)}"/></label><label>Logo URL<input name="logoUrl" type="url" value="${escapeHtml(profile.logoUrl)}"/></label><label>Default labor rate<input name="laborRate" type="number" step=".01" value="${Number(profile.laborRate)}"/></label><label class="full">Invoice footer<input name="invoiceFooter" value="${escapeHtml(profile.invoiceFooter)}"/></label><div class="full service-contract"><h2>Commercial integrations</h2><p>CarFax service history and license-plate recognition require provider contracts and server-side credentials. They remain unavailable until configured by the platform operator.</p></div><label class="toggle-field"><input type="checkbox" disabled ${profile.carfaxEnabled ? "checked" : ""}/><span>CarFax provider configured</span></label><label class="toggle-field"><input type="checkbox" disabled ${profile.plateProviderEnabled ? "checked" : ""}/><span>Plate recognition configured</span></label><div class="full"><button class="primary">${icon("save", 14)} Save business profile</button></div></form><div class="settings-panel"><form class="form-grid" id="tax-settings-form"><label>Filing state<select name="state">${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${escapeHtml(t.taxId)}"/></label><label>Sales tax rate %<input name="rate" type="number" step=".01" min="0" value="${t.rate}"/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary">Save tax settings</button></div></form></div>`);
+        return shell(`${heading("Administration", "Shop settings", "Branding, invoice defaults, tax, and optional provider readiness.", false)}<form class="settings-panel form-grid" id="shop-profile-form"><label>Shop name<input name="shopName" value="${escapeHtml(profile.shopName)}" required/></label><label>Phone<input name="phone" value="${escapeHtml(profile.phone)}"/></label><label class="full">Address<input name="address" value="${escapeHtml(profile.address)}"/></label><label>Logo URL<input name="logoUrl" type="url" value="${escapeHtml(profile.logoUrl)}"/></label><label>Default labor rate<input name="laborRate" type="number" step=".01" value="${Number(profile.laborRate)}"/></label><label>Mileage rate ($/mi)<input name="mileageRate" type="number" min="0" step=".01" value="${Number(profile.mileageRate ?? 0.68)}"/></label><label class="full">Invoice footer<input name="invoiceFooter" value="${escapeHtml(profile.invoiceFooter)}"/></label><div class="full service-contract"><h2>Commercial integrations</h2><p>CarFax service history and license-plate recognition require provider contracts and server-side credentials. They remain unavailable until configured by the platform operator.</p></div><label class="toggle-field"><input type="checkbox" disabled ${profile.carfaxEnabled ? "checked" : ""}/><span>CarFax provider configured</span></label><label class="toggle-field"><input type="checkbox" disabled ${profile.plateProviderEnabled ? "checked" : ""}/><span>Plate recognition configured</span></label><div class="full"><button class="primary">${icon("save", 14)} Save business profile</button></div></form><div class="settings-panel"><form class="form-grid" id="tax-settings-form"><label>Filing state<select name="state">${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${escapeHtml(t.taxId)}"/></label><label>Sales tax rate %<input name="rate" type="number" step=".01" min="0" value="${t.rate}"/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary">Save tax settings</button></div></form></div>`);
       };
       schedule = function() {
         return scheduleWorkspace();
@@ -3588,7 +3941,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           }
         });
       };
-      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
@@ -3598,7 +3951,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
         const emptyCouponRows = '<tr><td colspan="4">No coupons configured.</td></tr>', vendorKindFields = kinds.map((kind) => "<label>" + kind + ' default<select name="vendor' + kind + '">' + vendorOptions(profile.defaultVendorByKind?.[kind] || "") + "</select></label>").join("");
-        return shell(`${heading("Administration", "Shop settings", "Branding, invoice defaults, coupons, vendors, tax, and optional provider readiness.", false)}<form class="settings-panel form-grid" id="shop-profile-form"><div class="full statement-head"><div><div class="eyebrow">Business identity</div><h2>Branding and invoice defaults</h2></div></div>${appearanceFieldset(profile)}<label>Shop name<input name="shopName" value="${escapeHtml(profile.shopName)}" required/></label><label>Phone<input name="phone" value="${escapeHtml(profile.phone)}"/></label><label class="full">Address<input name="address" value="${escapeHtml(profile.address)}"/></label><label>Logo URL<input name="logoUrl" type="url" value="${escapeHtml(profile.logoUrl)}" placeholder="https://example.com/logo.png"/></label><label>Default labor rate<input name="laborRate" type="number" min="0" step=".01" value="${Number(profile.laborRate)}"/></label><label>Brand color<input name="brandColor" type="color" value="${profile.brandColor}"/></label><label>Accent color<input name="accentColor" type="color" value="${profile.accentColor}"/></label><label class="full">Invoice footer<input name="invoiceFooter" value="${escapeHtml(profile.invoiceFooter)}"/></label><div class="full"><button class="primary">${icon("save", 14)} Save business profile</button></div></form><section class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Discounts</div><h2>Coupons</h2></div><button class="primary" type="button" id="add-coupon">${icon("badge-percent", 14)} Add coupon</button></div><div class="data-panel"><table><thead><tr><th>Code</th><th>Percent</th><th>Status</th><th>Actions</th></tr></thead><tbody>${couponRows || emptyCouponRows}</tbody></table></div></section><form class="settings-panel form-grid" id="vendor-defaults-form"><div class="full statement-head"><div><div class="eyebrow">Purchasing</div><h2>Default vendors</h2></div></div><label>Overall default<select name="defaultVendor">${vendorOptions(profile.defaultVendor)}</select></label>${vendorKindFields}<div class="full"><button class="primary">${icon("save", 14)} Save vendor defaults</button></div></form><div class="settings-panel"><form class="form-grid" id="tax-settings-form"><label>Filing state<select name="state">${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${escapeHtml(t.taxId)}"/></label><label>Sales tax rate %<input name="rate" type="number" step=".01" min="0" value="${t.rate}"/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary">${icon("save", 14)} Save tax settings</button></div></form></div>`);
+        return shell(`${heading("Administration", "Shop settings", "Branding, invoice defaults, coupons, vendors, tax, and optional provider readiness.", false)}<form class="settings-panel form-grid" id="shop-profile-form"><div class="full statement-head"><div><div class="eyebrow">Business identity</div><h2>Branding and invoice defaults</h2></div></div>${appearanceFieldset(profile)}<label>Shop name<input name="shopName" value="${escapeHtml(profile.shopName)}" required/></label><label>Phone<input name="phone" value="${escapeHtml(profile.phone)}"/></label><label class="full">Address<input name="address" value="${escapeHtml(profile.address)}"/></label><label>Logo URL<input name="logoUrl" type="url" value="${escapeHtml(profile.logoUrl)}" placeholder="https://example.com/logo.png"/></label><label>Default labor rate<input name="laborRate" type="number" min="0" step=".01" value="${Number(profile.laborRate)}"/></label><label>Mileage rate ($/mi)<input name="mileageRate" type="number" min="0" step=".01" value="${Number(profile.mileageRate ?? 0.68)}"/></label><label>Brand color<input name="brandColor" type="color" value="${profile.brandColor}"/></label><label>Accent color<input name="accentColor" type="color" value="${profile.accentColor}"/></label><label class="full">Invoice footer<input name="invoiceFooter" value="${escapeHtml(profile.invoiceFooter)}"/></label><div class="full"><button class="primary">${icon("save", 14)} Save business profile</button></div></form><section class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Discounts</div><h2>Coupons</h2></div><button class="primary" type="button" id="add-coupon">${icon("badge-percent", 14)} Add coupon</button></div><div class="data-panel"><table><thead><tr><th>Code</th><th>Percent</th><th>Status</th><th>Actions</th></tr></thead><tbody>${couponRows || emptyCouponRows}</tbody></table></div></section><form class="settings-panel form-grid" id="vendor-defaults-form"><div class="full statement-head"><div><div class="eyebrow">Purchasing</div><h2>Default vendors</h2></div></div><label>Overall default<select name="defaultVendor">${vendorOptions(profile.defaultVendor)}</select></label>${vendorKindFields}<div class="full"><button class="primary">${icon("save", 14)} Save vendor defaults</button></div></form><div class="settings-panel"><form class="form-grid" id="tax-settings-form"><label>Filing state<select name="state">${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${escapeHtml(t.taxId)}"/></label><label>Sales tax rate %<input name="rate" type="number" step=".01" min="0" value="${t.rate}"/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary">${icon("save", 14)} Save tax settings</button></div></form></div>`);
       };
       bindBrandingFeaturesCore = bindExpandedFeatures;
       bindExpandedFeatures = function() {
@@ -3622,10 +3975,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             toast("Choose valid brand colors");
             return;
           }
-          await saveProfilePatch({ shopName: data.shopName.trim(), phone: data.phone.trim(), address: data.address.trim(), logoUrl, brandColor: data.brandColor, accentColor: data.accentColor, themeMode, laborRate: Math.max(0, Number(data.laborRate) || 0), invoiceFooter: data.invoiceFooter.trim() });
-          applyAppearance(themeMode);
-          toast("Business profile saved");
-          render();
+          try {
+            await saveProfilePatch({ shopName: data.shopName.trim(), phone: data.phone.trim(), address: data.address.trim(), logoUrl, brandColor: data.brandColor, accentColor: data.accentColor, themeMode, laborRate: Math.max(0, Number(data.laborRate) || 0), mileageRate: Math.max(0, Number(data.mileageRate) || 0.68), invoiceFooter: data.invoiceFooter.trim() });
+            applyAppearance(themeMode);
+            toast("Business profile saved");
+            render();
+          } catch (error) {
+            toast(error.message || "Could not save the business profile");
+          }
         }, { capture: true });
         document.querySelector("#vendor-defaults-form")?.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -3838,7 +4195,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       settings = function() {
         const page = settingsAgentPhoneCore();
         if (currentUser()?.role !== "admin") return page;
-        return page.replace("</main>", `<section class="settings-panel agentphone-settings"><div class="statement-head"><div><div class="eyebrow">Voice and messaging</div><h2>Connect AgentPhone.ai</h2><p>Give this shop's AgentPhone agent access to the live MechPro assistant for calls and messages. Credentials are encrypted by the Worker and never stored in the browser.</p></div>${icon("phone-call", 20)}</div><form class="form-grid" id="agentphone-config-form"><label>AgentPhone API key *<input name="apiKey" type="password" autocomplete="new-password" placeholder="ap_..." required/></label><label>Agent ID *<input name="agentId" placeholder="agt_..." required/></label><label>Conversation history<input name="contextLimit" type="number" min="0" max="50" value="10"/></label><label>Voice response timeout<input name="timeout" type="number" min="5" max="120" value="30"/></label><div class="full agentphone-webhook-preview"><span>Webhook URL</span><code>${cloudflareConfig2.apiUrl}/agentphone/webhook/${escapeHtml(authSession()?.claims?.["custom:shopId"] || "")}</code></div><div class="full"><button class="primary" type="submit">${icon("plug-zap", 14)} Connect AgentPhone</button><small class="form-help">The AgentPhone webhook signing secret is generated and encrypted and stored in D1 by the Worker.</small></div></form></section></main>`);
+        return page.replace("</main>", `<section class="settings-panel agentphone-settings"><div class="statement-head"><div><div class="eyebrow">Voice and messaging</div><h2>Connect AgentPhone.ai</h2><p>Give this shop's AgentPhone agent access to the live MechPro assistant for calls and messages. Credentials are encrypted by the Worker and never stored in the browser.</p></div>${icon("phone-call", 20)}</div><form class="form-grid" id="agentphone-config-form"><label>AgentPhone API key *<input name="apiKey" type="password" autocomplete="new-password" placeholder="ap_..." required/></label><label>Agent ID *<input name="agentId" placeholder="agt_..." required/></label><label>Conversation history<input name="contextLimit" type="number" min="0" max="50" value="10"/></label><label>Voice response timeout<input name="timeout" type="number" min="5" max="120" value="30"/></label><div class="full agentphone-webhook-preview"><span>Webhook URL</span><code>${cloudflareConfig2.apiUrl}/agentphone/webhook/${escapeHtml(sessionClaimShopId(authSession()?.claims))}</code></div><div class="full"><button class="primary" type="submit">${icon("plug-zap", 14)} Connect AgentPhone</button><small class="form-help">The AgentPhone webhook signing secret is generated and encrypted and stored in D1 by the Worker.</small></div></form></section></main>`);
       };
       settingsAppsBillingCore = settings;
       settings = function() {
@@ -3947,6 +4304,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         try {
           const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
           types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index]));
+          const tax = state.shopSettingsRecords.find((item) => item.id === "tax");
+          if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly" };
         } catch (error) {
           console.error("Failed to load shop operations; using local data", error);
         }
@@ -4026,11 +4385,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
 
   // src/modules/register.js
+  init_mileage();
   init_detect();
   init_html();
   function registerModules() {
     window.__MECHPRO_MODULES__ = {
       storage: storage_exports,
+      mileage: mileage_exports,
       platform,
       html: { escapeAttr, escapeHtml }
     };
@@ -4138,12 +4499,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function mergeRemoteCollection(key, remote, local, isSampleRecord) {
     if (!Array.isArray(remote)) return Array.isArray(local) ? local : [];
-    if (remote.length) return remote;
     const current = Array.isArray(local) ? local : [];
-    if (current.length && typeof isSampleRecord === "function" && current.every((record) => isSampleRecord(key, record))) {
-      return current;
+    if (!remote.length) {
+      if (current.length && typeof isSampleRecord === "function" && current.every((record) => isSampleRecord(key, record))) {
+        return current;
+      }
+      return remote;
     }
-    return remote;
+    const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
+    const localOnly = current.filter((record) => record?.id && !remoteIds.has(record.id) && !(typeof isSampleRecord === "function" && isSampleRecord(key, record)));
+    return localOnly.length ? [...localOnly, ...remote] : remote;
   }
   var sidebarCatalog = [
     {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MechPro pricing</title>
-    <meta name="description" content="MechPro shop plans for a single location or a growing service team." />
+    <meta name="description" content="MechPro commercial plans: Starter $49, Shop $149, Pro $299, and Enterprise for multi-shop rollouts." />
     <link rel="icon" href="/mechpro-icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/fonts/fonts.css" />
     <link rel="stylesheet" href="/market.css" />
@@ -22,38 +22,63 @@
         </nav>
       </header>
       <section class="hero">
-        <p class="eyebrow">Straightforward shop pricing</p>
-        <h1>Start with the counter. Add the office when you need it.</h1>
-        <p class="lede">Create the shop, invite the people who actually touch repair orders, and upgrade when the roster or the number of locations grows. Card data stays with the payment processor.</p>
+        <p class="eyebrow">Commercial shop pricing</p>
+        <h1>Pick the plan that matches the roster.</h1>
+        <p class="lede">Start on the counter, move into a full shop stack when inventory and scheduling matter, then unlock diagnostics, AI, and payroll on Pro. Card data stays with the payment processor.</p>
       </section>
-      <section class="grid" aria-label="Plans">
+      <section class="grid pricing-grid" aria-label="Plans">
         <article class="card">
           <h2>Starter</h2>
           <div class="price">$49<span>/month</span></div>
           <p>A single-location team that needs the board and the counter.</p>
           <ul>
-            <li>3 users</li>
+            <li>2 users</li>
             <li>1 location</li>
             <li>Dispatch, work orders, customers, invoices</li>
-            <li>AI workbench for advisory estimates</li>
+            <li>Core AI advisory estimates</li>
           </ul>
-          <a class="btn primary" href="/signup">Choose Starter</a>
+          <a class="btn primary" href="/signup?plan=starter">Choose Starter</a>
         </article>
-        <article class="card">
-          <h2>Growth</h2>
-          <div class="price">$99<span>/month</span></div>
-          <p>An established shop that also runs payroll, diagnostics, and more than one location.</p>
+        <article class="card featured">
+          <p class="plan-badge">Most shops</p>
+          <h2>Shop</h2>
+          <div class="price">$149<span>/month</span></div>
+          <p>The day-to-day operating system for a busy independent shop.</p>
           <ul>
             <li>10 users</li>
-            <li>3 locations</li>
-            <li>Inspections, inventory, payroll, and reports</li>
+            <li>Up to 3 locations</li>
+            <li>Scheduling, invoices, and inventory</li>
             <li>Windows desktop and Android installs</li>
           </ul>
-          <a class="btn primary" href="/signup">Choose Growth</a>
+          <a class="btn primary" href="/signup?plan=shop">Choose Shop</a>
+        </article>
+        <article class="card">
+          <h2>Pro</h2>
+          <div class="price">$299<span>/month</span></div>
+          <p>Advanced shops that run diagnostics, AI workflows, and payroll planning.</p>
+          <ul>
+            <li>25 users</li>
+            <li>Up to 10 locations</li>
+            <li>Diagnostics, AI workbench, and payroll estimates</li>
+            <li>Inspections, reports, and priority support path</li>
+          </ul>
+          <a class="btn primary" href="/signup?plan=pro">Choose Pro</a>
+        </article>
+        <article class="card">
+          <h2>Enterprise</h2>
+          <div class="price">Custom</div>
+          <p>Multi-shop groups that need onboarding, SSO, and custom limits.</p>
+          <ul>
+            <li>Custom user and location limits</li>
+            <li>Guided onboarding and data migration</li>
+            <li>SSO and priority support</li>
+            <li>Everything in Pro, sized to the group</li>
+          </ul>
+          <a class="btn secondary" href="/signup?plan=enterprise">Talk with us</a>
         </article>
       </section>
       <aside class="note">
-        Need a larger roster or a custom rollout? <a href="/signup">Start a trial and tell us the shop name</a>. Payroll calculations inside MechPro are estimates for shop planning. File payroll taxes with your payroll provider or accountant.
+        Every paid plan starts with a free trial shop. Need a larger roster or a custom rollout? <a href="/signup?plan=enterprise">Start a trial and tell us the shop name</a>. Payroll calculations inside MechPro are estimates for shop planning. File payroll taxes with your payroll provider or accountant.
       </aside>
       <footer class="site-footer">
         <span>MechPro</span>

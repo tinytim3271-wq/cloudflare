@@ -69,8 +69,10 @@ CREATE TABLE IF NOT EXISTS plans (
 
 INSERT OR IGNORE INTO plans (id, stripe_price_id, name, monthly_price_cents, max_users, max_locations, monthly_ai_requests, diagnostics_enabled, payroll_enabled, active)
 VALUES
-  ('starter', 'price_starter', 'Starter', 4900, 3, 1, 2000, 0, 0, 1),
-  ('growth', 'price_growth', 'Growth', 9900, 10, 3, 10000, 1, 1, 1);
+  ('starter', 'price_starter', 'Starter', 4900, 2, 1, 2000, 0, 0, 1),
+  ('shop', 'price_shop', 'Shop', 14900, 10, 3, 8000, 0, 0, 1),
+  ('pro', 'price_pro', 'Pro', 29900, 25, 10, 25000, 1, 1, 1),
+  ('enterprise', 'price_enterprise', 'Enterprise', 0, 100, 50, 100000, 1, 1, 1);
 
 CREATE TABLE IF NOT EXISTS billing_customers (
   shop_id TEXT PRIMARY KEY,
