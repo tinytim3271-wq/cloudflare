@@ -64,7 +64,7 @@ export function applyMileageToEstimate(estimate = {}, tripMiles = 0, rate = DEFA
   const perMile = normalizeMileageRate(rate);
   const lines = miles > 0 ? [...baseLines, mileageLineItem(miles, perMile)] : [...baseLines];
   const labor = roundMoney(lines.reduce((sum, line) => sum + (Number(line.labor) || 0), 0));
-  const laborHours = roundMiles(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
+  const laborHours = roundMoney(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
   const parts = roundMoney(lines.reduce((sum, line) => sum + (Number(line.parts) || 0), 0));
   const feeAmount = Array.isArray(estimate.fees)
     ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0)
