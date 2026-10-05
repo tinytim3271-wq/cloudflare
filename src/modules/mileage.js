@@ -127,7 +127,7 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
     };
 
   // If there are no service lines, preserve non-mileage money as a single labor/parts snapshot.
-  if (!stripMileageLines(baseEstimate.lines).length) {
+  if (!stripMileageLines(baseEstimate.lines).length || baseEstimate.aggregateBaseSubtotal != null) {
     const priorCharge = Number(order.mileageCharge) || 0;
     const labor = Number(baseEstimate.labor ?? order.labor) || 0;
     const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
@@ -141,13 +141,20 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
         ? Number(order.total) - (Number(order.tax) || 0) - priorCharge
         : (Number(baseEstimate.subtotal) || 0) - priorCharge,
     );
-    const aggregateOnly = !labor && !partsWithoutMileage && aggregateCharge > 0;
-    const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateCharge : 0);
-    const preserveAggregateTax = aggregateOnly
-      && taxRate === undefined
-      && order.estimate?.taxRate == null
-      && !(Number(order.tax) > 0);
-    const effectiveTaxRate = preserveAggregateTax ? 0 : taxRatePercent;
+    const hasAggregateSnapshot = baseEstimate.aggregateBaseSubtotal != null
+      && Number.isFinite(Number(baseEstimate.aggregateBaseSubtotal));
+    const aggregateOnly = hasAggregateSnapshot || (!labor && !partsWithoutMileage && aggregateCharge > 0);
+    const aggregateBaseSubtotal = hasAggregateSnapshot
+      ? Math.max(0, Number(baseEstimate.aggregateBaseSubtotal))
+      : aggregateCharge;
+    const aggregateBaseTax = hasAggregateSnapshot
+      ? Math.max(0, Number(baseEstimate.aggregateBaseTax) || 0)
+      : Math.max(0, Number(order.tax) || 0);
+    const aggregateTaxRate = Number(taxRatePercent);
+    const safeAggregateTaxRate = Number.isFinite(aggregateTaxRate) && aggregateTaxRate >= 0
+      ? aggregateTaxRate
+      : 8.25;
+    const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateBaseSubtotal : 0);
     const synthetic = {
       ...baseEstimate,
       lines: labor || partsWithoutMileage
@@ -173,8 +180,18 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
       labor,
       laborHours,
       parts: preservedParts,
+      ...(aggregateOnly
+        ? { aggregateBaseSubtotal, aggregateBaseTax }
+        : {}),
     };
-    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, effectiveTaxRate);
+    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, aggregateOnly ? 0 : taxRatePercent);
+    if (aggregateOnly) {
+      const mileageTax = roundMoney(estimate.mileageCharge * (safeAggregateTaxRate / 100));
+      estimate.subtotal = roundMoney(aggregateBaseSubtotal + estimate.mileageCharge);
+      estimate.tax = roundMoney(aggregateBaseTax + mileageTax);
+      estimate.taxRate = safeAggregateTaxRate;
+      estimate.total = roundMoney(estimate.subtotal + estimate.tax);
+    }
     next.estimate = estimate;
     next.labor = estimate.labor;
     next.laborHours = order.laborHours ?? estimate.laborHours;

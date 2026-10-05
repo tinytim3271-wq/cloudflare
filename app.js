@@ -191,19 +191,23 @@
       taxRate: taxRatePercent,
       total: Number(order.total) || 0
     };
-    if (!stripMileageLines(baseEstimate.lines).length) {
+    if (!stripMileageLines(baseEstimate.lines).length || baseEstimate.aggregateBaseSubtotal != null) {
       const priorCharge = Number(order.mileageCharge) || 0;
       const labor = Number(baseEstimate.labor ?? order.labor) || 0;
       const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
-      const partsWithoutMileage = Math.max(0, Number(baseEstimate.parts ?? order.parts) || 0);
+      const existingMileageParts = (Array.isArray(baseEstimate.lines) ? baseEstimate.lines : []).filter((line) => line?.kind === "mileage").reduce((sum, line) => sum + (Number(line.parts) || 0), 0);
+      const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts);
       const aggregateCharge = Math.max(
         0,
         Number(order.total) > 0 ? Number(order.total) - (Number(order.tax) || 0) - priorCharge : (Number(baseEstimate.subtotal) || 0) - priorCharge
       );
-      const aggregateOnly = !labor && !partsWithoutMileage && aggregateCharge > 0;
-      const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateCharge : 0);
-      const preserveAggregateTax = aggregateOnly && taxRate === void 0 && order.estimate?.taxRate == null && !(Number(order.tax) > 0);
-      const effectiveTaxRate = preserveAggregateTax ? 0 : taxRatePercent;
+      const hasAggregateSnapshot = baseEstimate.aggregateBaseSubtotal != null && Number.isFinite(Number(baseEstimate.aggregateBaseSubtotal));
+      const aggregateOnly = hasAggregateSnapshot || !labor && !partsWithoutMileage && aggregateCharge > 0;
+      const aggregateBaseSubtotal = hasAggregateSnapshot ? Math.max(0, Number(baseEstimate.aggregateBaseSubtotal)) : aggregateCharge;
+      const aggregateBaseTax = hasAggregateSnapshot ? Math.max(0, Number(baseEstimate.aggregateBaseTax) || 0) : Math.max(0, Number(order.tax) || 0);
+      const aggregateTaxRate = Number(taxRatePercent);
+      const safeAggregateTaxRate = Number.isFinite(aggregateTaxRate) && aggregateTaxRate >= 0 ? aggregateTaxRate : 8.25;
+      const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateBaseSubtotal : 0);
       const synthetic = {
         ...baseEstimate,
         lines: labor || partsWithoutMileage ? [{
@@ -224,9 +228,17 @@
         fees: baseEstimate.fees || [],
         labor,
         laborHours,
-        parts: preservedParts
+        parts: preservedParts,
+        ...aggregateOnly ? { aggregateBaseSubtotal, aggregateBaseTax } : {}
       };
-      const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, effectiveTaxRate);
+      const estimate2 = applyMileageToEstimate(synthetic, tripMiles, perMile, aggregateOnly ? 0 : taxRatePercent);
+      if (aggregateOnly) {
+        const mileageTax = roundMoney(estimate2.mileageCharge * (safeAggregateTaxRate / 100));
+        estimate2.subtotal = roundMoney(aggregateBaseSubtotal + estimate2.mileageCharge);
+        estimate2.tax = roundMoney(aggregateBaseTax + mileageTax);
+        estimate2.taxRate = safeAggregateTaxRate;
+        estimate2.total = roundMoney(estimate2.subtotal + estimate2.tax);
+      }
       next.estimate = estimate2;
       next.labor = estimate2.labor;
       next.laborHours = order.laborHours ?? estimate2.laborHours;
@@ -985,6 +997,7 @@
     }
   }
   async function pushCustomerToApi(record) {
+    record.id || (record.id = mutationId());
     try {
       await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) });
     } catch (error) {
@@ -2091,7 +2104,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   }
   async function upgradeShopPlan() {
     try {
-      const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: "starter", successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+      const requestedPlan = new URLSearchParams(location.search).get("plan"), planId = ["starter", "shop", "pro"].includes(requestedPlan) ? requestedPlan : "starter", result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
       toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
       if (result.url) {
         if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url);
@@ -3087,7 +3100,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (!root || root.dataset.mileageBound === "1") return;
     root.dataset.mileageBound = "1";
     const rate = () => shopMileageRate();
-    const refresh = () => refreshMileagePreview(root, { rate: rate() });
+    const refresh = () => {
+      refreshMileagePreview(root, { rate: rate() });
+      if (root.id === "new-form") refreshNewOrderEstimate();
+    };
     root.querySelectorAll("#detail-one-way-miles, #new-one-way-miles, [name=tripMilesOneWay]").forEach((input) => input.addEventListener("input", refresh));
     refresh();
     const calcButton = root.querySelector("#calculate-mileage, #new-calculate-mileage");
@@ -3847,7 +3863,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         return { lines, labor, laborHours, parts, discountAmount, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: state.taxSettings.rate, total };
       };
       refreshNewOrderEstimate = function() {
-        const estimate = readNewOrderEstimate();
+        const form = document.querySelector("#new-form"), trip = refreshMileagePreview(form, { rate: shopMileageRate() }), estimate = applyMileageToEstimate(readNewOrderEstimate(), trip.roundTrip, shopMileageRate(), state.taxSettings.rate);
         document.querySelectorAll(".new-estimate-line").forEach((row) => {
           const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0));
           row.querySelector(".estimate-line-total").textContent = money((hours * 165 + parts) * (1 - discount / 100));
