@@ -23,7 +23,6 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy:worker": "wrangler deploy",
     "setup:email": "node scripts/setup-email-signin.mjs",
-    "convert:ari": "node scripts/convert-ari-exports.mjs",
     "stage:pages": "node scripts/stage-pages.mjs",
     "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=main --commit-dirty=true",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",

@@ -3259,7 +3259,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function imports() {
     const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join("");
-    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>ARI exports: convert with <code>npm run convert:ari</code>, then upload customers \u2192 vehicles \u2192 work orders from the generated folder. ARI column names are also accepted on these templates.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
+    return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>ARI column names are also accepted on these templates.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`);
   }
   function entityName(type) {
     return type === "orders" ? "work order" : type.slice(0, -1);
