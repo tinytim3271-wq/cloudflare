@@ -13,3 +13,4 @@ www/
 .env.*
 !.env.example
 .dev.vars
+diagnostics/keys/*.local.pem

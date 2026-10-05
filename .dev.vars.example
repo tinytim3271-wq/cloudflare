@@ -1,0 +1,26 @@
+# Local-only Worker dev vars for `wrangler dev`. Copy to .dev.vars and fill in.
+# NEVER commit a real .dev.vars, and NEVER enable DEV_AUTH_BYPASS in production.
+#
+#   cp .dev.vars.example .dev.vars
+#
+# `.cursor/install.sh` auto-generates a working .dev.vars (including a local
+# ECDSA diagnostics signing key) when one does not already exist.
+
+# Local-only auth bypass. Send X-MechPro-Dev-Email (and optionally
+# X-MechPro-Dev-Name) on local API requests to impersonate an identity.
+DEV_AUTH_BYPASS=1
+
+# Comma-separated bootstrap list of platform super-admin emails. Any matching
+# X-MechPro-Dev-Email is treated as a super_admin (shopId "platform").
+ACCESS_ADMIN_EMAILS=admin@demo-shop.com
+
+# High-entropy key used to AES-GCM encrypt integration secrets at rest in D1.
+INTEGRATION_ENCRYPTION_KEY=replace-with-a-long-random-value
+
+# ECDSA P-256 private key (PKCS#8, base64-encoded DER) used to sign
+# /api/diagnostics/authorize capability tokens. Generate locally with:
+#   openssl ecparam -name prime256v1 -genkey -noout \
+#     | openssl pkcs8 -topk8 -nocrypt -outform DER | base64 -w0
+# The J2534 host verifies tokens with the matching PUBLIC key only.
+# Without this key, /api/diagnostics/authorize returns HTTP 503.
+DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-der-ec-p256-private-key

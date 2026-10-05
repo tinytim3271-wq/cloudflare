@@ -3,6 +3,14 @@ const net = require('node:net');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { generateKeyPairSync: genKeyPair } = require('node:crypto');
+
+// Ephemeral ECDSA P-256 keypair: the host verifies with the public key; the
+// test mints tokens (standing in for the Worker) with the private key.
+const diagKeys = genKeyPair('ec', { namedCurve: 'prime256v1' });
+const diagPublicKeyB64 = diagKeys.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+const diagPrivateKeyB64 = diagKeys.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+process.env.MECHPRO_DIAG_SIGNING_PRIVATE_KEY = diagPrivateKeyB64;
 
 const hostToken = 'test-host-token';
 const socketPath = process.platform === 'win32'
@@ -34,7 +42,7 @@ async function run() {
       ...process.env,
       MECHPRO_J2534_PIPE: socketPath,
       MECHPRO_J2534_TOKEN: hostToken,
-      MECHPRO_DIAG_CAPABILITY_SECRET: 'mechpro-dev-diagnostics-capability-v1',
+      MECHPRO_DIAG_SIGNING_PUBLIC_KEY: diagPublicKeyB64,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

@@ -11,6 +11,35 @@ export function base64UrlEncode(value) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+export function base64ToBytes(value) {
+  const binary = atob(String(value || '').trim());
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+/**
+ * Sign a diagnostics capability payload with an ECDSA P-256 private key.
+ * `privateKeyB64Der` is a PKCS#8 private key encoded as base64 DER.
+ * Returns a base64url IEEE-P1363 (r||s) signature verifiable by the J2534 host
+ * using the matching SPKI public key only.
+ */
+export async function signDiagnosticsToken(privateKeyB64Der, payloadJson) {
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    base64ToBytes(privateKeyB64Der),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    encoder.encode(payloadJson),
+  );
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
 export function parseJwt(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) throw new Error('Invalid Access token');

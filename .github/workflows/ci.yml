@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build web bundle
+        run: npm run build:web
+      - name: Verify committed app.js matches build output
+        run: |
+          if ! git diff --quiet -- app.js; then
+            echo "::error::app.js is out of date. Run 'npm run build:web' and commit the result." >&2
+            git --no-pager diff --stat -- app.js
+            exit 1
+          fi
+      - name: Test
+        run: npm test
+      - name: Validate Worker bundling
+        run: npm run validate:worker

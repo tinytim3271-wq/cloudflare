@@ -7,8 +7,7 @@ using System.Text.Json;
 namespace MechPro.J2534.Host;
 
 /// <summary>
-/// HMAC-signed clear_dtcs capability tokens. Compatible with
-/// infra/lambda/diagnostics/capability-token.ts and the Node host verifier.
+/// ECDSA P-256 clear_dtcs capability tokens issued by the Cloudflare Worker.
 /// </summary>
 public static class CapabilityToken
 {
@@ -24,8 +23,12 @@ public static class CapabilityToken
         }
 
         var payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
-        var expectedSig = Sign(payloadJson);
-        if (!FixedTimeEquals(expectedSig, parts[2]))
+        using var key = PublicKey();
+        if (!key.VerifyData(
+            Encoding.UTF8.GetBytes(payloadJson),
+            Base64UrlDecode(parts[2]),
+            HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
         {
             throw new UnauthorizedAccessException("Invalid diagnostics capability token signature");
         }
@@ -59,31 +62,51 @@ public static class CapabilityToken
 
         if (Consumed.Count > 500)
         {
-            foreach (var key in Consumed.Keys.Take(50))
+            foreach (var consumedKey in Consumed.Keys.Take(50))
             {
-                Consumed.TryRemove(key, out _);
+                Consumed.TryRemove(consumedKey, out _);
             }
         }
     }
 
-    static string Sign(string payloadJson)
+    static ECDsa PublicKey()
     {
-        var secret = Environment.GetEnvironmentVariable("MECHPRO_DIAG_CAPABILITY_SECRET")
-            ?? Environment.GetEnvironmentVariable("DIAGNOSTICS_CAPABILITY_SECRET")
-            ?? "mechpro-dev-diagnostics-capability-v1";
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        return Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(payloadJson)));
-    }
+        var pem = Environment.GetEnvironmentVariable("MECHPRO_DIAG_SIGNING_PUBLIC_KEY_PEM");
+        var key = ECDsa.Create();
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(pem))
+            {
+                key.ImportFromPem(pem);
+            }
+            else
+            {
+                var der = Environment.GetEnvironmentVariable("MECHPRO_DIAG_SIGNING_PUBLIC_KEY");
+                if (string.IsNullOrWhiteSpace(der))
+                {
+                    throw new UnauthorizedAccessException("Diagnostics signing public key is not configured");
+                }
 
-    static bool FixedTimeEquals(string a, string b)
-    {
-        var left = Encoding.UTF8.GetBytes(a);
-        var right = Encoding.UTF8.GetBytes(b);
-        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
-    }
+                var publicKeyBytes = Convert.FromBase64String(der.Trim());
+                key.ImportSubjectPublicKeyInfo(publicKeyBytes, out var bytesRead);
+                if (bytesRead != publicKeyBytes.Length)
+                {
+                    throw new UnauthorizedAccessException("Invalid diagnostics signing public key");
+                }
+            }
 
-    static string Base64UrlEncode(byte[] data) =>
-        Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            if (key.KeySize != 256)
+            {
+                throw new UnauthorizedAccessException("Diagnostics signing public key must use P-256");
+            }
+            return key;
+        }
+        catch
+        {
+            key.Dispose();
+            throw;
+        }
+    }
 
     static byte[] Base64UrlDecode(string input)
     {
