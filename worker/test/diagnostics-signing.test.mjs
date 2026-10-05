@@ -37,7 +37,8 @@ test('worker-signed ECDSA capability token verifies on the J2534 host', async ()
   const token = `v1.${base64UrlEncode(new TextEncoder().encode(payloadJson))}.${signature}`;
 
   // The host verifies with the public key only.
-  process.env.MECHPRO_DIAG_SIGNING_PUBLIC_KEY = publicKeyB64;
+delete process.env.MECHPRO_DIAG_SIGNING_PUBLIC_KEY_PEM;
+process.env.MECHPRO_DIAG_SIGNING_PUBLIC_KEY = publicKeyB64;
   const { verifyClearDtcsToken } = require('../../diagnostics/j2534-host-node/capability-token.js');
 
   const verified = verifyClearDtcsToken(token, { vin: payload.vin, consume: false });
