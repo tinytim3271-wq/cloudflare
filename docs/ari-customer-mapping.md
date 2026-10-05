@@ -9,7 +9,7 @@
 
 MechPro can directly receive only a small customer core today: name, one phone number, one email address, one combined billing address, and billing notes. It also carries three customer summary counters (`vehicles`, `visits`, and `spend`) plus record/audit metadata.
 
-ARI publicly documents a richer client record and workflow: contact import, address and shipping-location data, geolocation, notes, labels, lead source, tax exemption, client discount, labor-rate override, and parts-markup override. Those richer values have no customer-level MechPro destination. ARI also documents client list exports to Excel/CSV, but no public, customer-record API schema or direct database schema was found.
+ARI publicly documents a richer client record and workflow: contact import, address and shipping-location data, geolocation, notes, labels, lead source, customer Tax ID, tax exemption, client discount, labor-rate override, parts-markup override, and payment-terms override. Those richer values have no customer-level MechPro destination. ARI also documents client list exports to Excel/CSV, but no public, customer-record API schema or direct database schema was found.
 
 The safe next step is to obtain Timothy's actual **Clients** CSV/Excel export (headers plus a few redacted rows). Until that exists, this is a capability mapping, not a transfer specification.
 
@@ -19,6 +19,10 @@ The safe next step is to obtain Timothy's actual **Clients** CSV/Excel export (h
 - **ARI:** verified where possible from ARI's public product/update pages, linked in [Sources](#sources). ARI's pages describe capabilities but generally do not publish exact export column names, types, nullability, or enum values.
 - **Not available:** no Timothy-specific ARI export, API response, database extract, field dictionary, or ARI file appears in this repository.
 - **Terminology:** ARI calls these records “clients”; MechPro calls them “customers.”
+
+### Product identity warning
+
+This report maps **ARI (Auto Repair Software) at `ari.app`**, because its documented client screen matches the requested actions and overrides. **ARI Network Services at `arinet.com` is a different product family.** Its former FootSteps lead-management CRM is retired, and ARI Network's publicly advertised DataSmart API is for OEM/aftermarket catalog data rather than customer records. If Timothy means an ARI Network/Dealer Spike product instead of the `ari.app` shop-management application, this mapping must be re-scoped against the exact product and export.
 
 ## 1. How MechPro stores customers
 
@@ -93,9 +97,11 @@ ARI's public pages verify that client records/workflows can include:
 - notes and searchable custom labels;
 - lead/source information (examples: Social Media, Referral, Google);
 - tax-exempt setting;
+- customer Tax ID (VAT);
 - client discount;
 - labor-rate override;
 - parts-markup override;
+- payment-terms override (publisher release notes also give examples such as Net 30 and Due on Receipt);
 - ID Scan, Contact Import, and phone actions;
 - opening a client location in Google Maps;
 - client statements, vehicles, invoices, estimates, messages, and portal access.
@@ -112,7 +118,7 @@ The public material does **not** establish:
 - a public ARI customer API endpoint or payload schema;
 - direct access to ARI's internal database schema;
 - whether phone/email/address are singular, repeated, or split into components in Timothy's account;
-- whether “Payment Terms Override” is a current customer setting/export field.
+- whether Tax ID, payment terms, or any other override is included in the Clients export and, if so, its exact representation.
 
 For this reason, “typical ARI field” below means a publicly documented capability, not a guaranteed column in Timothy's file.
 
@@ -131,10 +137,11 @@ For this reason, “typical ARI field” below means a publicly documented capab
 | Labels/tags | Verified capability | None | Gap | Flattening into notes would destroy filterability; avoid without approval. |
 | Customer source / lead source | Verified capability and report export | None | Gap | Public ARI documentation says source is exportable through Client Reports, but the exact header is unknown. |
 | Tax exempt | Verified per-client setting | None | Gap | MechPro has shop/invoice tax controls, not a customer exemption field or automatic exemption behavior. |
+| Customer Tax ID / VAT ID | Publisher-documented field; export header unverified | None | Gap | MechPro's `taxId` is a shop filing setting, not a customer field, and must not be used for this value. |
 | Client discount | Verified per-client setting | None | Gap | MechPro supports estimate-level discounts and shop coupons, not a persistent customer default. |
 | Labor rate override | Verified per-client setting | None | Gap | MechPro has a shop default and line-level labor rate, not a customer override. |
 | Parts markup override | Verified per-client setting | None | Gap | MechPro has line prices and shop purchasing/vendor settings, not customer-level markup. |
-| Payment terms override | **Unverified publicly** | None | Gap | MechPro generates invoice due dates (currently 14 days in one workflow) but has no customer terms field. Confirm the ARI field, unit/enum, and export presence. |
+| Payment terms override | Publisher-documented per-client setting; export header unverified | None | Gap | MechPro generates invoice due dates (currently 14 days in one workflow) but has no customer terms field. Confirm the exported value/unit/enum. |
 | Created date | Plausible export field; unverified | `createdAt` | Conditional | Importing source provenance into server audit metadata needs an explicit policy. The Worker accepts client `createdAt`; do not use it until agreed. |
 | Modified date | Plausible export field; unverified | `updatedAt` | No direct import | Worker overwrites `updatedAt` on save. A source-modified timestamp would need a separate supported field. |
 | Total invoiced / paid / due | Verified on ARI client details, not verified in export | `spend` and derived balance | Unsafe | Definitions may differ. Recompute from later invoice/payment migration rather than copying into customer master data. |
@@ -150,13 +157,14 @@ For this reason, “typical ARI field” below means a publicly documented capab
 3. Multiple typed phone numbers and email addresses, including a preferred-contact marker.
 4. Customer labels/tags.
 5. Customer acquisition source.
-6. Tax-exempt status and, likely, exemption certificate/identifier/effective dates.
-7. Persistent customer discount (including percentage vs flat amount and applicability).
-8. Customer labor-rate override.
-9. Customer parts-markup override.
-10. Customer payment-terms override.
-11. Source-system ID and source-created/source-modified timestamps distinct from MechPro audit metadata.
-12. A semantically general customer-notes field; `billingNotes` is the only current destination.
+6. Customer Tax ID/VAT ID.
+7. Tax-exempt status and, likely, exemption certificate/identifier/effective dates.
+8. Persistent customer discount (including percentage vs flat amount and applicability).
+9. Customer labor-rate override.
+10. Customer parts-markup override.
+11. Customer payment-terms override.
+12. Source-system ID and source-created/source-modified timestamps distinct from MechPro audit metadata.
+13. A semantically general customer-notes field; `billingNotes` is the only current destination.
 
 ### Import/behavior gaps
 
@@ -181,14 +189,14 @@ These are findings only. This branch intentionally adds none of the missing fiel
 | **Apply Discount** | **Partial, not customer-level** | **Yes, verified** | MechPro supports estimate discounts and shop coupons. It has no customer default/toggle. ARI documents a per-client discount toggle. |
 | **Labor Rate Override** | **No customer setting** | **Yes, verified** | MechPro has shop-default and estimate-line labor rates only. ARI documents a per-client override. |
 | **Parts Markup Override** | **No customer setting** | **Yes, verified** | MechPro supports entered part prices but no customer-level markup policy. ARI documents a per-client override. |
-| **Payment Terms Override** | **No customer setting** | **Uncertain** | MechPro has invoice due dates but no customer terms default. The reviewed ARI public client-redesign page does not mention this toggle; Timothy's screen/export must confirm it. |
+| **Payment Terms Override** | **No customer setting** | **Yes, publisher-documented** | ARI's App Store release notes list a per-client override and later describe global terms such as Net 30 and Due on Receipt. Timothy's export must still confirm whether and how the value is exported. |
 
 ## 7. Proposed review-only disposition
 
 If Timothy supplies an export, classify each incoming column before any implementation:
 
 - **Map now:** `name`, one selected `phone`, one selected `email`, combined address → `billingAddress`, approved notes → `billingNotes`.
-- **Hold for product decision:** external ID, structured/multiple contacts, shipping address, geolocation, labels, source, tax exemption, discount, labor/parts overrides, and payment terms.
+- **Hold for product decision:** external ID, structured/multiple contacts, shipping address, geolocation, labels, source, customer Tax ID, tax exemption, discount, labor/parts overrides, and payment terms.
 - **Recompute later:** vehicle count, visits, spend, invoiced/paid/due totals.
 - **Never import as customer notes:** passwords, portal access keys, payment credentials, or other secrets.
 
@@ -197,19 +205,20 @@ No transfer should proceed merely because D1's JSON column can accept an undecla
 ## 8. Open questions for Timothy
 
 1. Can you provide the ARI **Clients** CSV/Excel export headers and 3–5 redacted representative rows (individual, fleet/company, tax-exempt, and override-bearing clients if possible)?
-2. Which ARI product/version and platform produced the data: current ARI web/Windows/mobile export, a supported API, or another “ARI Network” product?
+2. Confirm the product identity: is this **ARI (Auto Repair Software) from `ari.app`**, or an **ARI Network Services/Dealer Spike** product? Which version and platform produced the data?
 3. Is there an ARI API agreement or private API documentation for this shop? If yes, provide a redacted customer response/schema and authentication-independent field documentation.
 4. Does the export include a stable client ID? Is that ID visible in ARI and preserved across exports?
 5. Does ARI split names into first/last/company fields, and can a company have multiple contacts?
 6. Can clients have multiple phones/emails? Which types and preferred-contact flags should MechPro retain?
 7. Are billing address, shipping/service location, and geolocation separate in the export? Which should appear on MechPro invoices?
 8. What do ARI's per-client discount and override values contain: enabled flag only, percent/amount, named rate/markup tier, or explicit numeric value?
-9. Does **Payment Terms Override** appear in Timothy's current ARI UI or export? What are its possible values (for example due on receipt, Net 15, Net 30, or a day count)?
-10. For tax-exempt clients, does the export include only a boolean or also exemption number, jurisdiction, certificate, and expiry?
-11. Should ARI labels and source remain searchable after migration? If so, they should not be flattened into billing notes.
-12. Should ARI notes be copied at all, and do they contain sensitive data that requires exclusion or access controls?
-13. Are `vehicles`, `visits`, and `spend` expected in the customer-only phase, or should they be recomputed after vehicles/work orders/invoices are mapped later?
-14. How should duplicates be resolved when customers share a name or when the same person appears under multiple ARI records?
+9. Does **Payment Terms Override** appear in Timothy's export, and how is it encoded (for example Due on Receipt, Net 15, Net 30, or a day count)?
+10. Does the Clients export contain the customer Tax ID/VAT field documented in ARI's release notes?
+11. For tax-exempt clients, does the export include only a boolean or also exemption number, jurisdiction, certificate, and expiry?
+12. Should ARI labels and source remain searchable after migration? If so, they should not be flattened into billing notes.
+13. Should ARI notes be copied at all, and do they contain sensitive data that requires exclusion or access controls?
+14. Are `vehicles`, `visits`, and `spend` expected in the customer-only phase, or should they be recomputed after vehicles/work orders/invoices are mapped later?
+15. How should duplicates be resolved when customers share a name or when the same person appears under multiple ARI records?
 
 ## Sources
 
@@ -225,7 +234,10 @@ No transfer should proceed merely because D1's JSON column can accept an undecla
 
 - [Auto Shop Clients Management](https://ari.app/features/auto-shop-clients-management/) — contacts, address, shipping location, geolocation, email, notes, address recognition, labels, and contact import.
 - [ARI Update – Client Menu Redesign](https://ari.app/2024/11/ari-update-client-menu-redesign/) — ID Scan, Contact Import, phone action, Maps action, tax exemption, discount, labor-rate override, and parts-markup override.
+- [ARI App Store listing](https://apps.apple.com/us/app/ari-auto-repair-software/id1189544427) — publisher release notes documenting customer Tax ID, per-client payment-terms override, example default terms, and driver-license AI extraction.
 - [ARI update v9.9](https://ari.app/2022/01/ari-auto-repair-software-update-v9-improved-features/) — client source and source export through Client Reports.
 - [Reports Feature Improvements, ARI v14](https://ari.app/2024/04/reports-feature-improvements-ari-v-14/) — Clients data export and CSV/Excel/PDF workflow.
 - [Introducing Grid View](https://ari.app/2021/09/introducing-grid-view-to-ari/) — Clients grid support and full-list Excel export.
 - [Profile Setup](https://ari.app/features/profile-setup/) — shop labor rates, parts markups, taxes, and discount coupons; useful for distinguishing global settings from per-client overrides.
+- [FootSteps Shutdown FAQ](https://aridocs.com/footsteps-shutdown-faq/) — confirms ARI Network's FootSteps CRM and its historical lead-export path are retired.
+- [ARI Network DataSmart](https://arinet.com/powersports/ecatalogs/datasmart/) — confirms the publicly advertised ARI Network API covers catalog/fitment content, not customer master records.
