@@ -56,6 +56,37 @@ test('legacy entity aliases remain compatible', () => {
   });
 });
 
+test('order and invoice payloads recalculate line item totals before persistence', () => {
+  const order = normalizeEntityPayload('orders', {
+    id: 'RO-1056',
+    total: 1,
+    estimate: {
+      taxRate: 8.25,
+      fees: [{ description: 'Shop supplies', amount: 12 }],
+      lines: [
+        { type: 'labor', description: 'Diagnosis', hours: 2, laborRate: 140 },
+        { type: 'part', description: 'MAF sensor', partNumber: 'MAF-1056', quantity: 1, unitPrice: 175 },
+      ],
+    },
+  });
+  assert.equal(order.labor, 280);
+  assert.equal(order.parts, 175);
+  assert.equal(order.total, 505.53);
+  assert.equal(order.estimate.lines[1].partNumber, 'MAF-1056');
+
+  const invoice = normalizeEntityPayload('invoices', {
+    number: 'INV-1056',
+    amount: 1,
+    taxRate: 8.25,
+    fees: order.estimate.fees,
+    lines: order.estimate.lines,
+  });
+  assert.equal(invoice.subtotal, 467);
+  assert.equal(invoice.tax, 38.53);
+  assert.equal(invoice.amount, 505.53);
+  assert.equal(invoice.lines[1].partNumber, 'MAF-1056');
+});
+
 test('invoice balance and tax report account for completed payments', () => {
   const payments = [
     { invoiceNumber: 'INV-1', customer: 'A', amount: 54.13, receivedAt: '2026-09-01T12:00:00Z', status: 'completed' },

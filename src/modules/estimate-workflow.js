@@ -23,6 +23,7 @@ export function normalizeEstimateLine(line = {}, index = 0) {
     type,
     description: String(line.description || line.service || line.name || (type === 'part' ? 'Part' : 'Labor')),
     notes: String(line.notes || line.explanation || ''),
+    partNumber: type === 'part' ? String(line.partNumber || line.part_number || line.inventorySku || '') : '',
     quantity,
     unitPrice,
     hours,
@@ -134,11 +135,58 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
     subtotal: estimate.subtotal,
     tax: estimate.tax,
     taxRate: Math.max(0, Number(estimate.taxRate) || 0),
+    fees: estimate.fees,
     status: 'sent',
     date: issuedAt.toISOString().slice(0, 10),
     due: due.toISOString().slice(0, 10),
     lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
     sourceEstimateApproval: order.estimateApproval || null,
     createdAt: issuedAt.toISOString(),
+  };
+}
+
+export function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = new Date().toISOString()) {
+  const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
+  const hadApproval = Boolean(
+    order.linesLockedAt
+    || order.estimateApproval?.status === 'approved'
+    || ['approved', 'in_progress', 'waiting_parts', 'completed', 'invoiced'].includes(order.status),
+  );
+  return {
+    ...order,
+    estimate: {
+      ...estimate,
+      ...recalculated,
+      summary: estimate.summary || order.estimate?.summary || '',
+      generatedAt: estimate.generatedAt || order.estimate?.generatedAt || editedAt,
+      revisedAt: editedAt,
+    },
+    labor: recalculated.labor,
+    laborHours: recalculated.laborHours,
+    parts: recalculated.parts,
+    tax: recalculated.tax,
+    total: recalculated.total,
+    estimateApproval: hadApproval ? null : order.estimateApproval,
+    linesLockedAt: hadApproval ? null : order.linesLockedAt,
+    estimateRevisionPending: hadApproval || Boolean(order.estimateRevisionPending),
+    estimateRevisionPreviousStatus: hadApproval ? order.status : order.estimateRevisionPreviousStatus,
+    updatedAt: order.updatedAt,
+  };
+}
+
+export function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = new Date().toISOString()) {
+  const source = order.estimate || {};
+  const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+  return {
+    ...invoice,
+    amount: estimate.total,
+    subtotal: estimate.subtotal,
+    tax: estimate.tax,
+    taxRate: estimate.taxRate,
+    fees: estimate.fees,
+    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+    signature: null,
+    sourceEstimateApproval: null,
+    revisedAt: editedAt,
   };
 }
