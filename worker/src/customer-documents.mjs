@@ -68,6 +68,24 @@ async function claimDocumentLink(env, linkId, result, timestamp) {
   }
 }
 
+async function invalidateSiblingDocumentLinks(env, link, result, timestamp) {
+  // Email + SMS each mint a separate token; once one response commits, burn the rest
+  // so a second device cannot present an unused link after the estimate is locked.
+  await env.DB.prepare(`
+    UPDATE customer_document_links
+    SET consumed_at = ?, result = ?
+    WHERE shop_id = ? AND document_type = ? AND document_id = ?
+      AND id != ? AND consumed_at IS NULL
+  `).bind(
+    timestamp,
+    result,
+    link.shop_id,
+    link.document_type,
+    link.document_id,
+    link.id,
+  ).run();
+}
+
 export async function createCustomerDocumentLink(request, env, context) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   if (!['admin', 'office', 'service_writer'].includes(context.role)) {
@@ -232,22 +250,36 @@ async function limitedResponseJson(request) {
   }
 }
 
-async function saveEntity(env, link, row, document) {
+async function saveEntity(env, link, document, { requireUnlockedEstimate = false } = {}) {
   const updatedAt = new Date().toISOString();
   document.updatedAt = updatedAt;
-  await env.DB.prepare(`
+  // Per-link claim is not enough when email + SMS mint two tokens for one RO:
+  // both can pass the unlocked read, claim different link rows, and last-write
+  // the order. Fail closed unless this UPDATE still sees an unlocked estimate.
+  let sql = `
     UPDATE entities SET data_json = ?, updated_at = ?
     WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
-  `).bind(
+  `;
+  if (requireUnlockedEstimate) {
+    sql += `
+      AND COALESCE(json_extract(data_json, '$.linesLockedAt'), '') = ''
+      AND COALESCE(json_extract(data_json, '$.estimateApproval.status'), '')
+        NOT IN ('approved', 'declined')
+    `;
+  }
+  const outcome = await env.DB.prepare(sql).bind(
     JSON.stringify(document),
     updatedAt,
     link.shop_id,
     entityTypeForDocument(link.document_type),
     link.document_id,
   ).run();
+  if (requireUnlockedEstimate && !outcome?.meta?.changes) {
+    throw new HttpError(409, 'This estimate has already been approved or declined');
+  }
 }
 
-async function recordResponse(request, env, link, row, document) {
+async function recordResponse(request, env, link, document) {
   if (link.consumed_at) throw new HttpError(409, 'This link has already been used');
   if (new Date(link.expires_at).getTime() <= Date.now()) throw new HttpError(410, 'This link has expired');
   if (link.document_type === 'estimate' && estimateAlreadyLocked(document)) {
@@ -275,7 +307,8 @@ async function recordResponse(request, env, link, row, document) {
       respondedAt: timestamp,
       decisions: declined.decisions,
     };
-    await saveEntity(env, link, row, document);
+    await saveEntity(env, link, document, { requireUnlockedEstimate: true });
+    await invalidateSiblingDocumentLinks(env, link, 'declined', timestamp);
     return json({ ok: true, status: 'declined' });
   }
   if (action !== 'sign') throw new HttpError(400, 'Choose sign or decline');
@@ -314,10 +347,13 @@ async function recordResponse(request, env, link, row, document) {
     document.estimateApproval = { status: 'approved', ...signature, decisions };
     document.estimateRevisionPending = false;
     delete document.estimateRevisionPreviousStatus;
+    await saveEntity(env, link, document, { requireUnlockedEstimate: true });
+    await invalidateSiblingDocumentLinks(env, link, result, timestamp);
   } else {
     document.signature = signature;
+    await saveEntity(env, link, document);
+    await invalidateSiblingDocumentLinks(env, link, result, timestamp);
   }
-  await saveEntity(env, link, row, document);
   return json({ ok: true, status: result });
 }
 
@@ -329,7 +365,7 @@ export async function handleCustomerDocument(request, env, token) {
   const row = await entityRow(env, link.shop_id, entityTypeForDocument(link.document_type), link.document_id);
   const document = parseEntity(row);
   if (!document) throw new HttpError(404, 'Document not found');
-  if (request.method === 'POST') return recordResponse(request, env, link, row, document);
+  if (request.method === 'POST') return recordResponse(request, env, link, document);
   if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
   const nonce = randomToken();
   return new Response(customerDocumentPage(link, document, nonce), {
