@@ -30,12 +30,16 @@ test('shop rules apply supplies at three percent of labor capped at twenty dolla
   const capped = calculateShopEstimate([
     { type: 'labor', description: 'Repair', hours: 5, laborRate: 140 },
   ]);
+  const explicitOverride = calculateShopEstimate([
+    { type: 'labor', description: 'Repair', hours: 5, laborRate: 140 },
+  ], { shopSupplies: 100 });
   const partsOnly = calculateShopEstimate([
     { type: 'part', description: 'Part', quantity: 1, unitPrice: 100 },
   ]);
 
   assert.equal(small.fees[0].amount, 4.2);
   assert.equal(capped.fees[0].amount, 20);
+  assert.equal(explicitOverride.fees[0].amount, 20);
   assert.deepEqual(partsOnly.fees, []);
 });
 
