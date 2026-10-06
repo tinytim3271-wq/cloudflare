@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAiWorkflowEstimate } from './ai-workflow.js';
+import { applyAiWorkflowEstimate, stopMediaCapture } from './ai-workflow.js';
 
 test('AI workflow estimate remains active after save for invoice generation', () => {
   const order = {
@@ -58,4 +58,20 @@ test('AI workflow estimate reapplies stored mileage with shop settings', () => {
   assert.equal(order.tax, 13.5);
   assert.equal(order.total, 177.1);
   assert.equal(order.total, order.estimate.total);
+});
+
+test('media cleanup stops an active recorder and every microphone track', () => {
+  let recorderStopped = false;
+  const trackStops = [false, false];
+  const recorder = { state: 'recording', stop: () => { recorderStopped = true; } };
+  const stream = {
+    getTracks: () => trackStops.map((_, index) => ({
+      stop: () => { trackStops[index] = true; },
+    })),
+  };
+
+  stopMediaCapture(recorder, stream);
+
+  assert.equal(recorderStopped, true);
+  assert.deepEqual(trackStops, [true, true]);
 });

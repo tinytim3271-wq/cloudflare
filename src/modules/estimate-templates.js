@@ -136,7 +136,7 @@ export const REFERENCE_ESTIMATE = Object.freeze({
   },
   vehicle: {
     description: '2016 Mercedes-Benz GLA250',
-    vin: 'DEMO-VEHICLE-VIN',
+    vin: '1HGCM82633A123456',
     plate: 'DEMO-01',
   },
   insurance: {
@@ -181,10 +181,9 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
     `Claimant: ${customer.name || 'Not provided'}.`,
     estimate.complaint,
     insurance.company || insurance.policy
-      ? `Insurance: ${insurance.company || 'Carrier not provided'}; policy ${insurance.policy || 'not provided'}; claim number not yet assigned.`
+      ? `Insurance: ${insurance.company || 'Carrier not provided'}; policy ${insurance.policy || 'not provided'}; claim number ${insurance.claimNumber || 'not yet assigned'}.`
       : '',
     laborSource ? `Labor source: ${laborSource}` : '',
-    ...(estimate.shopNotes || []).map(note => `Shop note: ${note}`),
   ].filter(Boolean);
   return {
     sourceEstimateNumber: estimate.number || '',
@@ -204,12 +203,15 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
     }),
     exclusions: estimate.exclusions || [],
     insurance,
+    internalNotes: (estimate.shopNotes || []).map(String),
     plate: vehicle.plate || '',
   };
 }
 
-export function estimateFromAssistantDraft(action = {}) {
+export function estimateFromAssistantDraft(action = {}, pricing = action.pricing || {}) {
   const draft = action.draft || action;
+  const laborRate = Math.max(0, Number(pricing.laborRate ?? SHOP_ESTIMATE_RULES.laborRate) || 0);
+  const taxRate = Math.max(0, Number(pricing.taxRate ?? SHOP_ESTIMATE_RULES.taxRate) || 0);
   const partLines = (draft.parts || []).map((part, index) => ({
     id: `assistant-part-${index + 1}`,
     type: 'part',
@@ -218,7 +220,7 @@ export function estimateFromAssistantDraft(action = {}) {
     quantity: Math.max(0, Number(part.quantity) || 0),
     unitPrice: Math.max(0, Number(part.unitPrice) || 0),
     partNumber: String(part.partNumber || ''),
-    priceStatus: part.priceStatus === 'pending' ? 'pending' : 'priced',
+    priceStatus: part.priceStatus === 'priced' || Number(part.unitPrice) > 0 ? 'priced' : 'pending',
   }));
   const laborLines = (draft.labor || []).map((labor, index) => ({
     id: `assistant-labor-${index + 1}`,
@@ -226,10 +228,11 @@ export function estimateFromAssistantDraft(action = {}) {
     description: String(labor.description || 'Labor'),
     notes: String(labor.notes || labor.source || ''),
     hours: Math.max(0, Number(labor.hours) || 0),
-    laborRate: SHOP_ESTIMATE_RULES.laborRate,
+    laborRate,
     laborSource: String(labor.source || 'Customer conversation; verify before authorization'),
   }));
   const totals = calculateShopEstimate([...partLines, ...laborLines], {
+    taxRate,
     discountPercent: draft.discountPercent,
     discountReason: draft.discountReason,
   });
@@ -255,4 +258,12 @@ export function estimateFromAssistantDraft(action = {}) {
     lines: totals.lines,
     ...totals,
   };
+}
+
+export async function persistEstimateDraft(apiFetch, record) {
+  const response = await apiFetch('/entities/estimates', {
+    method: 'POST',
+    body: JSON.stringify(record),
+  });
+  return response?.queued ? record : response || record;
 }
