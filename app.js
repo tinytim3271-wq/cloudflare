@@ -2433,7 +2433,7 @@
     const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
     const due = new Date(issuedAt);
     due.setDate(due.getDate() + 14);
-    const amount = estimate.total;
+    const amount = roundMoney2(order.total ?? estimate.total);
     return {
       id: number,
       number,
