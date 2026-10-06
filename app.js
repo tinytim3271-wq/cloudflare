@@ -3132,8 +3132,10 @@
     writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
-    if (!authSession()) throw new Error("Not signed in");
-    return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } });
+    const session = authSession();
+    if (!session) throw new Error("Not signed in");
+    const localHeaders = isLocalShell() ? { "X-MechPro-Dev-Email": session.claims.email || "admin@example.com", "X-MechPro-Dev-Name": session.claims.name || "Local Developer", "X-MechPro-Dev-Sub": session.claims.sub || "local-development" } : {};
+    return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...localHeaders, ...options.headers || {} } });
   }
   async function verifyDesktopEntitlement() {
     if (!isDesktopApp || isOfflineDesktop() || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
