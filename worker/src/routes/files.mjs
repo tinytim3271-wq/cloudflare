@@ -61,9 +61,11 @@ function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES, onBytes = () =
 export async function storeUploadedFile(files, key, body, metadata, maxBytes = MAX_UPLOAD_BYTES) {
   let received = 0;
   try {
-    await files.put(key, createSizeLimitedBody(body, maxBytes, (bytes) => {
+    const limitedBody = createSizeLimitedBody(body, maxBytes, (bytes) => {
       received = bytes;
-    }), metadata);
+    });
+    const upload = await new Response(limitedBody).arrayBuffer();
+    await files.put(key, upload, metadata);
   } catch (error) {
     if (error instanceof UploadTooLargeError) throw new HttpError(413, 'File exceeds 15 MB');
     if (error instanceof HttpError) throw error;
