@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
 import {
+  ANTHROPIC_TOOLS,
   buildAssistantSystemPrompt,
   MECHPRO_SYSTEM_PROMPT,
   calculateTextCost,
@@ -103,6 +104,17 @@ test('estimate and work-order tool creates a bounded review draft without persis
   assert.equal(result.saved, false);
   assert.equal(result.draft.parts[0].priceStatus, 'pending');
   assert.deepEqual(result.pricing, { laborRate: 175, taxRate: 6.5 });
+  const tool = ANTHROPIC_TOOLS.find(item => item.name === 'prepare_estimate_work_order');
+  assert.ok(tool.input_schema.properties.parts.items.required.includes('priceStatus'));
+  const omittedStatus = prepareEstimateWorkOrderDraft({
+    customer: { name: 'Caller' },
+    vehicle: { description: '2020 Example' },
+    complaint: 'Noise',
+    requestedServices: [],
+    parts: [{ description: 'Unknown part', quantity: 1, unitPrice: 0 }],
+    labor: [],
+  });
+  assert.equal(omittedStatus.draft.parts[0].priceStatus, 'pending');
 });
 
 test('grounding lookup is tenant-scoped and read-only', async () => {

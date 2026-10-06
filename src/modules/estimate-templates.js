@@ -220,7 +220,7 @@ export function estimateFromAssistantDraft(action = {}, pricing = action.pricing
     quantity: Math.max(0, Number(part.quantity) || 0),
     unitPrice: Math.max(0, Number(part.unitPrice) || 0),
     partNumber: String(part.partNumber || ''),
-    priceStatus: part.priceStatus === 'pending' ? 'pending' : 'priced',
+    priceStatus: part.priceStatus === 'priced' || Number(part.unitPrice) > 0 ? 'priced' : 'pending',
   }));
   const laborLines = (draft.labor || []).map((labor, index) => ({
     id: `assistant-labor-${index + 1}`,

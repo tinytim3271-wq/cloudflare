@@ -107,6 +107,17 @@ test('assistant conversion uses tenant pricing carried by the reviewed action', 
   assert.equal(estimate.total, 191.97);
 });
 
+test('legacy zero-price assistant parts remain pending when status is absent', () => {
+  const estimate = estimateFromAssistantDraft({
+    draft: {
+      parts: [{ description: 'Unpriced part', quantity: 1, unitPrice: 0 }],
+      labor: [],
+    },
+  });
+
+  assert.equal(estimate.lines[0].priceStatus, 'pending');
+});
+
 test('estimate draft persistence retains queued saves and propagates permanent failures', async () => {
   const record = { id: 'estimate-1' };
   assert.equal(await persistEstimateDraft(async () => ({ queued: true }), record), record);

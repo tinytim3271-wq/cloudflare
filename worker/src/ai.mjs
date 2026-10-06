@@ -103,7 +103,7 @@ const PREPARE_ESTIMATE_TOOL = {
             partNumber: { type: 'string' },
             priceStatus: { type: 'string', enum: ['priced', 'pending'] },
           },
-          required: ['description', 'quantity', 'unitPrice'],
+          required: ['description', 'quantity', 'unitPrice', 'priceStatus'],
           additionalProperties: false,
         },
       },
@@ -158,7 +158,7 @@ export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP
       quantity: Math.max(0, Number(part.quantity) || 0),
       unitPrice: Math.max(0, Number(part.unitPrice) || 0),
       partNumber: cleanDraftText(part.partNumber, 100),
-      priceStatus: part.priceStatus === 'pending' ? 'pending' : 'priced',
+      priceStatus: part.priceStatus === 'priced' ? 'priced' : 'pending',
     })).filter(part => part.description),
     labor: (input.labor || []).slice(0, 30).map(labor => ({
       description: cleanDraftText(labor.description, 300),
