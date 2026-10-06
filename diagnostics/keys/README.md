@@ -43,9 +43,17 @@ Actions repo secret on every deploy, so you never touch the Worker directly:
    step pushes the key to the Worker (`wrangler secret put`) before Pages deploy,
    and the post-deploy **Verify diagnostics signing key secret** step confirms it.
 
-Rotating: generate a new pair (`--rotate --print-secret`), update the GitHub
-secret, commit the new public key. Rotation invalidates tokens signed by the old
-key.
+Rotating invalidates tokens signed by the old key. To avoid interrupting
+authorized procedures, coordinate the change:
+
+1. Pause issuing and using diagnostics capabilities.
+2. Wait at least 30 minutes after the last capability was issued; module-flash
+   capabilities have the longest lifetime.
+3. Generate a new pair (`--rotate --print-secret`), then deploy the new public
+   key to every diagnostics host while issuance remains paused.
+4. Update the GitHub `DIAGNOSTICS_SIGNING_PRIVATE_KEY` secret and deploy the
+   Worker. Confirm the deployed hosts have the matching public key before
+   resuming capability issuance and procedures.
 
 ### Alternative: set it directly with wrangler
 

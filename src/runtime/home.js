@@ -114,14 +114,52 @@ export function buildHomeModel({
   };
 }
 
-export function mergeRemoteCollection(key, remote, local, isSampleRecord) {
+export function mergeRemoteCollection(key, remote, local, isSampleRecord, pendingCreateIds = []) {
   if (!Array.isArray(remote)) return Array.isArray(local) ? local : [];
-  if (remote.length) return remote;
   const current = Array.isArray(local) ? local : [];
-  if (current.length && typeof isSampleRecord === 'function' && current.every((record) => isSampleRecord(key, record))) {
-    return current;
+  const pendingIds = new Set(pendingCreateIds);
+  if (!remote.length) {
+    if (current.length && typeof isSampleRecord === 'function' && current.every((record) => isSampleRecord(key, record))) {
+      return current;
+    }
+    const pendingCreates = current.filter((record) => record?.id && pendingIds.has(record.id));
+    return pendingCreates.length ? pendingCreates : remote;
   }
-  return remote;
+  // Keep queued creates that are not yet present in the authoritative remote list.
+  const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
+  const localOnly = current.filter((record) => (
+    record?.id
+    && !remoteIds.has(record.id)
+    && pendingIds.has(record.id)
+  ));
+  return localOnly.length ? [...localOnly, ...remote] : remote;
+}
+
+export function pendingCreateIdsForCollection(collection, queue = [], entityCollections = {}) {
+  return (Array.isArray(queue) ? queue : []).flatMap((item) => {
+    if (item?.method !== 'POST') return [];
+    const type = String(item.path || '').match(/^\/entities\/([^/]+)/i)?.[1]?.toLowerCase();
+    const target = type && Object.prototype.hasOwnProperty.call(entityCollections, type)
+      ? entityCollections[type]
+      : type;
+    if (target !== collection) return [];
+    try {
+      const id = JSON.parse(item.body)?.id;
+      return id ? [id] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function coalesceQueuedEntityMutation(existing, incoming) {
+  const preserveCreate = existing?.method === 'POST' && incoming.method === 'PUT';
+  return {
+    path: preserveCreate ? existing.path : incoming.path,
+    method: preserveCreate ? 'POST' : incoming.method,
+    body: incoming.body,
+    expectedUpdatedAt: preserveCreate ? null : incoming.expectedUpdatedAt || null,
+  };
 }
 
 /** Plain-language navigation. Order is the shop day: today, counter, floor, office. */
@@ -183,8 +221,9 @@ if (typeof globalThis !== 'undefined') {
     greetingForNow,
     localIsoDate,
     mergeRemoteCollection,
+    pendingCreateIdsForCollection,
+    coalesceQueuedEntityMutation,
     sidebarCatalog,
     visibleSidebar,
   };
 }
-

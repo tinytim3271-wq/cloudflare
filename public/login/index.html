@@ -26,6 +26,10 @@
     <script>
       const form = document.querySelector('#login-form');
       const errorEl = document.querySelector('#error');
+      const plan = new URLSearchParams(window.location.search).get('plan');
+      const returnTo = ['starter', 'shop', 'pro'].includes(plan)
+        ? `/app?plan=${encodeURIComponent(plan)}`
+        : '/';
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         errorEl.hidden = true;
@@ -37,7 +41,7 @@
             method: 'POST',
             credentials: 'include',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, returnTo: '/' }),
+            body: JSON.stringify({ email, returnTo }),
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(payload.message || 'Could not start sign-in');

@@ -47,7 +47,11 @@
           trialCopy.textContent = `${publicCopy[select.value] || publicCopy.shop}${rest}`;
         }
         if (foundingNames[plan] && invite) {
-          select.innerHTML = `<option value="${plan}" selected>${foundingNames[plan]}</option>`;
+          const option = document.createElement("option");
+          option.value = plan;
+          option.textContent = foundingNames[plan];
+          option.selected = true;
+          select.replaceChildren(option);
           trialCopy.textContent = "This invite locks the founding rate for as long as the subscription stays active. The 14-day trial still starts with a one-time email link. No card on this step.";
         } else if ([...select.options].some((option) => option.value === plan)) {
           select.value = plan;
@@ -82,5 +86,13 @@
         <a href="/pricing">Compare plans</a>
       </div>
     </main>
+    <script>
+      const plan = new URLSearchParams(window.location.search).get('plan');
+      if (['starter', 'shop', 'pro'].includes(plan)) {
+        const returnTo = `/app?plan=${encodeURIComponent(plan)}`;
+        document.querySelector('input[name="returnTo"]').value = returnTo;
+        document.querySelector('.auth-links a[href="/login"]').href = `/login?plan=${encodeURIComponent(plan)}`;
+      }
+    </script>
   </body>
 </html>

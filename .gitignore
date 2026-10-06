@@ -15,12 +15,10 @@ diagnostics/keys/local-capability-*.pem
 worker-configuration.d.ts
 .playwright-mcp/
 www/
-.vs/
-_deploy_stage/
-zip/
-cloudflare/**/*.pdb
 android/.settings/
 *.log
 .env
 .env.*
 !.env.example
+.tmp-*
+secon.code-workspace
