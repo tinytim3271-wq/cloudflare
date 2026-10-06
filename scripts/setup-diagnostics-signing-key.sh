@@ -64,6 +64,10 @@ if [ "$PRINT_SECRET" -eq 1 ]; then
   echo "$secret_value"
   echo "----- END -----"
 else
+  if ! wrangler whoami >/dev/null 2>&1; then
+    echo "warning: wrangler is not authenticated. Run 'npx wrangler login' or set" >&2
+    echo "         CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID before continuing." >&2
+  fi
   echo "Setting Worker secret $SECRET_NAME (value piped, never printed)..."
   printf '%s' "$secret_value" | wrangler secret put "$SECRET_NAME"
 fi
