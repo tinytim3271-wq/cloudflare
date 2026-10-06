@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEntityDeleteStatements, listChatMessagesForConversations, listEntities } from '../src/routes/entities.mjs';
-import { assertUploadContentType, assertUploadSize, handleFiles } from '../src/routes/files.mjs';
+import {
+  assertUploadContentType,
+  assertUploadSize,
+  handleFiles,
+  storeUploadedFile,
+} from '../src/routes/files.mjs';
 import { HttpError } from '../src/http.mjs';
 
 function mockDb() {
@@ -191,6 +196,28 @@ test('files route rejects keys outside the authenticated shop', async () => {
     () => handleFiles(request, { FILES: {} }, context, ['files', 'object']),
     (error) => error instanceof HttpError && error.status === 403,
   );
+});
+
+test('file storage buffers the capped stream into an R2-compatible body', async () => {
+  let stored;
+  const files = {
+    async put(key, body, metadata) {
+      stored = { key, body, metadata };
+    },
+  };
+  const metadata = { httpMetadata: { contentType: 'image/png' } };
+  const received = await storeUploadedFile(
+    files,
+    'shops/shop-1/signature/test',
+    streamFromChunks([new Uint8Array([1, 2]), new Uint8Array([3])]),
+    metadata,
+  );
+
+  assert.equal(received, 3);
+  assert.equal(stored.key, 'shops/shop-1/signature/test');
+  assert.ok(stored.body instanceof ArrayBuffer);
+  assert.deepEqual([...new Uint8Array(stored.body)], [1, 2, 3]);
+  assert.equal(stored.metadata, metadata);
 });
 
 test('files route rejects streamed uploads that exceed the 15 MB limit', async () => {
