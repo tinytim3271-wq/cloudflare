@@ -110,6 +110,16 @@ test('mergeRemoteCollection keeps only queued creates missing from remote data',
   );
 });
 
+test('mergeRemoteCollection keeps queued creates whose IDs overlap demo records', () => {
+  const local = [{ id: 'RO-1044', customer: 'Real customer' }];
+  const isSample = (type, record) => type === 'orders' && record.id === 'RO-1044';
+
+  assert.deepEqual(
+    mergeRemoteCollection('orders', [{ id: 'RO-2000' }], local, isSample, ['RO-1044']),
+    [{ id: 'RO-1044', customer: 'Real customer' }, { id: 'RO-2000' }],
+  );
+});
+
 test('pendingCreateIdsForCollection reads only matching queued POST records', () => {
   const queue = [
     { method: 'POST', path: '/entities/orders', body: '{"id":"RO-3001"}' },

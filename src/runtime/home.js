@@ -130,7 +130,6 @@ export function mergeRemoteCollection(key, remote, local, isSampleRecord, pendin
   const localOnly = current.filter((record) => (
     record?.id
     && !remoteIds.has(record.id)
-    && !(typeof isSampleRecord === 'function' && isSampleRecord(key, record))
     && pendingIds.has(record.id)
   ));
   return localOnly.length ? [...localOnly, ...remote] : remote;

@@ -352,6 +352,20 @@
     }
   });
 
+  // src/modules/ai-workflow.js
+  function applyAiWorkflowEstimate(order, estimate) {
+    order.estimate = estimate;
+    order.laborHours = estimate.lines.reduce((sum, line) => sum + line.hours, 0);
+    order.labor = estimate.lines.reduce((sum, line) => sum + line.labor, 0);
+    order.parts = estimate.lines.reduce((sum, line) => sum + line.parts, 0);
+    order.total = estimate.total;
+    return order;
+  }
+  var init_ai_workflow = __esm({
+    "src/modules/ai-workflow.js"() {
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
@@ -2501,10 +2515,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       const order = state.orders.find((item) => item.id === aiResult.orderId);
       if (!order) return;
       order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate };
-      order.laborHours = aiResult.estimate.lines.reduce((sum, line) => sum + line.hours, 0);
-      order.labor = aiResult.estimate.lines.reduce((sum, line) => sum + line.labor, 0);
-      order.parts = aiResult.estimate.lines.reduce((sum, line) => sum + line.parts, 0);
-      order.total = aiResult.estimate.total;
+      applyAiWorkflowEstimate(order, aiResult.estimate);
       order.notes = `${order.notes || ""}
 AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim();
       void updateOrderInApi(order).then((saved) => {
@@ -3707,6 +3718,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_html();
       init_detect();
       init_utils();
+      init_ai_workflow();
       init_mileage();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, pendingCreateIdsForCollection: pendingCreateIdsForCollection2, coalesceQueuedEntityMutation: coalesceQueuedEntityMutation2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
@@ -4544,7 +4556,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       return pendingCreates.length ? pendingCreates : remote;
     }
     const remoteIds = new Set(remote.map((record) => record?.id).filter(Boolean));
-    const localOnly = current.filter((record) => record?.id && !remoteIds.has(record.id) && !(typeof isSampleRecord === "function" && isSampleRecord(key, record)) && pendingIds.has(record.id));
+    const localOnly = current.filter((record) => record?.id && !remoteIds.has(record.id) && pendingIds.has(record.id));
     return localOnly.length ? [...localOnly, ...remote] : remote;
   }
   function pendingCreateIdsForCollection(collection, queue = [], entityCollections = {}) {
