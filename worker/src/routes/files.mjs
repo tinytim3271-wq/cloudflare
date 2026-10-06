@@ -32,7 +32,7 @@ export function assertUploadContentType(contentType) {
   return normalized;
 }
 
-function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES) {
+function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES, onBytes = () => {}) {
   if (!body) return body;
   const reader = body.getReader();
   let total = 0;
@@ -44,6 +44,7 @@ function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES) {
         return;
       }
       total += value.byteLength;
+      onBytes(total);
       if (total > maxBytes) {
         await reader.cancel().catch(() => {});
         controller.error(new UploadTooLargeError());
@@ -55,6 +56,24 @@ function createSizeLimitedBody(body, maxBytes = MAX_UPLOAD_BYTES) {
       await reader.cancel(reason);
     },
   });
+}
+
+export async function storeUploadedFile(files, key, body, metadata, maxBytes = MAX_UPLOAD_BYTES) {
+  let received = 0;
+  try {
+    await files.put(key, createSizeLimitedBody(body, maxBytes, (bytes) => {
+      received = bytes;
+    }), metadata);
+  } catch (error) {
+    if (error instanceof UploadTooLargeError) throw new HttpError(413, 'File exceeds 15 MB');
+    if (error instanceof HttpError) throw error;
+    const upstreamStatus = Number(error?.status);
+    const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599
+      ? upstreamStatus
+      : 503;
+    throw new HttpError(status, 'File storage is temporarily unavailable. Try again.');
+  }
+  return received;
 }
 
 export async function handleFiles(request, env, context, segments) {
@@ -77,15 +96,10 @@ export async function handleFiles(request, env, context, segments) {
   if (action === 'upload' && request.method === 'PUT') {
     const contentLength = Number(request.headers.get('Content-Length') || 0);
     if (contentLength > MAX_UPLOAD_BYTES) throw new HttpError(413, 'File exceeds 15 MB');
-    try {
-      await env.FILES.put(key, createSizeLimitedBody(request.body), {
-        httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-        customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
-      });
-    } catch (error) {
-      if (error instanceof UploadTooLargeError) throw new HttpError(413, 'File exceeds 15 MB');
-      throw error;
-    }
+    await storeUploadedFile(env.FILES, key, request.body, {
+      httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
+      customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+    });
     return new Response(null, { status: 204 });
   }
   if (action === 'presign-download' && request.method === 'GET') {
