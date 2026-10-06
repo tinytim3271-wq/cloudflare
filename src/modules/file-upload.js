@@ -9,6 +9,10 @@ async function uploadErrorMessage(response) {
   }
 }
 
+export function uploadFailureMessage(error, fallback) {
+  return String(error?.message || '').trim() || fallback;
+}
+
 export async function uploadFileToStorage(
   blob,
   kind,

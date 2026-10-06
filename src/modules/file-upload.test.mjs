@@ -1,7 +1,7 @@
 /* global Blob, Response */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { uploadFileToStorage } from './file-upload.js';
+import { uploadFailureMessage, uploadFileToStorage } from './file-upload.js';
 
 const blob = new Blob(['signature'], { type: 'image/png' });
 
@@ -48,5 +48,19 @@ test('upload includes the status when the failure body has no message', async ()
       fetchImpl: async () => new Response(null, { status: 413 }),
     }),
     { message: 'Upload to storage failed (413)' },
+  );
+});
+
+test('upload callers preserve detailed errors with a fallback for empty messages', () => {
+  assert.equal(
+    uploadFailureMessage(
+      new Error('File storage is temporarily unavailable. Try again.'),
+      'Could not upload the signature. Please try again.',
+    ),
+    'File storage is temporarily unavailable. Try again.',
+  );
+  assert.equal(
+    uploadFailureMessage(new Error(''), 'Could not upload the signature. Please try again.'),
+    'Could not upload the signature. Please try again.',
   );
 });
