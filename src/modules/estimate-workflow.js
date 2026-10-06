@@ -58,13 +58,57 @@ export function laborLinePrintRows(lines = [], technicians = []) {
     .filter(line => line.type === 'labor')
     .flatMap(line => {
       const technicianIds = normalizeTechnicianIds(line);
-      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: 'Unassigned' }];
-      return technicianIds.map(technicianId => ({
+      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: 'Unassigned', showAmount: true }];
+      return technicianIds.map((technicianId, technicianIndex) => ({
         line,
         technicianId,
         technicianName: names.get(technicianId) || 'Technician unavailable',
+        showAmount: technicianIndex === 0,
       }));
     });
+}
+
+export function assignedTechnicianIds(order = {}) {
+  return [...new Set((order.estimate?.lines || [])
+    .filter(line => line.type === 'labor' && line.approvalStatus !== 'declined')
+    .flatMap(normalizeTechnicianIds))];
+}
+
+export function isTechnicianAssigned(order = {}, user = {}) {
+  return assignedTechnicianIds(order).includes(String(user.id || ''))
+    || Boolean(user.techName && order.tech === user.techName);
+}
+
+export function assignedLaborHours(order = {}, technicianId) {
+  return roundMoney((order.estimate?.lines || [])
+    .filter(line => line.type === 'labor'
+      && line.approvalStatus !== 'declined'
+      && normalizeTechnicianIds(line).includes(String(technicianId || '')))
+    .reduce((sum, line) => sum + Math.max(0, Number(line.hours) || 0), 0));
+}
+
+export function orderWithTechnicianAssignments(order = {}, assignments = {}) {
+  return {
+    ...order,
+    estimate: {
+      ...(order.estimate || {}),
+      lines: (order.estimate?.lines || []).map(line => line.type === 'labor'
+        ? { ...line, technicianIds: normalizeTechnicianIds({ technicianIds: assignments[line.id] || [] }) }
+        : line),
+    },
+  };
+}
+
+export function estimateEditorLaborRate(line = {}, defaultRate = 0) {
+  return Math.max(0, Number(line.laborRate ?? defaultRate) || 0);
+}
+
+export function estimateEditorShopSupplies(fees = []) {
+  return fees.find(fee => /shop supplies/i.test(fee.description))?.amount ?? '';
+}
+
+export function estimateEditorPriceStatus(currentStatus, unitPrice) {
+  return Number(unitPrice) > 0 ? 'priced' : currentStatus || 'priced';
 }
 
 export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
@@ -99,7 +143,7 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
   };
 }
 
-function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+export function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
   const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
   let fees = estimate.fees || [];
   let totals = calculateEstimate(lines, taxRate, fees);
@@ -216,7 +260,7 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
 }
 
 export function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = new Date().toISOString()) {
-  const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
+  const recalculated = calculateShopTotals(estimate.lines || [], estimate);
   const hadApproval = Boolean(
     order.linesLockedAt
     || order.estimateApproval?.status === 'approved'
@@ -246,11 +290,15 @@ export function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt 
 
 export function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = new Date().toISOString()) {
   const source = order.estimate || {};
-  const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+  const estimate = calculateShopTotals(source.lines || [], source);
   return {
     ...invoice,
     amount: estimate.total,
+    grossSubtotal: estimate.grossSubtotal,
     subtotal: estimate.subtotal,
+    discountPercent: estimate.discountPercent,
+    discountAmount: estimate.discountAmount,
+    discountReason: estimate.discountReason,
     tax: estimate.tax,
     taxRate: estimate.taxRate,
     fees: estimate.fees,

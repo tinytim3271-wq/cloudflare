@@ -97,11 +97,12 @@ test('estimate and work-order tool creates a bounded review draft without persis
     requestedServices: ['Inspect noise'],
     parts: [{ description: 'Unpriced cover', quantity: 1, unitPrice: 0, priceStatus: 'pending' }],
     labor: [{ description: 'Inspection', hours: 1, source: 'Caller-provided time' }],
-  });
+  }, { laborRate: 175, taxRate: 6.5 });
   assert.equal(result.kind, 'estimate_work_order_draft');
   assert.equal(result.requiresUserReview, true);
   assert.equal(result.saved, false);
   assert.equal(result.draft.parts[0].priceStatus, 'pending');
+  assert.deepEqual(result.pricing, { laborRate: 175, taxRate: 6.5 });
 });
 
 test('grounding lookup is tenant-scoped and read-only', async () => {
@@ -221,6 +222,7 @@ test('Anthropic turn returns a reviewable estimate action from the preparation t
   assert.equal(result.actions.length, 1);
   assert.equal(result.actions[0].kind, 'estimate_work_order_draft');
   assert.equal(result.actions[0].saved, false);
+  assert.deepEqual(result.actions[0].pricing, { laborRate: 140, taxRate: 8.25 });
 });
 
 test('Deepgram transcription fails honestly without a configured key', async () => {

@@ -137,7 +137,7 @@ function cleanDraftText(value, max = 1000) {
   return String(value || '').trim().slice(0, max);
 }
 
-export function prepareEstimateWorkOrderDraft(input = {}) {
+export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP_PRICING) {
   const draft = {
     customer: {
       name: cleanDraftText(input.customer?.name, 160),
@@ -177,6 +177,10 @@ export function prepareEstimateWorkOrderDraft(input = {}) {
   return {
     kind: 'estimate_work_order_draft',
     draft,
+    pricing: {
+      laborRate: nonnegativeRate(pricing.laborRate, DEFAULT_SHOP_PRICING.laborRate),
+      taxRate: nonnegativeRate(pricing.taxRate, DEFAULT_SHOP_PRICING.taxRate),
+    },
     requiresUserReview: true,
     saved: false,
   };
@@ -366,7 +370,7 @@ export async function runAnthropicTurn(env, {
     const toolResults = [];
     for (const call of toolCalls) {
       const result = call.name === 'prepare_estimate_work_order'
-        ? prepareEstimateWorkOrderDraft(call.input)
+        ? prepareEstimateWorkOrderDraft(call.input, pricing)
         : await executeGroundingTool(env, shopId, call.name, call.input);
       if (result.kind === 'estimate_work_order_draft') actions.push(result);
       toolResults.push({
