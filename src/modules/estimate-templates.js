@@ -1,11 +1,10 @@
-import { calculateEstimate, normalizeEstimateLine, SHOP_ESTIMATE_RULES } from './estimate-workflow.js';
-
-export { SHOP_ESTIMATE_RULES };
+import { calculateEstimate, normalizeEstimateLine, SHOP_SUPPLIES_RULES } from './estimate-workflow.js';
 
 const money = value => Math.round((Number(value) || 0) * 100) / 100;
+const REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
 
 export function calculateShopEstimate(lines = [], {
-  taxRate = SHOP_ESTIMATE_RULES.taxRate,
+  taxRate = 0,
   discountPercent = 0,
   discountReason = '',
   shopSupplies,
@@ -15,11 +14,11 @@ export function calculateShopEstimate(lines = [], {
     .filter(line => line.type === 'labor' && line.approvalStatus !== 'declined')
     .reduce((sum, line) => sum + line.total, 0);
   const automaticSupplies = Math.min(
-    SHOP_ESTIMATE_RULES.shopSuppliesCap,
-    labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
+    SHOP_SUPPLIES_RULES.shopSuppliesCap,
+    labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100,
   );
   const supplies = labor > 0
-    ? money(Math.min(SHOP_ESTIMATE_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies)))
+    ? money(Math.min(SHOP_SUPPLIES_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies)))
     : 0;
   const base = calculateEstimate(
     normalizedLines,
@@ -109,12 +108,13 @@ const referenceLines = [
     description: 'Collision component replacement labor',
     notes: '5.3 hours from Open Labor Project estimates for this vehicle: fender 3.7, headlamp 0.9, and one fender liner 0.7. These are not ALLDATA or Mitchell times, are not copied from a labor guide, and are not expert-verified.',
     hours: 5.3,
-    laborRate: SHOP_ESTIMATE_RULES.laborRate,
+    laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
     laborSource: 'Open Labor Project estimate',
   },
 ];
 
 const referenceTotals = calculateShopEstimate(referenceLines, {
+  taxRate: REFERENCE_ESTIMATE_RULES.taxRate,
   discountPercent: 10,
   discountReason: 'Tech-student discount',
   shopSupplies: 20,
@@ -208,7 +208,7 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
   };
 }
 
-export function estimateFromAssistantDraft(action = {}) {
+export function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0 } = {}) {
   const draft = action.draft || action;
   const partLines = (draft.parts || []).map((part, index) => ({
     id: `assistant-part-${index + 1}`,
@@ -226,10 +226,11 @@ export function estimateFromAssistantDraft(action = {}) {
     description: String(labor.description || 'Labor'),
     notes: String(labor.notes || labor.source || ''),
     hours: Math.max(0, Number(labor.hours) || 0),
-    laborRate: SHOP_ESTIMATE_RULES.laborRate,
+    laborRate: Math.max(0, Number(laborRate) || 0),
     laborSource: String(labor.source || 'Customer conversation; verify before authorization'),
   }));
   const totals = calculateShopEstimate([...partLines, ...laborLines], {
+    taxRate,
     discountPercent: draft.discountPercent,
     discountReason: draft.discountReason,
   });
