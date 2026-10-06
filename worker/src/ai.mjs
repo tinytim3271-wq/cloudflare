@@ -103,7 +103,7 @@ const PREPARE_ESTIMATE_TOOL = {
             partNumber: { type: 'string' },
             priceStatus: { type: 'string', enum: ['priced', 'pending'] },
           },
-          required: ['description', 'quantity', 'unitPrice', 'priceStatus'],
+          required: ['description', 'quantity', 'unitPrice'],
           additionalProperties: false,
         },
       },
@@ -137,7 +137,7 @@ function cleanDraftText(value, max = 1000) {
   return String(value || '').trim().slice(0, max);
 }
 
-export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP_PRICING) {
+export function prepareEstimateWorkOrderDraft(input = {}) {
   const draft = {
     customer: {
       name: cleanDraftText(input.customer?.name, 160),
@@ -158,7 +158,7 @@ export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP
       quantity: Math.max(0, Number(part.quantity) || 0),
       unitPrice: Math.max(0, Number(part.unitPrice) || 0),
       partNumber: cleanDraftText(part.partNumber, 100),
-      priceStatus: part.priceStatus === 'priced' ? 'priced' : 'pending',
+      priceStatus: part.priceStatus === 'pending' ? 'pending' : 'priced',
     })).filter(part => part.description),
     labor: (input.labor || []).slice(0, 30).map(labor => ({
       description: cleanDraftText(labor.description, 300),
@@ -177,10 +177,6 @@ export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP
   return {
     kind: 'estimate_work_order_draft',
     draft,
-    pricing: {
-      laborRate: nonnegativeRate(pricing.laborRate, DEFAULT_SHOP_PRICING.laborRate),
-      taxRate: nonnegativeRate(pricing.taxRate, DEFAULT_SHOP_PRICING.taxRate),
-    },
     requiresUserReview: true,
     saved: false,
   };
@@ -370,7 +366,7 @@ export async function runAnthropicTurn(env, {
     const toolResults = [];
     for (const call of toolCalls) {
       const result = call.name === 'prepare_estimate_work_order'
-        ? prepareEstimateWorkOrderDraft(call.input, pricing)
+        ? prepareEstimateWorkOrderDraft(call.input)
         : await executeGroundingTool(env, shopId, call.name, call.input);
       if (result.kind === 'estimate_work_order_draft') actions.push(result);
       toolResults.push({

@@ -1948,10 +1948,6 @@
     }
     return order;
   }
-  function stopMediaCapture(recorder, stream) {
-    if (recorder?.state === "recording") recorder.stop();
-    stream?.getTracks?.().forEach((track) => track.stop());
-  }
   var init_ai_workflow = __esm({
     "src/modules/ai-workflow.js"() {
       init_mileage();
@@ -2471,41 +2467,13 @@
     ]));
     return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
       const technicianIds = normalizeTechnicianIds(line);
-      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: "Unassigned", showAmount: true }];
-      return technicianIds.map((technicianId, technicianIndex) => ({
+      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: "Unassigned" }];
+      return technicianIds.map((technicianId) => ({
         line,
         technicianId,
-        technicianName: names.get(technicianId) || "Technician unavailable",
-        showAmount: technicianIndex === 0
+        technicianName: names.get(technicianId) || "Technician unavailable"
       }));
     });
-  }
-  function assignedTechnicianIds(order = {}) {
-    return [...new Set((order.estimate?.lines || []).filter((line) => line.type === "labor" && line.approvalStatus !== "declined").flatMap(normalizeTechnicianIds))];
-  }
-  function isTechnicianAssigned(order = {}, user = {}) {
-    return assignedTechnicianIds(order).includes(String(user.id || "")) || Boolean(user.techName && order.tech === user.techName);
-  }
-  function assignedLaborHours(order = {}, technicianId) {
-    return roundMoney3((order.estimate?.lines || []).filter((line) => line.type === "labor" && line.approvalStatus !== "declined" && normalizeTechnicianIds(line).includes(String(technicianId || ""))).reduce((sum, line) => sum + Math.max(0, Number(line.hours) || 0), 0));
-  }
-  function orderWithTechnicianAssignments(order = {}, assignments = {}) {
-    return {
-      ...order,
-      estimate: {
-        ...order.estimate || {},
-        lines: (order.estimate?.lines || []).map((line) => line.type === "labor" ? { ...line, technicianIds: normalizeTechnicianIds({ technicianIds: assignments[line.id] || [] }) } : line)
-      }
-    };
-  }
-  function estimateEditorLaborRate(line = {}, defaultRate = 0) {
-    return Math.max(0, Number(line.laborRate ?? defaultRate) || 0);
-  }
-  function estimateEditorShopSupplies(fees = []) {
-    return fees.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "";
-  }
-  function estimateEditorPriceStatus(currentStatus, unitPrice) {
-    return Number(unitPrice) > 0 ? "priced" : currentStatus || "priced";
   }
   function calculateEstimate(lines = [], taxRate = 0, fees = []) {
     const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
@@ -2610,7 +2578,7 @@
     };
   }
   function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const recalculated = calculateShopTotals(estimate.lines || [], estimate);
+    const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
     const hadApproval = Boolean(
       order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status)
     );
@@ -2637,15 +2605,11 @@
   }
   function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const source = order.estimate || {};
-    const estimate = calculateShopTotals(source.lines || [], source);
+    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
     return {
       ...invoice,
       amount: estimate.total,
-      grossSubtotal: estimate.grossSubtotal,
       subtotal: estimate.subtotal,
-      discountPercent: estimate.discountPercent,
-      discountAmount: estimate.discountAmount,
-      discountReason: estimate.discountReason,
       tax: estimate.tax,
       taxRate: estimate.taxRate,
       fees: estimate.fees,
@@ -2712,8 +2676,9 @@
     const complaintParts = [
       `Claimant: ${customer.name || "Not provided"}.`,
       estimate.complaint,
-      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number ${insurance.claimNumber || "not yet assigned"}.` : "",
-      laborSource ? `Labor source: ${laborSource}` : ""
+      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number not yet assigned.` : "",
+      laborSource ? `Labor source: ${laborSource}` : "",
+      ...(estimate.shopNotes || []).map((note) => `Shop note: ${note}`)
     ].filter(Boolean);
     return {
       sourceEstimateNumber: estimate.number || "",
@@ -2733,14 +2698,11 @@
       }),
       exclusions: estimate.exclusions || [],
       insurance,
-      internalNotes: (estimate.shopNotes || []).map(String),
       plate: vehicle.plate || ""
     };
   }
-  function estimateFromAssistantDraft(action = {}, pricing = action.pricing || {}) {
+  function estimateFromAssistantDraft(action = {}) {
     const draft = action.draft || action;
-    const laborRate = Math.max(0, Number(pricing.laborRate ?? SHOP_ESTIMATE_RULES.laborRate) || 0);
-    const taxRate = Math.max(0, Number(pricing.taxRate ?? SHOP_ESTIMATE_RULES.taxRate) || 0);
     const partLines = (draft.parts || []).map((part, index) => ({
       id: `assistant-part-${index + 1}`,
       type: "part",
@@ -2749,7 +2711,7 @@
       quantity: Math.max(0, Number(part.quantity) || 0),
       unitPrice: Math.max(0, Number(part.unitPrice) || 0),
       partNumber: String(part.partNumber || ""),
-      priceStatus: part.priceStatus === "priced" || Number(part.unitPrice) > 0 ? "priced" : "pending"
+      priceStatus: part.priceStatus === "pending" ? "pending" : "priced"
     }));
     const laborLines = (draft.labor || []).map((labor, index) => ({
       id: `assistant-labor-${index + 1}`,
@@ -2757,11 +2719,10 @@
       description: String(labor.description || "Labor"),
       notes: String(labor.notes || labor.source || ""),
       hours: Math.max(0, Number(labor.hours) || 0),
-      laborRate,
+      laborRate: SHOP_ESTIMATE_RULES.laborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
     const totals = calculateShopEstimate([...partLines, ...laborLines], {
-      taxRate,
       discountPercent: draft.discountPercent,
       discountReason: draft.discountReason
     });
@@ -2787,13 +2748,6 @@
       lines: totals.lines,
       ...totals
     };
-  }
-  async function persistEstimateDraft(apiFetch2, record) {
-    const response = await apiFetch2("/entities/estimates", {
-      method: "POST",
-      body: JSON.stringify(record)
-    });
-    return response?.queued ? record : response || record;
   }
   var money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
   var init_estimate_templates = __esm({
@@ -2890,7 +2844,7 @@
         },
         vehicle: {
           description: "2016 Mercedes-Benz GLA250",
-          vin: "1HGCM82633A123456",
+          vin: "DEMO-VEHICLE-VIN",
           plate: "DEMO-01"
         },
         insurance: {
@@ -3159,9 +3113,9 @@
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = Math.max(0, Number(shopProfile().laborRate) || 0), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
-    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]), { taxRate: state.taxSettings.rate });
-    return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, taxRate: totals.taxRate, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
+    const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]));
+    return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
   function guideLocal(vehicle, repair) {
     return buildRepairGuide(vehicle, repair);
@@ -3799,7 +3753,7 @@
   }
   function visibleOrders() {
     const user = currentUser();
-    return user?.role === "technician" ? state.orders.filter((order) => isTechnicianAssigned(order, user)) : state.orders;
+    return user?.role === "technician" ? state.orders.filter((order) => order.tech === user.techName) : state.orders;
   }
   function weekPeriod(date = /* @__PURE__ */ new Date()) {
     const day = date.getDay(), monday = new Date(date);
@@ -3821,22 +3775,19 @@
     return state.users.find((user) => user.techName === name && user.active);
   }
   function syncPayroll(order) {
-    if (!["completed", "invoiced"].includes(order.status)) return;
-    const lineTechnicianIds = assignedTechnicianIds(order);
-    const employees2 = lineTechnicianIds.length ? lineTechnicianIds.map((id) => state.users.find((user) => user.id === id && user.active)).filter(Boolean) : [employeeByTech(order.tech)].filter(Boolean);
-    for (const employee of employees2) {
-      const hours = lineTechnicianIds.length ? assignedLaborHours(order, employee.id) : Number(order.laborHours ?? Number(order.labor || 0) / Math.max(1, Number(shopProfile().laborRate) || 1));
-      if (!hours) continue;
-      const period = weekPeriod();
-      const entry = state.payrollEntries.find((item) => item.workOrderId === order.id && item.employeeId === employee.id);
-      const line = { id: entry?.id || `${order.id}-${employee.id}`, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() };
-      if (entry) {
-        Object.assign(entry, line);
-        updatePayrollEntryInApi(entry);
-      } else {
-        state.payrollEntries.push(line);
-        pushPayrollEntryToApi(line);
-      }
+    if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return;
+    const employee = employeeByTech(order.tech);
+    if (!employee) return;
+    const hours = Number(order.laborHours ?? Number(order.labor || 0) / 165);
+    if (!hours) return;
+    const period = weekPeriod(), entry = state.payrollEntries.find((item) => item.workOrderId === order.id);
+    const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() };
+    if (entry) {
+      Object.assign(entry, line);
+      updatePayrollEntryInApi(entry);
+    } else {
+      state.payrollEntries.push(line);
+      pushPayrollEntryToApi(line);
     }
   }
   function syncAllPayroll() {
@@ -3883,8 +3834,8 @@
   }
   function startJobClock(workOrderId) {
     const order = state.orders.find((item) => item.id === workOrderId), user = currentUser();
-    if (!order || user.role !== "technician" || !isTechnicianAssigned(order, user)) {
-      toast("Only an assigned technician can clock this job");
+    if (!order || user.role !== "technician" || order.tech !== user.techName) {
+      toast("Only the assigned technician can clock this job");
       return;
     }
     if (openJobClock(workOrderId, user.id)) {
@@ -5009,9 +4960,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     });
   }
   function render() {
-    cleanupAssistantRecording();
-    cleanupAssistantRecording = () => {
-    };
     const root = document.querySelector("#root");
     if (!currentUser()) {
       root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen();
@@ -5362,9 +5310,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function closeModal() {
-    cleanupAssistantRecording();
-    cleanupAssistantRecording = () => {
-    };
     document.querySelector("#modal-root")?.remove();
   }
   function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) {
@@ -6728,7 +6673,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
     const billableLines = billableEstimateLines(estimate.lines);
     const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
-    const laborRows = technicianRows.map(({ line, technicianName: name, showAmount }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${showAmount ? Number(line.hours).toFixed(2) : "\u2014"}</td><td>${showAmount ? money2(line.laborRate) : "\u2014"}</td><td>${showAmount ? money2(line.total) : "Assigned above"}</td></tr>`).join("");
+    const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money2(line.laborRate)}</td><td>${money2(line.total)}</td></tr>`).join("");
     const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
     const win = window.open("", "_blank");
@@ -6822,19 +6767,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function addEstimateSourceControls(form) {
     const body = form.querySelector(".modal-body");
     if (!body || document.querySelector("#estimate-source-picker")) return;
-    form.elements.phone.closest("label")?.insertAdjacentHTML("afterend", `<label>Email<input name="email" type="email"/></label><label class="full">Customer address<input name="address"/></label>`);
-    form.elements.vin.closest("label")?.insertAdjacentHTML("afterend", `<label>License plate<input name="plate" maxlength="20"/></label>`);
-    form.elements.customerSelect.addEventListener("change", () => {
-      const customer = state.customers.find((item) => item.name === form.elements.customerSelect.value);
-      if (customer) {
-        form.elements.email.value = customer.email || "";
-        form.elements.address.value = customer.billingAddress || customer.address || "";
-      }
-    });
-    form.elements.vehicleSelect.addEventListener("change", () => {
-      const vehicle = state.vehicles.find((item) => item.id === form.elements.vehicleSelect.value);
-      form.elements.plate.value = vehicle?.plate || "";
-    });
     const options = availableEstimateSources().map((estimate) => `<option value="${escapeAttr(estimate.id)}">${escapeHtml(estimate.number || "Saved draft")} \xB7 ${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer || "Customer")}</option>`).join("");
     body.insertAdjacentHTML("afterbegin", `<section class="estimate-fill-panel"><div><div class="eyebrow">Optional estimate fill</div><h3>Start from a completed estimate</h3><p>A blank order stays blank. Choose an estimate and apply it only when it belongs to this customer.</p></div><div><select id="estimate-source-picker"><option value="">Select an estimate\u2026</option>${options}</select><button type="button" class="secondary" id="apply-estimate-source">${icon("clipboard-plus", 14)} Fill fields</button></div></section>`);
     const estimator = form.querySelector(".new-order-estimator");
@@ -6852,20 +6784,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     customerSelect.dispatchEvent(new Event("change"));
     if (!option) form.elements.customer.value = draft.customer;
     form.elements.phone.value = draft.phone || "";
-    form.elements.email.value = draft.email || "";
-    form.elements.address.value = draft.address || "";
     form.elements.vehicleSelect.value = "";
     form.elements.vehicle.value = draft.vehicle || "";
     form.elements.vehicle.readOnly = false;
     form.elements.vin.value = draft.vin || "";
-    form.elements.plate.value = draft.plate || "";
     form.elements.complaint.value = draft.complaint || "";
     form.elements.requestedServices.value = draft.requestedServices || "";
     const root = form.querySelector("#new-estimate-lines");
     root.dataset.sourceEstimateNumber = draft.sourceEstimateNumber || "";
     root.dataset.exclusions = JSON.stringify(draft.exclusions || []);
     root.dataset.insurance = JSON.stringify(draft.insurance || {});
-    root.dataset.internalNotes = JSON.stringify(draft.internalNotes || []);
     root.innerHTML = (draft.estimate?.lines || []).map((line, index) => estimateEditorLine(line, index)).join("");
     form.elements.shopSupplies.value = draft.estimate?.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "";
     form.elements.estimateDiscount.value = draft.estimate?.discountPercent || 0;
@@ -6886,10 +6814,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
   }
   async function saveAssistantDraft(action) {
-    const estimate = estimateFromAssistantDraft(action, action.pricing || {
-      laborRate: shopProfile().laborRate,
-      taxRate: state.taxSettings.rate
-    });
+    const estimate = estimateFromAssistantDraft(action);
     const number = `EST-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
     const record = {
       ...estimate,
@@ -6907,7 +6832,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       vin: estimate.vehicle.vin,
       plate: estimate.vehicle.plate
     };
-    state.estimates.push(await persistEstimateDraft(apiFetch, record));
+    state.estimates.push(record);
+    await pushEstimateToApi(record);
     save();
     closeModal();
     openNewWithDraft(workOrderDraftFromEstimate({
@@ -7062,7 +6988,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, cleanupAssistantRecording, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -7090,8 +7016,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       assistantConversation = [];
       assistantPaused = false;
       assistantSessionId = "";
-      cleanupAssistantRecording = () => {
-      };
       STORE = storageKeys.dispatch;
       seed = {
         route: "home",
@@ -7798,16 +7722,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
               customer = await saveCustomerRecord(null, {
                 name: customerName,
                 phone: String(data.phone || ""),
-                email: String(data.email || ""),
-                billingAddress: String(data.address || ""),
+                email: "",
+                billingAddress: "",
                 billingNotes: ""
-              });
-            } else if (data.email && data.email !== customer.email || data.address && data.address !== (customer.billingAddress || customer.address)) {
-              customer = await saveCustomerRecord(customer, {
-                ...customer,
-                phone: String(data.phone || customer.phone || ""),
-                email: String(data.email || customer.email || ""),
-                billingAddress: String(data.address || customer.billingAddress || customer.address || "")
               });
             }
             const estimate = readNewOrderEstimate();
@@ -7816,13 +7733,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
               id,
               customer: customer.name,
               phone: data.phone,
-              email: String(data.email || customer.email || ""),
-              address: String(data.address || customer.billingAddress || customer.address || ""),
               vehicle: data.vehicle,
               vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
-              plate: String(data.plate || "").trim().toUpperCase(),
               complaint: data.complaint,
-              internalNotes: estimate.internalNotes || [],
               status: data.status,
               priority: data.priority,
               tech: data.tech,
@@ -7932,7 +7845,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           }
         };
       };
-      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate ?? 165) }) {
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 165) }) {
         return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
       };
       readNewOrderEstimate = function() {
@@ -7958,7 +7871,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
           const generated = services.flatMap((service, index) => {
             const source = estimateLocal(vehicle, service).lines[0];
-            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate ?? 165) }, index);
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 165) }, index);
             const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
             return [labor, ...parts];
           });
@@ -7966,7 +7879,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           bindEstimateEditor(root);
           toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
         };
-        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate ?? 165) });
+        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate || 165) });
         document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
         bindEstimateEditor(root);
       };
@@ -7992,9 +7905,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
         const paidInvoice = invoice && invoicePaid(invoice) > 0;
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate ?? Number(shopProfile().laborRate ?? 165);
+        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${estimateEditorShopSupplies(estimate.fees)}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}" data-internal-notes="${escapeAttr(JSON.stringify(estimate.internalNotes || []))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money2(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -8066,11 +7979,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             row.dataset.assignmentLine,
             [...row.querySelectorAll(".line-technician:checked")].map((input) => input.value)
           ]));
-          const candidateOrder = orderWithTechnicianAssignments(order, Object.fromEntries(assignmentsByLine));
+          order.estimate.lines = order.estimate.lines.map((line) => line.type === "labor" ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] } : line);
           event.currentTarget.disabled = true;
           try {
-            const saved = !isOfflineDesktop() && !isLocalShell() ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(candidateOrder) }) : candidateOrder;
-            state.orders[state.orders.indexOf(order)] = saved?.queued ? candidateOrder : saved || candidateOrder;
+            const saved = !isOfflineDesktop() && !isLocalShell() ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) }) : order;
+            state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
             save();
             closeModal();
             toast(`${order.id} technician assignments saved`);
@@ -8167,11 +8080,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     <div class="form-grid">
       <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="job-inventory-field" ${part ? "" : "hidden"}>Part number<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}"/></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : estimateEditorLaborRate(item, shopProfile().laborRate)}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money2(item.total)}</b></div>
   </article>`;
@@ -8193,9 +8105,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             laborRate: type === "labor" ? unitPrice : 0,
             inventoryId: inventory?.id || null,
             inventorySku: inventory?.sku || "",
-            partNumber: type === "part" ? row.querySelector(".job-line-part-number")?.value.trim() || "" : "",
             committedQuantity: type === "part" && inventory ? quantity : 0,
-            priceStatus: type === "part" ? estimateEditorPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
+            priceStatus: row.dataset.priceStatus || "priced",
             laborSource: row.dataset.laborSource || "",
             technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
           }, index);
@@ -8211,7 +8122,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         estimate.sourceEstimateNumber = root.dataset.sourceEstimateNumber || "";
         estimate.exclusions = JSON.parse(root.dataset.exclusions || "[]");
         estimate.insurance = JSON.parse(root.dataset.insurance || "{}");
-        estimate.internalNotes = JSON.parse(root.dataset.internalNotes || "[]");
         return estimate;
       };
       refreshEstimateEditor = function(root) {
@@ -8301,15 +8211,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           }
         };
         document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel());
-        let recorder = null, stream = null, chunks = [], discardRecording = false;
-        cleanupAssistantRecording = () => {
-          discardRecording = true;
-          stopMediaCapture(recorder, stream);
-          chunks = [];
-        };
+        let recorder = null, stream = null, chunks = [];
         micButton?.addEventListener("click", async () => {
           if (recorder?.state === "recording") {
-            discardRecording = false;
             recorder.stop();
             return;
           }
@@ -8317,20 +8221,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             chunks = [];
-            discardRecording = false;
             recorder = new MediaRecorder(stream);
-            const mimeType = recorder.mimeType || "audio/webm";
             recorder.ondataavailable = (event) => {
               if (event.data.size) chunks.push(event.data);
             };
             recorder.onstop = async () => {
-              const shouldDiscard = discardRecording;
-              stopMediaCapture(null, stream);
-              if (shouldDiscard) return;
               micButton.disabled = true;
               micButton.querySelector("span").textContent = "Transcribing\u2026";
+              stream?.getTracks().forEach((track) => track.stop());
               try {
-                const blob = new Blob(chunks, { type: mimeType });
+                const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
                 const result = await apiFetch("/ai/transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
                 input.value = result.transcript;
                 form.requestSubmit();
@@ -8339,28 +8239,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
               } finally {
                 micButton.disabled = false;
                 micButton.querySelector("span").textContent = "Record";
-                recorder = null;
-                stream = null;
-                chunks = [];
-                cleanupAssistantRecording = () => {
-                };
               }
-            };
-            recorder.onerror = () => {
-              discardRecording = true;
-              stopMediaCapture(recorder, stream);
-              recorder = null;
-              stream = null;
-              chunks = [];
-              cleanupAssistantRecording = () => {
-              };
-              toast("Microphone recording stopped unexpectedly");
             };
             recorder.start();
             micButton.querySelector("span").textContent = "Stop & send";
             toast("Recording with Deepgram transcription");
           } catch {
-            stopMediaCapture(recorder, stream);
             toast("Microphone access was not granted");
           }
         });

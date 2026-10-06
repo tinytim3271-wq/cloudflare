@@ -15,8 +15,3 @@ export function applyAiWorkflowEstimate(order, estimate, { rate, taxRate } = {})
   }
   return order;
 }
-
-export function stopMediaCapture(recorder, stream) {
-  if (recorder?.state === 'recording') recorder.stop();
-  stream?.getTracks?.().forEach(track => track.stop());
-}
