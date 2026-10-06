@@ -10,6 +10,7 @@ import {
   laborLinePrintRows,
   normalizeEstimateLine,
   normalizeTechnicianIds,
+  orderHasTechnician,
   workOrderWithEditedEstimate,
 } from './estimate-workflow.js';
 
@@ -235,6 +236,22 @@ test('labor lines normalize none, one, or several technician ids as a unique lis
   );
 });
 
+test('technicians assigned on labor lines can access the work order', () => {
+  const order = {
+    tech: 'Legacy technician',
+    estimate: { lines: [
+      { type: 'labor', technicianIds: ['tech-1', 'tech-2'] },
+      { type: 'part', technicianIds: ['tech-3'] },
+    ] },
+  };
+
+  assert.equal(orderHasTechnician(order, { id: 'tech-1' }), true);
+  assert.equal(orderHasTechnician(order, { id: 'tech-2' }), true);
+  assert.equal(orderHasTechnician(order, { id: 'tech-3' }), false);
+  assert.equal(orderHasTechnician(order, { name: 'Legacy technician' }), true);
+  assert.equal(orderHasTechnician(order, { id: 'other' }), false);
+});
+
 test('printed job card expands each labor line to one row per technician', () => {
   const rows = laborLinePrintRows([
     { id: 'labor-a', type: 'labor', description: 'Replace fender', hours: 3.7, laborRate: 140, technicianIds: ['tech-1', 'tech-2', 'tech-3'] },
@@ -249,8 +266,10 @@ test('printed job card expands each labor line to one row per technician', () =>
   assert.equal(rows.length, 4);
   assert.deepEqual(rows.slice(0, 3).map(row => row.technicianName), ['Alex', 'Blair', 'Casey']);
   assert.deepEqual(rows.slice(0, 3).map(row => row.line.id), ['labor-a', 'labor-a', 'labor-a']);
+  assert.deepEqual(rows.slice(0, 3).map(row => row.lineTotal), [518, null, null]);
   assert.equal(rows[3].line.id, 'labor-b');
   assert.equal(rows[3].technicianName, 'Unassigned');
+  assert.equal(rows[3].lineTotal, 126);
 });
 
 test('labor technician sets survive estimate calculation and invoice creation', () => {
