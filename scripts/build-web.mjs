@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import * as esbuild from 'esbuild';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const watch = process.argv.includes('--watch');
+const vendorDirectory = join(root, 'assets', 'vendor');
+mkdirSync(vendorDirectory, { recursive: true });
+copyFileSync(
+  join(root, 'node_modules', 'dompurify', 'dist', 'purify.min.js'),
+  join(vendorDirectory, 'dompurify.min.js'),
+);
 
 /** @type {import('esbuild').BuildOptions} */
 const options = {
