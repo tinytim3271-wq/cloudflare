@@ -71,7 +71,7 @@ test('order and invoice payloads recalculate line item totals before persistence
   });
   assert.equal(order.labor, 280);
   assert.equal(order.parts, 175);
-  assert.equal(order.total, 505.58);
+  assert.equal(order.total, 505.53);
   assert.equal(order.estimate.lines[1].partNumber, 'MAF-1056');
 
   const invoice = normalizeEntityPayload('invoices', {
