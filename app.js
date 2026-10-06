@@ -1900,6 +1900,38 @@
     }
   });
 
+  // src/modules/file-upload.js
+  async function uploadErrorMessage(response) {
+    const fallback = `Upload to storage failed (${response.status})`;
+    const text = await response.text().catch(() => "");
+    if (!text) return fallback;
+    try {
+      return JSON.parse(text).message || fallback;
+    } catch {
+      return text.trim() || fallback;
+    }
+  }
+  function uploadFailureMessage(error, fallback) {
+    return String(error?.message || "").trim() || fallback;
+  }
+  async function uploadFileToStorage(blob, kind, contentType, { apiFetch: apiFetch2, fetchImpl = globalThis.fetch } = {}) {
+    const { uploadUrl, key } = await apiFetch2("/files/presign-upload", {
+      method: "POST",
+      body: JSON.stringify({ kind, contentType, contentLength: blob.size })
+    });
+    const response = await fetchImpl(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: blob
+    });
+    if (!response.ok) throw new Error(await uploadErrorMessage(response));
+    return key;
+  }
+  var init_file_upload = __esm({
+    "src/modules/file-upload.js"() {
+    }
+  });
+
   // src/modules/ai-workflow.js
   function applyAiWorkflowEstimate(order, estimate, { rate, taxRate } = {}) {
     order.estimate = estimate;
@@ -1919,35 +1951,6 @@
   var init_ai_workflow = __esm({
     "src/modules/ai-workflow.js"() {
       init_mileage();
-    }
-  });
-
-  // src/modules/file-upload.js
-  async function uploadErrorMessage(response) {
-    const fallback = `Upload to storage failed (${response.status})`;
-    const text = await response.text().catch(() => "");
-    if (!text) return fallback;
-    try {
-      return JSON.parse(text).message || fallback;
-    } catch {
-      return text.trim() || fallback;
-    }
-  }
-  async function uploadFileToStorage(blob, kind, contentType, { apiFetch: apiFetch2, fetchImpl = globalThis.fetch } = {}) {
-    const { uploadUrl, key } = await apiFetch2("/files/presign-upload", {
-      method: "POST",
-      body: JSON.stringify({ kind, contentType, contentLength: blob.size })
-    });
-    const response = await fetchImpl(uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": contentType },
-      body: blob
-    });
-    if (!response.ok) throw new Error(await uploadErrorMessage(response));
-    return key;
-  }
-  var init_file_upload = __esm({
-    "src/modules/file-upload.js"() {
     }
   });
 
@@ -2936,7 +2939,7 @@
         toast(`${estimate.number} approved and signed`);
         render();
       } catch (error) {
-        toast("Could not upload the signature. Please try again.");
+        toast(uploadFailureMessage(error, "Could not upload the signature. Please try again."));
         submitButton.disabled = false;
       }
     };
@@ -6382,9 +6385,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_repair_guide();
       init_shop_inspections();
       init_autozone_pro();
+      init_file_upload();
       init_ai_workflow();
       init_mileage();
-      init_file_upload();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
