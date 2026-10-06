@@ -15,7 +15,7 @@ export const WRITE_ROLES = {
   shopsettings: ['admin'],
   purchases: ['admin', 'office'],
   vendors: ['admin', 'office'],
-  services: ['admin', 'office', 'service_writer'],
+  services: ['owner', 'admin', 'office', 'service_writer'],
   inspectiontemplates: ['admin', 'office', 'service_writer'],
 };
 

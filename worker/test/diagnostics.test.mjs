@@ -17,6 +17,9 @@ test('procedure specs cover programming + flash', () => {
   assert.ok(procedureSpec('clear_dtcs'));
   assert.equal(procedureSpec('module_flash').klass, 'flash');
   assert.equal(procedureSpec('add_key').autoAuth, true);
+  assert.equal(procedureSpec('module_coding').klass, 'coding');
+  assert.equal(procedureSpec('bidirectional_control').klass, 'bidirectional');
+  assert.equal(procedureSpec('module_coding').autoAuth, true);
   assert.equal(procedureSpec('clear_dtcs').autoAuth, false);
   assert.equal(procedureSpec('nope'), null);
   assert.ok(PROGRAMMING_MODES.has('simulate') && PROGRAMMING_MODES.has('live'));

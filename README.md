@@ -1,8 +1,11 @@
 # MechPro Dispatch
 
+This repository, [`tinytim3271-wq/cloudflare`](https://github.com/tinytim3271-wq/cloudflare),
+is the canonical home for MechPro.
+
 MechPro is a local-first shop dispatch and work-order PWA with cloud
-synchronization on **Cloudflare** (Pages, Workers, D1, R2, Workers AI).
-The SaaS architecture is documented in
+synchronization on **Cloudflare** (Pages, Workers, D1, R2, Workers AI). The
+public SaaS architecture is documented in
 [`docs/cloudflare-saas-architecture.md`](docs/cloudflare-saas-architecture.md).
 The app supports a public customer-auth path using the `mechpro_session`
 HTTP-only cookie, with magic-link and Google sign-in endpoints at
@@ -90,6 +93,51 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 3. Deploy by target workflow (Pages/Worker/R2/Android/Windows).
 4. Run smoke checks (see `docs/OPERATIONS.md`) and verify `/api/healthz`.
 5. Publish/verify target artifacts (APK, Windows installer) when applicable.
+
+### Flash-drive demo (Windows 10/11 x64)
+
+The **Windows desktop release** workflow builds a separate `mechpro-usb-demo`
+artifact on pull requests, pushes to `main`, and manual runs. Main-branch pushes
+also attach `MechPro-Demo-USB-1.0.0.zip` (version follows `package.json`) to the
+[desktop release](https://github.com/tinytim3271-wq/cloudflare/releases/tag/desktop-v1.0.0).
+The normal installer and online ZIP remain unchanged.
+
+1. Download the demo ZIP and **extract the entire ZIP** into a folder on a
+   writable flash drive (not just the EXE).
+2. Run **MechPro Demo.exe** from that folder; no install, Node.js, or internet
+   connection is needed on the demo computer.
+3. Create a local sign-in with a demo email, name, and your own password. No
+   email is sent. Explore the existing sample shop records and local workflows.
+4. Close the app fully before safely ejecting the drive.
+
+The account, shop records, Chromium profile, and logs stay in **MechPro Demo
+Data**, beside the executable. Copy the entire folder to move/back up the demo.
+To reset, close the app and delete only that data folder. Use sample data only:
+shop records on the drive are not encrypted. A read-only drive fails explicitly
+rather than falling back to the computer's profile.
+
+The demo blocks network requests and does not support cloud sync, cloud AI,
+online payments/messaging, or live vehicle diagnostics. It includes no baked
+credentials, signing keys, or native J2534 host. Unsigned apps may be blocked by
+organization policy; consult your administrator rather than disabling security.
+
+Build locally with Node 24 and the existing locked dependencies:
+
+```bash
+npm ci
+npm run build:windows:demo
+```
+
+Output: `dist/windows-demo/MechPro-Demo-USB-<version>.zip`. The build uses a
+temporary offline/portable edition flag and restores the original edition even
+if packaging fails. The Windows workflow launches the extracted app, verifies
+drive-local storage, and repeats after moving the folder.
+
+Production remains deployed by `.github/workflows/cloudflare-pages.yml` after
+merge to `main` (or a manual main-branch run): D1 migrations, Worker, then Pages.
+Deployment requires configured Cloudflare credentials; the USB demo does not.
+R2 publishing additionally requires a valid token with bucket write access;
+GitHub Release downloads remain available if optional R2 publishing fails.
 
 ## Verification Steps
 

@@ -50,10 +50,16 @@
             location.assign(loginUrl);
             return;
           }
-          throw new Error(payload.message || 'Check your email for a sign-in link.');
+          errorEl.hidden = false;
+          errorEl.className = 'success';
+          errorEl.textContent = payload.message || 'Check your email for a sign-in link.';
+          button.disabled = false;
+          button.textContent = 'Send another link';
+          return;
         } catch (error) {
           const raw = String(error?.message || '');
           errorEl.hidden = false;
+          errorEl.className = 'error';
           errorEl.textContent = /failed to fetch|networkerror|load failed/i.test(raw)
             ? 'Could not reach MechPro sign-in. Use the latest Windows installer from Downloads, or open the site in a browser.'
             : (raw || 'Sign-in failed.');

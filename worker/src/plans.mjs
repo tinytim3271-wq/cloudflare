@@ -1,0 +1,121 @@
+/** Commercial catalog. Public prices stay off the founding invite. */
+
+export const PUBLIC_PLANS = [
+  {
+    id: 'solo',
+    name: 'Solo',
+    stripePriceId: 'price_solo',
+    monthlyPriceCents: 6900,
+    annualPriceCents: 6900 * 10,
+    aiPhoneMinutes: 200,
+    overageCents: 15,
+    diagnosticsMode: 'simulate',
+    maxLocations: 1,
+    audience: 'Mobile mechanic',
+  },
+  {
+    id: 'shop',
+    name: 'Shop',
+    stripePriceId: 'price_shop',
+    monthlyPriceCents: 13900,
+    annualPriceCents: 13900 * 10,
+    aiPhoneMinutes: 800,
+    overageCents: 12,
+    diagnosticsMode: 'simulate',
+    maxLocations: 1,
+    audience: '2–10 person shop',
+  },
+  {
+    id: 'shop_pro',
+    name: 'Shop Pro',
+    stripePriceId: 'price_shop_pro',
+    monthlyPriceCents: 27900,
+    annualPriceCents: 27900 * 10,
+    aiPhoneMinutes: 2500,
+    overageCents: 10,
+    diagnosticsMode: 'live',
+    maxLocations: 1,
+    audience: 'Programming shops',
+  },
+  {
+    id: 'enterprise',
+    name: 'Enterprise',
+    stripePriceId: 'price_enterprise',
+    monthlyPriceCents: 55900,
+    annualPriceCents: 55900 * 10,
+    aiPhoneMinutes: 10000,
+    overageCents: 8,
+    diagnosticsMode: 'live',
+    maxLocations: 25,
+    audience: 'Chains and fleets',
+  },
+];
+
+export const FOUNDING_PLANS = [
+  {
+    id: 'founding_solo',
+    name: 'Founding Solo',
+    stripePriceId: 'price_founding_solo',
+    monthlyPriceCents: 4900,
+    annualPriceCents: 4900 * 10,
+    aiPhoneMinutes: 200,
+    overageCents: 15,
+    diagnosticsMode: 'simulate',
+    publicPriceCents: 6900,
+  },
+  {
+    id: 'founding_shop',
+    name: 'Founding Shop',
+    stripePriceId: 'price_founding_shop',
+    monthlyPriceCents: 9900,
+    annualPriceCents: 9900 * 10,
+    aiPhoneMinutes: 800,
+    overageCents: 12,
+    diagnosticsMode: 'simulate',
+    publicPriceCents: 13900,
+  },
+  {
+    id: 'founding_pro',
+    name: 'Founding Pro',
+    stripePriceId: 'price_founding_pro',
+    monthlyPriceCents: 19900,
+    annualPriceCents: 19900 * 10,
+    aiPhoneMinutes: 2500,
+    overageCents: 10,
+    diagnosticsMode: 'live',
+    publicPriceCents: 27900,
+  },
+];
+
+export const LIVE_DIAGNOSTICS_PLANS = new Set(
+  [...PUBLIC_PLANS, ...FOUNDING_PLANS].filter(plan => plan.diagnosticsMode === 'live').map(plan => plan.id),
+);
+
+const PLACEHOLDER_PREFIXES = ['price_placeholder', 'price_starter', 'price_growth', 'price_solo', 'price_shop', 'price_enterprise', 'price_founding'];
+
+export function isPlaceholderPrice(priceId) {
+  const id = String(priceId || '');
+  return !id || PLACEHOLDER_PREFIXES.some(prefix => id.startsWith(prefix));
+}
+
+export function isFoundingPlan(planId) {
+  return FOUNDING_PLANS.some(plan => plan.id === planId);
+}
+
+export function isPublicPlan(planId) {
+  return PUBLIC_PLANS.some(plan => plan.id === planId);
+}
+
+export function claimDecision({ invite, counter, planId }) {
+  if (!isFoundingPlan(planId)) return { ok: false, status: 400, message: 'Choose a Founding Member plan.' };
+  if (!invite) return { ok: false, status: 404, message: 'This invite link is not valid.' };
+  if (invite.used_at) return { ok: false, status: 409, message: 'This invite was already used.' };
+  const claimed = Number(counter?.claimed || 0);
+  const cap = Number(counter?.cap || 50);
+  if (claimed >= cap) return { ok: false, status: 409, message: 'Founding Member spots are full.' };
+  return { ok: true, claimed: claimed + 1, cap, remaining: cap - claimed - 1 };
+}
+
+export function dollars(cents) {
+  return `$${Math.round(Number(cents) / 100)}`;
+}

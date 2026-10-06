@@ -30,6 +30,8 @@ public static class RpcDispatcher
                 "programRemote" => await ProgramKey("program_remote", request.Params, session),
                 "eraseKeys" => await ProgramKey("erase_keys", request.Params, session),
                 "flashModule" => await FlashModule(request.Params, session),
+                "codeModule" => await CodeModule(request.Params, session),
+                "bidirectionalControl" => await Bidirectional(request.Params, session),
                 "startLiveLog" => session.StartLiveLog(),
                 "stopLiveLog" => session.StopLiveLog(),
                 "pollLiveLog" => session.PollLiveLog(ParseSince(request.Params)),
@@ -48,25 +50,57 @@ public static class RpcDispatcher
     // hardware requires LIVE tokens (and a licensed AutoAuth security provider).
     static string ExpectedMode(DiagnosticSession session) => session.IsSimulator ? "simulate" : "live";
 
+    static async Task<CapabilityToken.Payload> VerifyForConnectedVehicle(
+        string? token,
+        string procedure,
+        DiagnosticSession session)
+    {
+        var vin = await session.ReadConnectedVinAsync();
+        return CapabilityToken.Verify(token, procedure, ExpectedMode(session), vin);
+    }
+
     static async Task<object> ClearDtcs(JsonElement? element, DiagnosticSession session)
     {
-        CapabilityToken.Verify(GetString(element, "authorizationToken"), "clear_dtcs", ExpectedMode(session));
+        await VerifyForConnectedVehicle(GetString(element, "authorizationToken"), "clear_dtcs", session);
         return await session.ClearDtcsAsync();
     }
 
     static async Task<object> ProgramKey(string procedure, JsonElement? element, DiagnosticSession session)
     {
-        var payload = CapabilityToken.Verify(GetString(element, "authorizationToken"), procedure, ExpectedMode(session));
+        var payload = await VerifyForConnectedVehicle(GetString(element, "authorizationToken"), procedure, session);
         return await session.ProgramKeyAsync(procedure, payload.Vin);
     }
 
     static async Task<object> FlashModule(JsonElement? element, DiagnosticSession session)
     {
-        var payload = CapabilityToken.Verify(GetString(element, "authorizationToken"), "module_flash", ExpectedMode(session));
+        var payload = await VerifyForConnectedVehicle(GetString(element, "authorizationToken"), "module_flash", session);
         var target = GetString(element, "target") ?? "0x7E1";
         var firmware = ReadFirmware(element);
         var version = GetFirmwareVersion(element) ?? $"live-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
         return await session.FlashModuleAsync(target, firmware, version, payload.Vin);
+    }
+
+    static async Task<object> CodeModule(JsonElement? element, DiagnosticSession session)
+    {
+        var payload = await VerifyForConnectedVehicle(GetString(element, "authorizationToken"), "module_coding", session);
+        var target = GetString(element, "target") ?? "0x7E0";
+        var didText = (GetString(element, "did") ?? "").Trim();
+        if (didText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) didText = didText[2..];
+        if (!ushort.TryParse(didText, System.Globalization.NumberStyles.HexNumber, null, out var did))
+            throw new InvalidOperationException("Coding identifier must be a 4-digit hex DID");
+        var dataText = (GetString(element, "data") ?? "").Replace(" ", "").Trim();
+        if (dataText.Length is < 2 or > 128 || dataText.Length % 2 != 0)
+            throw new InvalidOperationException("Coding data must be even-length hex, up to 64 bytes");
+        var data = Convert.FromHexString(dataText);
+        return await session.CodeModuleAsync(target, did, data, payload.Vin);
+    }
+
+    static async Task<object> Bidirectional(JsonElement? element, DiagnosticSession session)
+    {
+        var payload = await VerifyForConnectedVehicle(GetString(element, "authorizationToken"), "bidirectional_control", session);
+        var control = GetString(element, "control") ?? "";
+        var state = GetString(element, "state") ?? "on";
+        return await session.BidirectionalControlAsync(control, state, payload.Vin);
     }
 
     static byte[] ReadFirmware(JsonElement? element)

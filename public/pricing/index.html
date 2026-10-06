@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MechPro pricing</title>
-    <meta name="description" content="MechPro commercial plans: Starter $49, Shop $149, Pro $299, and Enterprise for multi-shop rollouts." />
+    <meta name="description" content="MechPro is $69, $139, $279, or $559 a month. Unlimited users. AI phone minutes included. Live OEM programming is on Shop Pro and Enterprise." />
+    <meta property="og:title" content="MechPro pricing" />
+    <meta property="og:description" content="Solo $69, Shop $139, Shop Pro $279, Enterprise $559. Unlimited users. Annual prepay is 2 months free." />
+    <meta property="og:image" content="/graphics/og-card.svg" />
     <link rel="icon" href="/mechpro-icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/fonts/fonts.css" />
     <link rel="stylesheet" href="/market.css" />
@@ -14,75 +17,114 @@
       <header class="site-header">
         <a class="brand" href="/features"><span class="brand-mark">M</span><span><strong>MECHPRO</strong><small>Shop operating system</small></span></a>
         <nav class="nav" aria-label="Product">
-          <a href="/features">Features</a>
+          <a href="/features">Product</a>
           <a href="/pricing" aria-current="page">Pricing</a>
           <a href="/downloads">Downloads</a>
           <a href="/login">Sign in</a>
-          <a class="btn primary" href="/signup">Start free trial</a>
+          <a class="btn primary" href="/signup">Start 14-day trial</a>
         </nav>
       </header>
       <section class="hero">
-        <p class="eyebrow">Commercial shop pricing</p>
-        <h1>Pick the plan that matches the roster.</h1>
-        <p class="lede">Start on the counter, move into a full shop stack when inventory and scheduling matter, then unlock diagnostics, AI, and payroll on Pro. Card data stays with the payment processor.</p>
+        <p class="eyebrow">Unlimited users. No per-seat fees.</p>
+        <h1>One login for the phone, the board, and the bay.</h1>
+        <p class="lede">Solo is for a mobile mechanic. Shop is the counter and the crew. Shop Pro adds live OEM programming. Enterprise is for more than one location. Annual prepay is 2 months free on any tier.</p>
       </section>
-      <section class="grid pricing-grid" aria-label="Plans">
+      <section class="grid plans" aria-label="Plans">
         <article class="card">
-          <h2>Starter</h2>
-          <div class="price">$49<span>/month</span></div>
-          <p>A single-location team that needs the board and the counter.</p>
+          <h2>Solo</h2>
+          <div class="price">$69<span>/month</span></div>
+          <p>A mobile mechanic who needs the board and the assistant.</p>
           <ul>
-            <li>2 users</li>
-            <li>1 location</li>
-            <li>Dispatch, work orders, customers, invoices</li>
-            <li>Core AI advisory estimates</li>
+            <li>Unlimited users</li>
+            <li>200 AI phone minutes</li>
+            <li>$0.15 per extra minute</li>
+            <li>Dispatch, estimates, invoices</li>
+            <li>Diagnostics simulator</li>
           </ul>
-          <a class="btn primary" href="/signup?plan=starter">Choose Starter</a>
+          <a class="btn primary" href="/signup?plan=solo">Start Solo</a>
         </article>
         <article class="card featured">
-          <p class="plan-badge">Most shops</p>
+          <p class="plan-flag">Most shops</p>
           <h2>Shop</h2>
-          <div class="price">$149<span>/month</span></div>
-          <p>The day-to-day operating system for a busy independent shop.</p>
+          <div class="price">$139<span>/month</span></div>
+          <p>A 2–10 person shop. This is the plan the public page is priced around.</p>
           <ul>
-            <li>10 users</li>
-            <li>Up to 3 locations</li>
-            <li>Scheduling, invoices, and inventory</li>
-            <li>Windows desktop and Android installs</li>
+            <li>Unlimited users</li>
+            <li>800 AI phone minutes</li>
+            <li>$0.12 per extra minute</li>
+            <li>Multi-tech dispatch and payroll planning</li>
+            <li>Diagnostics simulator</li>
           </ul>
-          <a class="btn primary" href="/signup?plan=shop">Choose Shop</a>
+          <a class="btn primary" href="/signup?plan=shop">Start Shop</a>
         </article>
         <article class="card">
-          <h2>Pro</h2>
-          <div class="price">$299<span>/month</span></div>
-          <p>Advanced shops that run diagnostics, AI workflows, and payroll planning.</p>
+          <h2>Shop Pro</h2>
+          <div class="price">$279<span>/month</span></div>
+          <p>Shops that program keys, immobilizers, and modules.</p>
           <ul>
-            <li>25 users</li>
-            <li>Up to 10 locations</li>
-            <li>Diagnostics, AI workbench, and payroll estimates</li>
-            <li>Inspections, reports, and priority support path</li>
+            <li>Unlimited users</li>
+            <li>2,500 AI phone minutes</li>
+            <li>$0.10 per extra minute</li>
+            <li>Live OEM programming</li>
+            <li>Per-shop AutoAuth login</li>
           </ul>
-          <a class="btn primary" href="/signup?plan=pro">Choose Pro</a>
+          <a class="btn primary" href="/signup?plan=shop_pro">Start Shop Pro</a>
         </article>
         <article class="card">
           <h2>Enterprise</h2>
-          <div class="price">Custom</div>
-          <p>Multi-shop groups that need onboarding, SSO, and custom limits.</p>
+          <div class="price">$559<span>/month</span></div>
+          <p>Chains and fleets with more than one location.</p>
           <ul>
-            <li>Custom user and location limits</li>
-            <li>Guided onboarding and data migration</li>
-            <li>SSO and priority support</li>
-            <li>Everything in Pro, sized to the group</li>
+            <li>Unlimited users</li>
+            <li>10,000 AI phone minutes</li>
+            <li>$0.08 per extra minute</li>
+            <li>Live OEM programming</li>
+            <li>Up to 25 locations</li>
           </ul>
-          <a class="btn secondary" href="/signup?plan=enterprise">Talk with us</a>
+          <a class="btn primary" href="/signup?plan=enterprise">Start Enterprise</a>
         </article>
       </section>
+      <section class="compare-wrap" aria-labelledby="compare-heading">
+        <h2 id="compare-heading">What the stack costs without MechPro</h2>
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Job</th>
+              <th scope="col">Typical stack</th>
+              <th scope="col">MechPro</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Shop software plus an AI phone</th>
+              <td>About $199 + $300 a month</td>
+              <td>Shop, $139 a month</td>
+            </tr>
+            <tr>
+              <th scope="row">That stack plus a programming tool</th>
+              <td>About $650 a month</td>
+              <td>Shop Pro, $279 a month</td>
+            </tr>
+            <tr>
+              <th scope="row">Users</th>
+              <td>Often billed per seat</td>
+              <td>Unlimited users</td>
+            </tr>
+            <tr>
+              <th scope="row">Annual prepay</th>
+              <td>Varies</td>
+              <td>2 months free</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
       <aside class="note">
-        Every paid plan starts with a free trial shop. Need a larger roster or a custom rollout? <a href="/signup?plan=enterprise">Start a trial and tell us the shop name</a>. Payroll calculations inside MechPro are estimates for shop planning. File payroll taxes with your payroll provider or accountant.
+        <p>The 14-day trial does not charge a card. AI phone minutes are the AgentPhone connection in shop settings: calls and texts are answered by the MechPro assistant. Extra minutes bill at the rate on the plan once metered billing is connected.</p>
+        <p>Live key, immobilizer, and module programming run only on Shop Pro and Enterprise, on a J2534 pass-thru, with that shop's own AutoAuth login. Solo and Shop stay on the diagnostics simulator. OEM seed and key data is never bundled. Payroll figures are planning estimates, not a filed return.</p>
       </aside>
       <footer class="site-footer">
         <span>MechPro</span>
-        <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+        <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/features">Product</a></span>
       </footer>
     </div>
   </body>

@@ -4,16 +4,15 @@
   "main": "worker/src/index.js",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
-  // Both hostnames are Workers custom domains. The Worker serves /api/*
-  // and proxies the shop app from Pages. This account token cannot edit DNS,
-  // and a Pages custom domain stays pending without a CNAME.
+  // The Worker serves /api/* and proxies the shop app from Pages.
   "workers_dev": false,
-  "routes": [
-    { "pattern": "yourcarguy806.com", "custom_domain": true },
-    { "pattern": "www.yourcarguy806.com", "custom_domain": true }
-  ],
   "vars": {
-    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    // Conversational AI remains disabled until provider secrets and billing rates are configured.
+    "AI_ENABLED": "0",
+    "ANTHROPIC_SONNET_MODEL": "claude-sonnet-5",
+    "ANTHROPIC_OPUS_MODEL": "claude-opus-5",
+    "DEEPGRAM_LISTEN_MODEL": "nova-3",
+    "DEEPGRAM_SPEAK_MODEL": "flux-kit-en",
     "ALLOWED_ORIGINS": "https://www.yourcarguy806.com,https://mechpro-dispatch.pages.dev",
     "PAGES_ORIGIN": "https://mechpro-dispatch.pages.dev",
     "AUTH_EMAIL_FROM": "noreply@yourcarguy806.com"
@@ -39,9 +38,28 @@
       "preview_bucket_name": "mechpro-files-preview"
     }
   ],
-  "ai": {
-    "binding": "AI"
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AI_CHAT_SESSIONS",
+        "class_name": "AiChatSession"
+      },
+      {
+        "name": "AI_VOICE_SESSIONS",
+        "class_name": "AiVoiceSession"
+      }
+    ]
   },
+  "migrations": [
+    {
+      "tag": "v1-ai-voice-sessions",
+      "new_sqlite_classes": ["AiVoiceSession"]
+    },
+    {
+      "tag": "v2-ai-chat-sessions",
+      "new_sqlite_classes": ["AiChatSession"]
+    }
+  ],
   "observability": {
     "enabled": true,
     "logs": {
