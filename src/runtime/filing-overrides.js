@@ -650,10 +650,10 @@ bindExpandedFeatures = function () {
       }
     };
   });
-  const taxForm = document.querySelector('#tax-report-form');
-  if (taxForm && !taxForm.dataset.filingBound) {
-    taxForm.dataset.filingBound = '1';
-    taxForm.addEventListener('submit', async event => {
+  const taxReportForm = document.querySelector('#tax-report-form');
+  if (taxReportForm && !taxReportForm.dataset.filingBound) {
+    taxReportForm.dataset.filingBound = '1';
+    taxReportForm.addEventListener('submit', async event => {
       event.preventDefault();
       event.stopImmediatePropagation();
       const data = Object.fromEntries(new FormData(event.target));
@@ -706,17 +706,12 @@ bindExpandedFeatures = function () {
   document.querySelectorAll('[data-print-w2]').forEach(button => {
     button.onclick = () => printEmployeeAnnualForm(button.dataset.printW2);
   });
-};
 
-/* Patch tax settings form fields when settings page renders — extend save handler */
-const bindFilingTaxSettingsCore = bindExpandedFeatures;
-bindExpandedFeatures = function () {
-  bindFilingTaxSettingsCore();
-  const taxForm = document.querySelector('#tax-settings-form');
-  if (taxForm && !taxForm.dataset.filingEnhanced) {
-    taxForm.dataset.filingEnhanced = '1';
-    const grid = taxForm.querySelector('.form-grid') || taxForm;
-    if (!taxForm.querySelector('[name=ein]')) {
+  const taxSettingsForm = document.querySelector('#tax-settings-form');
+  if (taxSettingsForm && !taxSettingsForm.dataset.filingEnhanced) {
+    taxSettingsForm.dataset.filingEnhanced = '1';
+    const grid = taxSettingsForm.querySelector('.form-grid') || taxSettingsForm;
+    if (!taxSettingsForm.querySelector('[name=ein]')) {
       grid.insertAdjacentHTML('beforeend', `
 <label>Federal EIN<input name="ein" value="${escapeHtml(state.taxSettings.ein || '')}" placeholder="XX-XXXXXXX"/></label>
 <label>TX taxpayer number<input name="texasTaxpayerNumber" value="${escapeHtml(state.taxSettings.texasTaxpayerNumber || '')}" placeholder="1-xxxxxxxxxx-x"/></label>
@@ -724,7 +719,7 @@ bindExpandedFeatures = function () {
 <label class="full">Local jurisdictions JSON<small>Array of {code,name,kind,rate,required} — city/transit/county/SPD</small>
 <textarea name="jurisdictionsJson" rows="4">${escapeHtml(JSON.stringify(state.taxSettings.jurisdictions || Filing.DEFAULT_TX_JURISDICTIONS, null, 0))}</textarea></label>`);
     }
-    taxForm.addEventListener('submit', async event => {
+    taxSettingsForm.addEventListener('submit', async event => {
       event.preventDefault();
       event.stopImmediatePropagation();
       const data = Object.fromEntries(new FormData(event.target));

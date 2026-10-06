@@ -22,9 +22,16 @@ test('FICA respects social security wage base remainder', () => {
   assert.equal(capped.socialSecurity, 0);
 });
 
-test('1099 skips employment tax withholding', () => {
-  const taxes = computePayPeriodTaxes({ taxStatus: '1099 Contractor', payFrequency: 'Weekly' }, 800);
+test('1099 skips employment tax withholding with full field shape', () => {
+  const taxes = computePayPeriodTaxes({ taxStatus: '1099 Contractor', payFrequency: 'Weekly', w4FilingStatus: 'single' }, 800);
   assert.equal(taxes.federal, 0);
   assert.equal(taxes.socialSecurity, 0);
   assert.equal(taxes.net, 800);
+  assert.equal(taxes.is1099, true);
+  assert.equal(taxes.pretax, 0);
+  assert.equal(taxes.socialSecurityWages, 0);
+  assert.equal(taxes.adjustedAnnualWage, 0);
+  assert.equal(taxes.filingStatus, 'single');
+  assert.equal(taxes.employerSocialSecurity, 0);
+  assert.equal(taxes.employerMedicare, 0);
 });
