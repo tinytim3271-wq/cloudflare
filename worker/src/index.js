@@ -2342,25 +2342,6 @@ async function proxyPagesRequest(request, env) {
   });
 }
 
-/** Kept so Worker deploys stay compatible with unused legacy Durable Object classes. */
-export class AiChatSession {
-  async fetch() {
-    return new Response(JSON.stringify({ message: 'Removed' }), {
-      status: 410,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
-
-export class AiVoiceSession {
-  async fetch() {
-    return new Response(JSON.stringify({ message: 'Removed' }), {
-      status: 410,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
-
 export default {
   async fetch(request, env, executionCtx) {
     const posthog = getPostHog(env);
