@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEntityDeleteStatements, listChatMessagesForConversations, listEntities } from '../src/routes/entities.mjs';
-import { assertUploadContentType, assertUploadSize, handleFiles } from '../src/routes/files.mjs';
+import {
+  assertUploadContentType,
+  assertUploadSize,
+  handleFiles,
+  storeUploadedFile,
+} from '../src/routes/files.mjs';
 import { HttpError } from '../src/http.mjs';
 
 function mockDb() {
@@ -193,6 +198,28 @@ test('files route rejects keys outside the authenticated shop', async () => {
   );
 });
 
+test('file storage buffers the capped stream into an R2-compatible body', async () => {
+  let stored;
+  const files = {
+    async put(key, body, metadata) {
+      stored = { key, body, metadata };
+    },
+  };
+  const metadata = { httpMetadata: { contentType: 'image/png' } };
+  const received = await storeUploadedFile(
+    files,
+    'shops/shop-1/signature/test',
+    streamFromChunks([new Uint8Array([1, 2]), new Uint8Array([3])]),
+    metadata,
+  );
+
+  assert.equal(received, 3);
+  assert.equal(stored.key, 'shops/shop-1/signature/test');
+  assert.ok(stored.body instanceof ArrayBuffer);
+  assert.deepEqual([...new Uint8Array(stored.body)], [1, 2, 3]);
+  assert.equal(stored.metadata, metadata);
+});
+
 test('files route rejects streamed uploads that exceed the 15 MB limit', async () => {
   const request = new Request('https://example.test/api/files/upload?key=shops/shop-1/file/upload.bin', {
     method: 'PUT',
@@ -218,7 +245,7 @@ test('files route rejects streamed uploads that exceed the 15 MB limit', async (
   );
 });
 
-test('files route preserves non-size upload storage failures', async () => {
+test('files route reports non-size upload storage failures as unavailable', async () => {
   const request = new Request('https://example.test/api/files/upload?key=shops/shop-1/file/upload.bin', {
     method: 'PUT',
     headers: {
@@ -229,16 +256,40 @@ test('files route preserves non-size upload storage failures', async () => {
     duplex: 'half',
   });
   const context = { shopId: 'shop-1', userId: 'u1' };
-  const expected = new Error('R2 unavailable');
   const env = {
     FILES: {
       async put() {
-        throw expected;
+        throw new Error('R2 unavailable');
       },
     },
   };
   await assert.rejects(
     () => handleFiles(request, env, context, ['files', 'upload']),
-    (error) => error === expected,
+    (error) => error instanceof HttpError
+      && error.status === 503
+      && error.message === 'File storage is temporarily unavailable. Try again.',
+  );
+});
+
+test('files route preserves an upstream storage status without misreporting a size error', async () => {
+  const request = new Request('https://example.test/api/files/upload?key=shops/shop-1/file/upload.bin', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/pdf', 'Content-Length': '1024' },
+    body: new Uint8Array(1024),
+    duplex: 'half',
+  });
+  const context = { shopId: 'shop-1', userId: 'u1' };
+  const env = {
+    FILES: {
+      async put() {
+        throw Object.assign(new Error('R2 rate limited'), { status: 429 });
+      },
+    },
+  };
+  await assert.rejects(
+    () => handleFiles(request, env, context, ['files', 'upload']),
+    (error) => error instanceof HttpError
+      && error.status === 429
+      && error.message === 'File storage is temporarily unavailable. Try again.',
   );
 });

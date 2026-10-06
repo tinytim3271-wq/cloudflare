@@ -41,6 +41,7 @@
     "test:html": "node --test src/shared/html.test.mjs",
     "test:chat": "node --test src/modules/chat/utils.test.mjs",
     "test:storage": "node --test src/modules/storage.test.mjs",
+    "test:upload": "node --test src/modules/file-upload.test.mjs",
     "test:desktop": "node --test desktop/start-url.test.js desktop/auth-deep-link.test.js desktop/diagnostics-secrets.test.js desktop/local-vault.test.js desktop/portable-data.test.js",
     "test:offline": "node --test src/modules/offline-desktop.test.mjs",
     "test:mutation": "node --test src/runtime/prepare-entity-mutation.test.mjs src/runtime/entity-persistence.test.mjs src/runtime/mutation-queue-store.test.mjs",
@@ -50,10 +51,11 @@
     "test:inspections": "node --test src/modules/shop-inspections.test.mjs",
     "test:autozone": "node --test src/modules/autozone-pro.test.mjs",
     "test:estimate": "node --test src/modules/estimate-workflow.test.mjs src/modules/estimate-templates.test.mjs",
+    "test:payments": "node --test src/modules/payments.test.mjs",
     "test:market": "node --test scripts/market-pages.test.mjs",
     "test:mileage": "node --test src/modules/mileage.test.mjs",
     "issue-invite": "node scripts/issue-founding-invite.mjs",
-    "test:modules": "npm run test:home && npm run test:mutation && npm run test:html && npm run test:chat && npm run test:storage && npm run test:desktop && npm run test:offline && npm run test:imports && npm run test:canned && npm run test:guides && npm run test:inspections && npm run test:autozone && npm run test:estimate && npm run test:market && node --test src/modules/ai-workflow.test.mjs && npm run test:mileage"
+    "test:modules": "npm run test:home && npm run test:mutation && npm run test:html && npm run test:chat && npm run test:storage && npm run test:upload && npm run test:desktop && npm run test:offline && npm run test:imports && npm run test:canned && npm run test:guides && npm run test:inspections && npm run test:autozone && npm run test:estimate && npm run test:payments && npm run test:market && node --test src/modules/ai-workflow.test.mjs && npm run test:mileage"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

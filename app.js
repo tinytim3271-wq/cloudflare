@@ -3880,17 +3880,57 @@
     }
   });
 
+  // src/modules/file-upload.js
+  async function uploadErrorMessage(response) {
+    const fallback = `Upload to storage failed (${response.status})`;
+    const text2 = await response.text().catch(() => "");
+    if (!text2) return fallback;
+    try {
+      return JSON.parse(text2).message || fallback;
+    } catch {
+      return text2.trim() || fallback;
+    }
+  }
+  function uploadFailureMessage(error, fallback) {
+    return String(error?.message || "").trim() || fallback;
+  }
+  async function uploadFileToStorage(blob, kind, contentType, { apiFetch: apiFetch2, fetchImpl = globalThis.fetch } = {}) {
+    const { uploadUrl, key } = await apiFetch2("/files/presign-upload", {
+      method: "POST",
+      body: JSON.stringify({ kind, contentType, contentLength: blob.size })
+    });
+    const response = await fetchImpl(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: blob
+    });
+    if (!response.ok) throw new Error(await uploadErrorMessage(response));
+    return key;
+  }
+  var init_file_upload = __esm({
+    "src/modules/file-upload.js"() {
+    }
+  });
+
   // src/modules/ai-workflow.js
-  function applyAiWorkflowEstimate(order, estimate) {
+  function applyAiWorkflowEstimate(order, estimate, { rate, taxRate } = {}) {
     order.estimate = estimate;
     order.laborHours = estimate.lines.reduce((sum, line) => sum + line.hours, 0);
     order.labor = estimate.lines.reduce((sum, line) => sum + line.labor, 0);
     order.parts = estimate.lines.reduce((sum, line) => sum + line.parts, 0);
     order.total = estimate.total;
+    if (Number(order.tripMilesOneWay) > 0) {
+      Object.assign(order, applyMileageToOrder(order, {
+        oneWayMiles: order.tripMilesOneWay,
+        rate,
+        taxRate
+      }));
+    }
     return order;
   }
   var init_ai_workflow = __esm({
     "src/modules/ai-workflow.js"() {
+      init_mileage();
     }
   });
 
@@ -4334,6 +4374,38 @@
     }
   });
 
+  // src/modules/payments.js
+  function paymentMatchesTarget(payment, targetType, targetId, linkedTargetId = "") {
+    if (!payment || payment.status !== "completed") return false;
+    if (targetType === "invoice") {
+      return payment.invoiceNumber === targetId || payment.targetType === "invoice" && payment.targetId === targetId || linkedTargetId && payment.workOrderId === linkedTargetId;
+    }
+    return payment.workOrderId === targetId || payment.targetType === "work_order" && payment.targetId === targetId || linkedTargetId && payment.invoiceNumber === linkedTargetId;
+  }
+  function paymentsForTarget(payments2, targetType, targetId, linkedTargetId = "") {
+    return (payments2 || []).filter((payment) => paymentMatchesTarget(payment, targetType, targetId, linkedTargetId)).sort((left, right) => String(right.receivedAt || "").localeCompare(String(left.receivedAt || "")));
+  }
+  function paymentSummary(total, payments2, {
+    targetType,
+    targetId,
+    linkedTargetId = "",
+    legacyPaid = false
+  } = {}) {
+    const history = paymentsForTarget(payments2, targetType, targetId, linkedTargetId);
+    const recordedPaid = roundMoney2(history.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+    const amount = roundMoney2(total);
+    const paid = legacyPaid && recordedPaid === 0 ? amount : Math.min(amount, recordedPaid);
+    const balance = roundMoney2(Math.max(0, amount - paid));
+    const status = balance === 0 && amount > 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
+    return { total: amount, paid, balance, status, history };
+  }
+  var roundMoney2;
+  var init_payments = __esm({
+    "src/modules/payments.js"() {
+      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+    }
+  });
+
   // src/modules/estimate-workflow.js
   function isDeclinedEstimateLine(line) {
     return line?.approvalStatus === "declined";
@@ -4351,7 +4423,7 @@
     const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : line.laborRate)) || 0);
     const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
     const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
-    const total = type === "labor" ? roundMoney2(hours * laborRate) : roundMoney2(quantity * unitPrice);
+    const total = type === "labor" ? roundMoney3(hours * laborRate) : roundMoney3(quantity * unitPrice);
     return {
       ...line,
       id: String(line.id || `line-${index + 1}`),
@@ -4389,24 +4461,24 @@
     const normalizedFees = fees.map((fee) => ({
       ...fee,
       description: String(fee.description || "Fee"),
-      amount: roundMoney2(Math.max(0, Number(fee.amount) || 0))
+      amount: roundMoney3(Math.max(0, Number(fee.amount) || 0))
     }));
-    const labor = roundMoney2(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
-    const parts = roundMoney2(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
-    const feeTotal = roundMoney2(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
-    const subtotal = roundMoney2(labor + parts + feeTotal);
+    const labor = roundMoney3(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney3(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney3(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const subtotal = roundMoney3(labor + parts + feeTotal);
     const safeTaxRate = Math.max(0, Number(taxRate) || 0);
-    const tax = roundMoney2(subtotal * safeTaxRate / 100);
+    const tax = roundMoney3(subtotal * safeTaxRate / 100);
     return {
       lines: normalizedLines,
       fees: normalizedFees,
       labor,
-      laborHours: roundMoney2(billableLines.reduce((sum, line) => sum + line.hours, 0)),
+      laborHours: roundMoney3(billableLines.reduce((sum, line) => sum + line.hours, 0)),
       parts,
       subtotal,
       taxRate: safeTaxRate,
       tax,
-      total: roundMoney2(subtotal + tax)
+      total: roundMoney3(subtotal + tax)
     };
   }
   function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
@@ -4415,7 +4487,7 @@
     let totals = calculateEstimate(lines, taxRate, fees);
     const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
     if (repriceSupplies && hasSuppliesFee) {
-      const supplies = totals.labor > 0 ? roundMoney2(Math.min(
+      const supplies = totals.labor > 0 ? roundMoney3(Math.min(
         SHOP_ESTIMATE_RULES.shopSuppliesCap,
         totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
       )) : 0;
@@ -4423,9 +4495,9 @@
       totals = calculateEstimate(lines, taxRate, fees);
     }
     const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
-    const discountAmount = roundMoney2(totals.subtotal * discountPercent / 100);
-    const subtotal = roundMoney2(totals.subtotal - discountAmount);
-    const tax = roundMoney2(subtotal * taxRate / 100);
+    const discountAmount = roundMoney3(totals.subtotal * discountPercent / 100);
+    const subtotal = roundMoney3(totals.subtotal - discountAmount);
+    const tax = roundMoney3(subtotal * taxRate / 100);
     return {
       ...totals,
       grossSubtotal: totals.subtotal,
@@ -4434,7 +4506,7 @@
       discountAmount,
       subtotal,
       tax,
-      total: roundMoney2(subtotal + tax)
+      total: roundMoney3(subtotal + tax)
     };
   }
   function approvedEstimate(estimate = {}, decisions = {}) {
@@ -4461,7 +4533,7 @@
     const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
     const due = new Date(issuedAt);
     due.setDate(due.getDate() + 14);
-    const amount = source.lines?.length ? estimate.total : roundMoney2(order.total ?? estimate.total);
+    const amount = source.lines?.length ? estimate.total : roundMoney3(order.total ?? estimate.total);
     return {
       id: number,
       number,
@@ -4527,10 +4599,10 @@
       revisedAt: editedAt
     };
   }
-  var roundMoney2, SHOP_ESTIMATE_RULES;
+  var roundMoney3, SHOP_ESTIMATE_RULES;
   var init_estimate_workflow = __esm({
     "src/modules/estimate-workflow.js"() {
-      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       SHOP_ESTIMATE_RULES = Object.freeze({
         laborRate: 140,
         taxRate: 8.25,
@@ -5116,10 +5188,7 @@
     return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   }
   async function uploadFileToR2(blob, kind, contentType) {
-    const { uploadUrl, key } = await apiFetch("/files/presign-upload", { method: "POST", body: JSON.stringify({ kind, contentType, contentLength: blob.size }) });
-    const response = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: blob });
-    if (!response.ok) throw new Error("Upload to storage failed");
-    return key;
+    return uploadFileToStorage(blob, kind, contentType, { apiFetch });
   }
   function initSignaturePad(estimate) {
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d"), position = (event) => {
@@ -5179,7 +5248,7 @@
         toast(`${estimate.number} approved and signed`);
         render();
       } catch (error) {
-        toast("Could not upload the signature. Please try again.");
+        toast(uploadFailureMessage(error, "Could not upload the signature. Please try again."));
         submitButton.disabled = false;
       }
     };
@@ -5340,8 +5409,10 @@
     writeMutationQueue(queue);
   }
   async function authorizedApiRequest(path, options = {}) {
-    if (!authSession()) throw new Error("Not signed in");
-    return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } });
+    const session = authSession();
+    if (!session) throw new Error("Not signed in");
+    const localHeaders = isLocalShell() ? { "X-MechPro-Dev-Email": session.claims.email || "admin@example.com", "X-MechPro-Dev-Name": session.claims.name || "Local Developer", "X-MechPro-Dev-Sub": session.claims.sub || "local-development" } : {};
+    return fetch(`${cloudflareConfig2.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...localHeaders, ...options.headers || {} } });
   }
   async function verifyDesktopEntitlement() {
     if (!isDesktopApp || isOfflineDesktop() || isLocalShell() && cloudflareConfig2.apiUrl.startsWith("/")) {
@@ -7091,7 +7162,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       const order = state.orders.find((item) => item.id === aiResult.orderId);
       if (!order) return;
       order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate };
-      applyAiWorkflowEstimate(order, aiResult.estimate);
+      applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate });
       order.notes = `${order.notes || ""}
 AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim();
       updateOrderInApi(order);
@@ -8768,6 +8839,97 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
     });
   }
+  function invoicePaymentSummary(invoice) {
+    return paymentSummary(invoice.amount, state.payments, {
+      targetType: "invoice",
+      targetId: invoice.number,
+      linkedTargetId: invoice.ro || "",
+      legacyPaid: invoice.status === "paid" && invoice.paymentStatus == null
+    });
+  }
+  function workOrderPaymentSummary(order) {
+    const invoice = state.invoices.find((item) => item.ro === order.id);
+    return paymentSummary(order.total, state.payments, {
+      targetType: "work_order",
+      targetId: order.id,
+      linkedTargetId: invoice?.number || ""
+    });
+  }
+  function paymentMethodLabel(method) {
+    return {
+      cash: "Cash",
+      card: "Card",
+      check: "Check",
+      bank: "Bank transfer",
+      processor: "Card processor",
+      other: "Other",
+      legacy: "Imported"
+    }[method] || method || "Other";
+  }
+  function paymentTimestamp(value2) {
+    const date = new Date(value2);
+    return Number.isNaN(date.valueOf()) ? String(value2 || "") : date.toLocaleString();
+  }
+  function paymentHistoryMarkup(summary) {
+    const rows = summary.history.map((payment) => `<tr><td>${escapeHtml(paymentTimestamp(payment.receivedAt))}</td><td>${escapeHtml(paymentMethodLabel(payment.method))}</td><td><b>${money2(Number(payment.amount || 0))}</b></td><td>${escapeHtml(payment.reference || payment.note || "\u2014")}<small>${payment.reference && payment.note ? escapeHtml(payment.note) : ""}</small></td></tr>`).join("");
+    return `<div class="payment-history"><div class="payment-history-head"><strong>Payment history</strong><span>${summary.history.length} payment${summary.history.length === 1 ? "" : "s"}</span></div>${rows ? `<table><thead><tr><th>Date / time</th><th>Method</th><th>Amount</th><th>Reference / notes</th></tr></thead><tbody>${rows}</tbody></table>` : `<p>No payments recorded yet.</p>`}</div>`;
+  }
+  function localDateTimeValue(date = /* @__PURE__ */ new Date()) {
+    const offset = date.getTimezoneOffset() * 6e4;
+    return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+  }
+  async function saveRecordedPayment(targetType, targetId, data, amount, button) {
+    button.disabled = true;
+    try {
+      const result = await apiFetch("/payments/record", {
+        method: "POST",
+        body: JSON.stringify({
+          targetType,
+          targetId,
+          amount,
+          method: data.method,
+          receivedAt: new Date(data.receivedAt).toISOString(),
+          reference: data.reference.trim(),
+          note: data.note.trim()
+        })
+      });
+      state.payments.push(result.payment);
+      if (result.invoice) {
+        const index = state.invoices.findIndex((invoice) => invoice.number === result.invoice.number);
+        if (index >= 0) state.invoices[index] = result.invoice;
+      }
+      if (result.workOrder) {
+        const index = state.orders.findIndex((order) => order.id === result.workOrder.id);
+        if (index >= 0) state.orders[index] = result.workOrder;
+      }
+      save();
+      closeModal();
+      toast(`${money2(amount)} payment recorded \xB7 ${money2(result.summary.balance)} remaining`);
+      render();
+      if (targetType === "work_order") openOrder(targetId);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message || "Payment could not be recorded");
+    }
+  }
+  function recordTargetPayment(targetType, targetId, initialMethod = "cash") {
+    const target = targetType === "invoice" ? state.invoices.find((invoice) => invoice.number === targetId) : state.orders.find((order) => order.id === targetId);
+    if (!target) return;
+    const summary = targetType === "invoice" ? invoicePaymentSummary(target) : workOrderPaymentSummary(target);
+    if (summary.balance <= 0) return toast("This record has no remaining balance");
+    const labelText = targetType === "invoice" ? target.number : target.id;
+    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(labelText)} \xB7 ${escapeHtml(target.customer || "")}</span><strong>${money2(summary.balance)} remaining</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${summary.balance}" step=".01" placeholder="Enter partial or full amount" required/></label><label>Method<select name="method">${["cash", "card", "check", "bank", "other"].map((method) => `<option value="${method}" ${method === initialMethod || initialMethod === "processor" && method === "card" ? "selected" : ""}>${paymentMethodLabel(method)}</option>`).join("")}</select></label><label>Received date / time<input name="receivedAt" type="datetime-local" value="${localDateTimeValue()}" required/></label><label>Reference / receipt<input name="reference" maxlength="160" placeholder="Receipt, check, or transaction ID"/></label><label class="full">Notes<textarea name="note" maxlength="500" placeholder="Optional payment note"></textarea></label></div><div class="payment-preview"><span>Paid to date <b>${money2(summary.paid)}</b></span><span>Current balance <b>${money2(summary.balance)}</b></span></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("check", 14)} Record payment</button></div></form>`);
+    document.querySelector("#payment-form").onsubmit = (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const amount = Number(data.amount);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > summary.balance) {
+        toast("Enter a payment amount within the remaining balance");
+        return;
+      }
+      void saveRecordedPayment(targetType, targetId, data, amount, event.target.querySelector("button[type=submit]"));
+    };
+  }
   async function startApp() {
     if (isOfflineDesktop()) {
       desktopEntitlementVerified = true;
@@ -8806,7 +8968,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_purify_es();
@@ -8820,12 +8982,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_repair_guide();
       init_shop_inspections();
       init_autozone_pro();
+      init_file_upload();
       init_ai_workflow();
       init_mileage();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
       init_mutation_queue_store();
+      init_payments();
       init_estimate_workflow();
       init_estimate_templates();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
@@ -10075,6 +10239,39 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           const estimate = estimateSourceById(button.dataset.fillEstimate);
           if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
         });
+      };
+      recordPayment = function(invoiceNumber, method = "cash") {
+        recordTargetPayment("invoice", invoiceNumber, method);
+      };
+      invoicePaid = function(invoice) {
+        return invoicePaymentSummary(invoice).paid;
+      };
+      invoiceBalance = function(invoice) {
+        return invoicePaymentSummary(invoice).balance;
+      };
+      paymentStatusLabelCore = label;
+      label = function(status) {
+        return { partial: "Partially paid", unpaid: "Unpaid" }[status] || paymentStatusLabelCore(status);
+      };
+      invoices = function() {
+        const q = query.toLowerCase();
+        const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
+          const summary = invoicePaymentSummary(invoice);
+          const bd = invoiceTaxBreakdown(invoice);
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${badge(summary.status)}</td><td><b>${money2(summary.total)}</b><small>Subtotal ${money2(bd.subtotal)} \xB7 Tax ${money2(bd.tax)}</small><small>Paid ${money2(summary.paid)} \xB7 Remaining ${money2(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+        }).join("");
+        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
+      };
+      openOrderPaymentCore = openOrder;
+      openOrder = function(id) {
+        openOrderPaymentCore(id);
+        const order = state.orders.find((item) => item.id === id);
+        const modalBody = document.querySelector(".job-card-modal .modal-body");
+        if (!order || !modalBody) return;
+        const summary = workOrderPaymentSummary(order);
+        modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money2(summary.total)}</b></div><div><span>Paid</span><b>${money2(summary.paid)}</b></div><div><span>Remaining</span><b>${money2(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
+        document.querySelector("#record-work-order-payment")?.addEventListener("click", () => recordTargetPayment("work_order", order.id));
+        lucide.createIcons();
       };
       if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {
         if (!authSession()) return;

@@ -24,6 +24,7 @@ import {
   verifyGoogleIdToken,
 } from './security.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
+import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
@@ -41,6 +42,7 @@ import {
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
+import { recordPayment as recordPaymentToTarget } from './payments.mjs';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -1314,25 +1316,10 @@ async function handleFiles(request, env, context, segments, analytics) {
     const maxBytes = 15 * 1024 * 1024;
     const declaredLength = Number(request.headers.get('Content-Length') || 0);
     if (declaredLength > maxBytes) throw new HttpError(413, 'File exceeds 15 MB');
-    let received = 0;
-    const limiter = new TransformStream({
-      transform(chunk, controller) {
-        received += chunk.byteLength;
-        if (received > maxBytes) {
-          controller.error(new Error('File exceeds 15 MB'));
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    });
-    try {
-      await env.FILES.put(key, request.body.pipeThrough(limiter), {
-        httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-        customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
-      });
-    } catch {
-      throw new HttpError(413, 'File exceeds 15 MB');
-    }
+    const received = await storeUploadedFile(env.FILES, key, request.body, {
+      httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
+      customMetadata: { shopId: context.shopId, uploadedBy: context.userId },
+    }, maxBytes);
     captureForContext(analytics, context, 'file_uploaded', {
       file_kind: key.split('/')[2],
       content_type: request.headers.get('Content-Type') || 'application/octet-stream',
@@ -1413,6 +1400,26 @@ async function handleCheckout(request, env, context, analytics) {
   return json({ url: result.url, sessionId: result.id });
 }
 
+async function handlePaymentRecord(request, env, context, analytics) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'office', 'service_writer']);
+  const result = await recordPaymentToTarget(env, context, await requestJson(request));
+  captureForContext(analytics, context, 'payment_recorded', {
+    amount: result.payment.amount,
+    method: result.payment.method,
+    target_type: result.payment.targetType,
+    payment_status: result.summary.status,
+  });
+  capturePostHogEvent(env, context, 'payment_completed', {
+    amount: result.payment.amount,
+    currency: 'usd',
+    processor: result.payment.method,
+    target_type: result.payment.targetType,
+    actor_role: context.role,
+  });
+  return json(result, 201);
+}
+
 async function handleStripeWebhook(request, env, shopId, analytics) {
   analytics.distinctId = `stripe-webhook:${shopId}`;
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
@@ -1440,10 +1447,15 @@ async function handleStripeWebhook(request, env, shopId, analytics) {
       const payments = await listPaymentsByInvoice(env, shopId, invoiceNumber);
       const amount = Number(session.amount_total || 0) / 100;
       if (amount <= 0 || amount > openInvoiceBalance(invoice.amount, payments)) throw new HttpError(400, 'Payment amount exceeds the invoice balance');
-      await putEntity(env, context, 'payments', id, {
-        invoiceNumber, amount, method: 'processor', processor: 'stripe',
-        processorTransactionId: id, status: 'completed', receivedAt: new Date().toISOString(),
-      });
+      await recordPaymentToTarget(env, context, {
+        targetType: 'invoice',
+        targetId: invoiceNumber,
+        amount,
+        method: 'processor',
+        receivedAt: new Date().toISOString(),
+        reference: id,
+        note: 'Stripe checkout payment',
+      }, { paymentId: id });
       capturePostHogEvent(env, { shopId, userId: `stripe-webhook:${shopId}` }, 'payment_completed', {
         amount,
         currency: 'usd',
@@ -2324,6 +2336,7 @@ async function route(request, env, analytics) {
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
+  if (path === '/payments/record') return handlePaymentRecord(request, env, context, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
