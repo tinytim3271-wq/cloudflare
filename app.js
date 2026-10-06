@@ -1901,16 +1901,24 @@
   });
 
   // src/modules/ai-workflow.js
-  function applyAiWorkflowEstimate(order, estimate) {
+  function applyAiWorkflowEstimate(order, estimate, { rate, taxRate } = {}) {
     order.estimate = estimate;
     order.laborHours = estimate.lines.reduce((sum, line) => sum + line.hours, 0);
     order.labor = estimate.lines.reduce((sum, line) => sum + line.labor, 0);
     order.parts = estimate.lines.reduce((sum, line) => sum + line.parts, 0);
     order.total = estimate.total;
+    if (Number(order.tripMilesOneWay) > 0) {
+      Object.assign(order, applyMileageToOrder(order, {
+        oneWayMiles: order.tripMilesOneWay,
+        rate,
+        taxRate
+      }));
+    }
     return order;
   }
   var init_ai_workflow = __esm({
     "src/modules/ai-workflow.js"() {
+      init_mileage();
     }
   });
 
@@ -4814,7 +4822,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       const order = state.orders.find((item) => item.id === aiResult.orderId);
       if (!order) return;
       order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate };
-      applyAiWorkflowEstimate(order, aiResult.estimate);
+      applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate });
       order.notes = `${order.notes || ""}
 AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim();
       updateOrderInApi(order);
