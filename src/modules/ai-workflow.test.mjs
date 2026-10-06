@@ -30,3 +30,32 @@ test('AI workflow estimate remains active after save for invoice generation', ()
   assert.equal(savedOrder.total, 194.85);
   assert.equal(invoiceEstimate.total, savedOrder.total);
 });
+
+test('AI workflow estimate reapplies stored mileage with shop settings', () => {
+  const order = {
+    tripMilesOneWay: 10,
+    mileageCharge: 13.6,
+    estimate: { lines: [], taxRate: 0 },
+    labor: 0,
+    parts: 0,
+    tax: 0,
+    total: 13.6,
+  };
+  const workflowEstimate = {
+    subtotal: 150,
+    tax: 0,
+    total: 150,
+    fees: [],
+    lines: [{ hours: 1, labor: 150, parts: 0, total: 150 }],
+  };
+
+  applyAiWorkflowEstimate(order, workflowEstimate, { rate: 0.68, taxRate: 8.25 });
+
+  assert.equal(order.tripMiles, 20);
+  assert.equal(order.mileageCharge, 13.6);
+  assert.equal(order.estimate.lines.filter((line) => line.kind === 'mileage').length, 1);
+  assert.equal(order.estimate.taxRate, 8.25);
+  assert.equal(order.tax, 13.5);
+  assert.equal(order.total, 177.1);
+  assert.equal(order.total, order.estimate.total);
+});
