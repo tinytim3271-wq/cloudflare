@@ -206,7 +206,6 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
     fees: estimate.fees,
     tax: estimate.tax,
     taxRate: Math.max(0, Number(estimate.taxRate) || 0),
-    fees: estimate.fees,
     status: 'sent',
     date: issuedAt.toISOString().slice(0, 10),
     due: due.toISOString().slice(0, 10),
