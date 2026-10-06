@@ -1686,14 +1686,8 @@ async function ensureSaasUser(env, email, name) {
         .bind(userId, now, normalized).run();
       existing.id = userId;
     }
-    // Claim stores the owner email on the invite; attach the founding plan on first sign-in.
-    if (existing.shop_id) {
-      await applyPendingFoundingClaim(env, {
-        email: normalized,
-        shopId: existing.shop_id,
-        ownerName: existing.name || name,
-      });
-    }
+    // Do not attach founding plans to existing shops on login. Claim emails are
+    // unverified, so applying here would let a stolen invite rewrite a live plan.
     return existing;
   }
   const userId = crypto.randomUUID();
@@ -2242,6 +2236,14 @@ async function handleFounding(request, env) {
     const planId = String(body.planId || 'founding_shop').trim();
     const email = String(body.email || '').trim().toLowerCase();
     if (!email || !email.includes('@')) throw new HttpError(400, 'A work email is required');
+    // Claim emails are not verified yet. Refuse addresses that already own a shop
+    // so a stolen invite cannot be parked on a victim's email for later overwrite.
+    const existingOwner = await env.DB.prepare(
+      'SELECT shop_id FROM users WHERE email = ? COLLATE NOCASE LIMIT 1',
+    ).bind(email).first();
+    if (existingOwner?.shop_id) {
+      throw new HttpError(409, 'This email already belongs to a shop. Founding invites are for new signups.');
+    }
     const invite = token
       ? await env.DB.prepare('SELECT token, used_at FROM founding_invites WHERE token = ?').bind(token).first()
       : null;
