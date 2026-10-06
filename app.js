@@ -1922,6 +1922,35 @@
     }
   });
 
+  // src/modules/file-upload.js
+  async function uploadErrorMessage(response) {
+    const fallback = `Upload to storage failed (${response.status})`;
+    const text = await response.text().catch(() => "");
+    if (!text) return fallback;
+    try {
+      return JSON.parse(text).message || fallback;
+    } catch {
+      return text.trim() || fallback;
+    }
+  }
+  async function uploadFileToStorage(blob, kind, contentType, { apiFetch: apiFetch2, fetchImpl = globalThis.fetch } = {}) {
+    const { uploadUrl, key } = await apiFetch2("/files/presign-upload", {
+      method: "POST",
+      body: JSON.stringify({ kind, contentType, contentLength: blob.size })
+    });
+    const response = await fetchImpl(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: blob
+    });
+    if (!response.ok) throw new Error(await uploadErrorMessage(response));
+    return key;
+  }
+  var init_file_upload = __esm({
+    "src/modules/file-upload.js"() {
+    }
+  });
+
   // src/modules/offline-desktop.js
   function escapeText(value2) {
     return String(value2 || "").replace(/[&<>"']/g, (char) => ({
@@ -2847,10 +2876,7 @@
     return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   }
   async function uploadFileToR2(blob, kind, contentType) {
-    const { uploadUrl, key } = await apiFetch("/files/presign-upload", { method: "POST", body: JSON.stringify({ kind, contentType, contentLength: blob.size }) });
-    const response = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: blob });
-    if (!response.ok) throw new Error("Upload to storage failed");
-    return key;
+    return uploadFileToStorage(blob, kind, contentType, { apiFetch });
   }
   function initSignaturePad(estimate) {
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d"), position = (event) => {
@@ -6358,6 +6384,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       init_autozone_pro();
       init_ai_workflow();
       init_mileage();
+      init_file_upload();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
