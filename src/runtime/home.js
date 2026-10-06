@@ -8,7 +8,7 @@ import { escapeAttr, escapeHtml } from '../shared/html.js';
 
 export { escapeAttr, escapeHtml };
 
-const CLOSED = new Set(['completed', 'invoiced']);
+const CLOSED = new Set(['completed', 'invoiced', 'declined', 'archived']);
 
 export function emptyState(message) {
   return `<div class="empty-state"><h2>${escapeHtml(message)}</h2></div>`;

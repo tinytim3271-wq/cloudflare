@@ -1305,9 +1305,9 @@ async function handleFiles(request, env, context, segments, analytics) {
     if (!Number.isFinite(contentLength) || contentLength <= 0 || contentLength > 15 * 1024 * 1024) throw new HttpError(400, 'File size must be between 1 byte and 15 MB');
     if (!['image/png', 'image/jpeg', 'image/webp', 'application/pdf'].includes(contentType)) throw new HttpError(400, 'Unsupported file type');
     const key = `shops/${context.shopId}/${kind}/${crypto.randomUUID()}`;
-    const uploadUrl = new URL('/api/files/upload', request.url);
-    uploadUrl.searchParams.set('key', key);
-    return json({ uploadUrl: uploadUrl.href, key, expiresIn: 300 });
+    // Return a same-origin relative URL so browser/desktop sessions keep Access cookies.
+    const uploadUrl = `/api/files/upload?key=${encodeURIComponent(key)}`;
+    return json({ uploadUrl, key, expiresIn: 300 });
   }
   const key = new URL(request.url).searchParams.get('key') || (action === 'object' ? '' : decodeURIComponent(segments.slice(1).join('/')));
   if (!key || !key.startsWith(`shops/${context.shopId}/`)) throw new HttpError(403, 'File key is outside this shop');

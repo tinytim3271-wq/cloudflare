@@ -86,9 +86,9 @@ export async function handleFiles(request, env, context, segments) {
     const contentType = assertUploadContentType(body.contentType);
     assertUploadSize(body.contentLength);
     const key = `shops/${context.shopId}/${kind}/${crypto.randomUUID()}`;
-    const uploadUrl = new URL('/api/files/upload', request.url);
-    uploadUrl.searchParams.set('key', key);
-    return json({ uploadUrl: uploadUrl.href, key, expiresIn: 300 });
+    // Same-origin relative URL keeps Access/session cookies on the upload PUT.
+    const uploadUrl = `/api/files/upload?key=${encodeURIComponent(key)}`;
+    return json({ uploadUrl, key, expiresIn: 300 });
   }
   const key = new URL(request.url).searchParams.get('key')
     || (action === 'object' ? '' : decodeURIComponent(segments.slice(1).join('/')));

@@ -1,5 +1,3 @@
-import { billableEstimateLines, calculateEstimate, normalizeEstimateLine } from '../../src/modules/estimate-workflow.js';
-
 export const ENTITY_TYPES = new Set([
   'customers', 'vehicles', 'orders', 'invoices', 'expenses', 'estimates', 'payments',
   'employees', 'shiftentries', 'jobclockentries', 'payrollentries', 'conversations',
@@ -17,7 +15,7 @@ export const WRITE_ROLES = {
   shopsettings: ['admin'],
   purchases: ['admin', 'office'],
   vendors: ['admin', 'office'],
-  services: ['owner', 'admin', 'office', 'service_writer'],
+  services: ['admin', 'office', 'service_writer'],
   inspectiontemplates: ['admin', 'office', 'service_writer'],
 };
 
@@ -30,21 +28,6 @@ export function normalizeEntityType(value) {
 
 export function normalizeEntityPayload(sourceType, payload) {
   const type = String(sourceType || '').trim().toLowerCase();
-  if (type === 'orders' && Array.isArray(payload.estimate?.lines)) {
-    const estimate = calculateEstimate(payload.estimate.lines, payload.estimate.taxRate, payload.estimate.fees || []);
-    return {
-      ...payload,
-      estimate: {
-        ...payload.estimate,
-        ...estimate,
-      },
-      labor: estimate.labor,
-      laborHours: estimate.laborHours,
-      parts: estimate.parts,
-      tax: estimate.tax,
-      total: estimate.total,
-    };
-  }
   if (type === 'customers' && ('address' in payload || 'created_at' in payload)) {
     return {
       ...payload,
@@ -81,19 +64,11 @@ export function normalizeEntityPayload(sourceType, payload) {
     };
   }
   if (type === 'invoices') {
-    const estimate = Array.isArray(payload.lines) && payload.lines.length
-      ? calculateEstimate(payload.lines, payload.taxRate, payload.fees || [])
-      : null;
     return {
       ...payload,
       customerId: payload.customerId ?? payload.customer_id,
       bookingId: payload.bookingId ?? payload.booking_id,
-      amount: estimate?.total ?? payload.amount ?? payload.total_amount,
-      subtotal: estimate?.subtotal ?? payload.subtotal,
-      tax: estimate?.tax ?? payload.tax,
-      taxRate: estimate?.taxRate ?? payload.taxRate,
-      fees: estimate?.fees ?? payload.fees,
-      lines: estimate ? billableEstimateLines(estimate.lines).map(normalizeEstimateLine) : payload.lines,
+      amount: payload.amount ?? payload.total_amount,
       paymentMethod: payload.paymentMethod ?? payload.payment_method,
       createdAt: payload.createdAt ?? payload.created_at,
       updatedAt: payload.updatedAt ?? payload.updated_at,
@@ -123,7 +98,7 @@ export function canWriteEntity(type, role) {
 export function redactEmployee(record, role) {
   if (['admin', 'office'].includes(role)) return record;
   const copy = { ...record };
-  ['payRate', 'payFrequency', 'employmentType', 'address', 'emergencyContact', 'taxStatus', 'phone']
+  ['payRate', 'payFrequency', 'employmentType', 'address', 'emergencyContact', 'taxStatus', 'phone', 'federalWithholdingRate', 'stateWithholdingRate']
     .forEach(field => delete copy[field]);
   return copy;
 }
@@ -161,19 +136,26 @@ export function buildTaxReport(payments, invoices, fallbackRate, from, to) {
       const invoice = invoices.find(item => item.number === payment.invoiceNumber);
       const breakdown = invoiceTaxBreakdown(invoice, fallbackRate);
       const ratio = invoice ? Number(payment.amount) / (Number(invoice.amount) || Number(payment.amount)) : 0;
+      const gross = Number(payment.amount);
+      const taxable = Math.round(breakdown.subtotal * ratio * 100) / 100;
+      const tax = Math.round(breakdown.tax * ratio * 100) / 100;
+      const nontaxable = Math.max(0, Math.round((gross - taxable - tax) * 100) / 100);
       return {
         date: payment.receivedAt,
         invoiceNumber: payment.invoiceNumber,
         customer: payment.customer,
-        gross: Number(payment.amount),
-        taxable: Math.round(breakdown.subtotal * ratio * 100) / 100,
-        tax: Math.round(breakdown.tax * ratio * 100) / 100,
+        gross,
+        taxable,
+        nontaxable,
+        tax,
+        taxRate: breakdown.taxRate ?? fallbackRate,
       };
     }).sort((left, right) => String(left.date).localeCompare(String(right.date)));
   const totals = rows.reduce((sum, row) => ({
     gross: Math.round((sum.gross + row.gross) * 100) / 100,
     taxable: Math.round((sum.taxable + row.taxable) * 100) / 100,
+    nontaxable: Math.round((sum.nontaxable + row.nontaxable) * 100) / 100,
     tax: Math.round((sum.tax + row.tax) * 100) / 100,
-  }), { gross: 0, taxable: 0, tax: 0 });
+  }), { gross: 0, taxable: 0, nontaxable: 0, tax: 0 });
   return { rows, totals };
 }
