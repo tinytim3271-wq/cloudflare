@@ -47,7 +47,11 @@
           trialCopy.textContent = `${publicCopy[select.value] || publicCopy.shop}${rest}`;
         }
         if (foundingNames[plan] && invite) {
-          select.innerHTML = `<option value="${plan}" selected>${foundingNames[plan]}</option>`;
+          const option = document.createElement("option");
+          option.value = plan;
+          option.textContent = foundingNames[plan];
+          option.selected = true;
+          select.replaceChildren(option);
           trialCopy.textContent = "This invite locks the founding rate for as long as the subscription stays active. The 14-day trial still starts with a one-time email link. No card on this step.";
         } else if ([...select.options].some((option) => option.value === plan)) {
           select.value = plan;
