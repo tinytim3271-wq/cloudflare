@@ -2508,8 +2508,8 @@
     const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
     if (repriceSupplies && hasSuppliesFee) {
       const supplies = totals.labor > 0 ? roundMoney3(Math.min(
-        SHOP_ESTIMATE_RULES.shopSuppliesCap,
-        totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
+        SHOP_SUPPLIES_RULES.shopSuppliesCap,
+        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
       )) : 0;
       fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
       totals = calculateEstimate(lines, taxRate, fees);
@@ -2619,13 +2619,11 @@
       revisedAt: editedAt
     };
   }
-  var roundMoney3, SHOP_ESTIMATE_RULES;
+  var roundMoney3, SHOP_SUPPLIES_RULES;
   var init_estimate_workflow = __esm({
     "src/modules/estimate-workflow.js"() {
       roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
-      SHOP_ESTIMATE_RULES = Object.freeze({
-        laborRate: 140,
-        taxRate: 8.25,
+      SHOP_SUPPLIES_RULES = Object.freeze({
         shopSuppliesRate: 3,
         shopSuppliesCap: 20
       });
@@ -2634,7 +2632,7 @@
 
   // src/modules/estimate-templates.js
   function calculateShopEstimate(lines = [], {
-    taxRate = SHOP_ESTIMATE_RULES.taxRate,
+    taxRate = 0,
     discountPercent = 0,
     discountReason = "",
     shopSupplies
@@ -2642,10 +2640,10 @@
     const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
     const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
     const automaticSupplies = Math.min(
-      SHOP_ESTIMATE_RULES.shopSuppliesCap,
-      labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100
+      SHOP_SUPPLIES_RULES.shopSuppliesCap,
+      labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
     );
-    const supplies = labor > 0 ? money(Math.min(SHOP_ESTIMATE_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies))) : 0;
+    const supplies = labor > 0 ? money(Math.min(SHOP_SUPPLIES_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies))) : 0;
     const base = calculateEstimate(
       normalizedLines,
       0,
@@ -2701,7 +2699,7 @@
       plate: vehicle.plate || ""
     };
   }
-  function estimateFromAssistantDraft(action = {}) {
+  function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0 } = {}) {
     const draft = action.draft || action;
     const partLines = (draft.parts || []).map((part, index) => ({
       id: `assistant-part-${index + 1}`,
@@ -2719,10 +2717,11 @@
       description: String(labor.description || "Labor"),
       notes: String(labor.notes || labor.source || ""),
       hours: Math.max(0, Number(labor.hours) || 0),
-      laborRate: SHOP_ESTIMATE_RULES.laborRate,
+      laborRate: Math.max(0, Number(laborRate) || 0),
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
     const totals = calculateShopEstimate([...partLines, ...laborLines], {
+      taxRate,
       discountPercent: draft.discountPercent,
       discountReason: draft.discountReason
     });
@@ -2749,11 +2748,12 @@
       ...totals
     };
   }
-  var money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
+  var money, REFERENCE_ESTIMATE_RULES, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
   var init_estimate_templates = __esm({
     "src/modules/estimate-templates.js"() {
       init_estimate_workflow();
       money = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
       referenceLines = [
         {
           id: "part-headlamp",
@@ -2819,11 +2819,12 @@
           description: "Collision component replacement labor",
           notes: "5.3 hours from Open Labor Project estimates for this vehicle: fender 3.7, headlamp 0.9, and one fender liner 0.7. These are not ALLDATA or Mitchell times, are not copied from a labor guide, and are not expert-verified.",
           hours: 5.3,
-          laborRate: SHOP_ESTIMATE_RULES.laborRate,
+          laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
           laborSource: "Open Labor Project estimate"
         }
       ];
       referenceTotals = calculateShopEstimate(referenceLines, {
+        taxRate: REFERENCE_ESTIMATE_RULES.taxRate,
         discountPercent: 10,
         discountReason: "Tech-student discount",
         shopSupplies: 20
@@ -3113,8 +3114,8 @@
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
-    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]));
+    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 165), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]), { taxRate: state.taxSettings.rate });
     return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
   function guideLocal(vehicle, repair) {
@@ -6814,7 +6815,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
   }
   async function saveAssistantDraft(action) {
-    const estimate = estimateFromAssistantDraft(action);
+    const estimate = estimateFromAssistantDraft(action, {
+      laborRate: shopProfile().laborRate,
+      taxRate: state.taxSettings.rate
+    });
     const number = `EST-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
     const record = {
       ...estimate,
@@ -8083,7 +8087,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money2(item.total)}</b></div>
   </article>`;

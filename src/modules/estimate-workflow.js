@@ -1,8 +1,6 @@
 const roundMoney = value => Math.round((Number(value) || 0) * 100) / 100;
 
-export const SHOP_ESTIMATE_RULES = Object.freeze({
-  laborRate: 140,
-  taxRate: 8.25,
+export const SHOP_SUPPLIES_RULES = Object.freeze({
   shopSuppliesRate: 3,
   shopSuppliesCap: 20,
 });
@@ -108,8 +106,8 @@ function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) 
   if (repriceSupplies && hasSuppliesFee) {
     const supplies = totals.labor > 0
       ? roundMoney(Math.min(
-        SHOP_ESTIMATE_RULES.shopSuppliesCap,
-        totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
+        SHOP_SUPPLIES_RULES.shopSuppliesCap,
+        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100,
       ))
       : 0;
     fees = fees.map(fee => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee)

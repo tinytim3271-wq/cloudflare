@@ -64,10 +64,15 @@ test('assistant draft totals are recomputed with shop rules instead of trusting 
       labor: [{ description: 'Inspection', hours: 1, source: 'Caller estimate' }],
       total: 1,
     },
+  }, {
+    laborRate: 175,
+    taxRate: 6.5,
   });
 
-  assert.equal(estimate.labor, 140);
+  assert.equal(estimate.labor, 175);
   assert.equal(estimate.parts, 100);
-  assert.equal(estimate.fees[0].amount, 4.2);
-  assert.equal(estimate.total, 264.35);
+  assert.equal(estimate.fees[0].amount, 5.25);
+  assert.equal(estimate.taxRate, 6.5);
+  assert.equal(estimate.tax, 18.22);
+  assert.equal(estimate.total, 298.47);
 });
