@@ -15,6 +15,7 @@ import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMa
 import { presentCatalogInspection, printCatalogInspection } from './catalog-inspection-ui.js';
 import { applyQueuedEntityMutations } from './entity-persistence.js';
 import { createMutationQueueStore } from './mutation-queue-store.js';
+import { paymentSummary } from '../modules/payments.js';
 import {
   approvedEstimate,
   billableEstimateLines,
@@ -222,7 +223,7 @@ function writeMutationQueue(queue) { mutationQueueStore.write(queue) }
 function mutationId() { return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}` }
 function prepareMutation(path, options) { return prepareEntityMutation(path, options, mutationId) }
 function queueEntityMutation(mutation, conflict = false) { const queue = readMutationQueue(), existingIndex = queue.findIndex(item => item.key === mutation.key); if (mutation.options.method === "DELETE" && existingIndex >= 0 && queue[existingIndex].method === "POST") { queue.splice(existingIndex, 1); writeMutationQueue(queue); return } const item = { id: mutationId(), key: mutation.key, path: mutation.path, method: mutation.options.method, body: mutation.options.body, expectedUpdatedAt: mutation.expectedUpdatedAt || null, queuedAt: new Date().toISOString(), conflict }; if (existingIndex >= 0) queue.splice(existingIndex, 1, item); else queue.push(item); writeMutationQueue(queue) }
-async function authorizedApiRequest(path, options = {}) { if (!authSession()) throw new Error("Not signed in"); return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...options.headers || {} } }) }
+async function authorizedApiRequest(path, options = {}) { const session = authSession(); if (!session) throw new Error("Not signed in"); const localHeaders = isLocalShell() ? { "X-MechPro-Dev-Email": session.claims.email || "admin@example.com", "X-MechPro-Dev-Name": session.claims.name || "Local Developer", "X-MechPro-Dev-Sub": session.claims.sub || "local-development" } : {}; return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...localHeaders, ...options.headers || {} } }) }
 async function verifyDesktopEntitlement() { if (!isDesktopApp || isOfflineDesktop() || (isLocalShell() && cloudflareConfig.apiUrl.startsWith("/"))) { desktopEntitlementVerified = true; return true } if (!navigator.onLine) throw new Error("MechPro Desktop requires an internet connection to verify your subscription."); let response; try { response = await authorizedApiRequest("/subscription/entitlement", { cache: "no-store" }) } catch { throw new Error("MechPro could not reach the subscription service. Check your internet connection and try again.") } const body = await response.json().catch(() => ({})); if (!response.ok || body.active !== true) throw new Error(body.status === "expired" ? "Your MechPro subscription has expired." : body.status === "suspended" ? "This MechPro subscription is suspended." : "An active MechPro subscription is required for the Windows app."); desktopEntitlementVerified = true; desktopLoginMessage = ""; return true }
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} }) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
 async function apiFetch(path, options = {}) { if (isOfflineDesktop()) { const method = String(options.method || "GET").toUpperCase(); if (method === "GET" || method === "HEAD") { const offlineError = new Error("This copy of MechPro keeps shop records on this computer."); offlineError.retryable = false; throw offlineError } return { queued: true } } if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareMutation(path, options); try { const response = await authorizedApiRequest(path, mutation.options); if (!response.ok) { const error = new Error(`API request failed: ${response.status}`); error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
@@ -1404,6 +1405,146 @@ bind = function () {
     await loadEmployeesFromApi();
     if (state.route === "employees") render();
   });
+};
+
+function invoicePaymentSummary(invoice) {
+  return paymentSummary(invoice.amount, state.payments, {
+    targetType: "invoice",
+    targetId: invoice.number,
+    linkedTargetId: invoice.ro || "",
+    legacyPaid: invoice.status === "paid" && invoice.paymentStatus == null,
+  });
+}
+
+function workOrderPaymentSummary(order) {
+  const invoice = state.invoices.find(item => item.ro === order.id);
+  return paymentSummary(order.total, state.payments, {
+    targetType: "work_order",
+    targetId: order.id,
+    linkedTargetId: invoice?.number || "",
+  });
+}
+
+function paymentMethodLabel(method) {
+  return ({
+    cash: "Cash",
+    card: "Card",
+    check: "Check",
+    bank: "Bank transfer",
+    processor: "Card processor",
+    other: "Other",
+    legacy: "Imported",
+  })[method] || method || "Other";
+}
+
+function paymentTimestamp(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? String(value || "") : date.toLocaleString();
+}
+
+function paymentHistoryMarkup(summary) {
+  const rows = summary.history.map(payment => `<tr><td>${escapeHtml(paymentTimestamp(payment.receivedAt))}</td><td>${escapeHtml(paymentMethodLabel(payment.method))}</td><td><b>${money(Number(payment.amount || 0))}</b></td><td>${escapeHtml(payment.reference || payment.note || "—")}<small>${payment.reference && payment.note ? escapeHtml(payment.note) : ""}</small></td></tr>`).join("");
+  return `<div class="payment-history"><div class="payment-history-head"><strong>Payment history</strong><span>${summary.history.length} payment${summary.history.length === 1 ? "" : "s"}</span></div>${rows ? `<table><thead><tr><th>Date / time</th><th>Method</th><th>Amount</th><th>Reference / notes</th></tr></thead><tbody>${rows}</tbody></table>` : `<p>No payments recorded yet.</p>`}</div>`;
+}
+
+function localDateTimeValue(date = new Date()) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+async function saveRecordedPayment(targetType, targetId, data, amount, button) {
+  button.disabled = true;
+  try {
+    const result = await apiFetch("/payments/record", {
+      method: "POST",
+      body: JSON.stringify({
+        targetType,
+        targetId,
+        amount,
+        method: data.method,
+        receivedAt: new Date(data.receivedAt).toISOString(),
+        reference: data.reference.trim(),
+        note: data.note.trim(),
+      }),
+    });
+    state.payments.push(result.payment);
+    if (result.invoice) {
+      const index = state.invoices.findIndex(invoice => invoice.number === result.invoice.number);
+      if (index >= 0) state.invoices[index] = result.invoice;
+    }
+    if (result.workOrder) {
+      const index = state.orders.findIndex(order => order.id === result.workOrder.id);
+      if (index >= 0) state.orders[index] = result.workOrder;
+    }
+    save();
+    closeModal();
+    toast(`${money(amount)} payment recorded · ${money(result.summary.balance)} remaining`);
+    render();
+    if (targetType === "work_order") openOrder(targetId);
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message || "Payment could not be recorded");
+  }
+}
+
+function recordTargetPayment(targetType, targetId, initialMethod = "cash") {
+  const target = targetType === "invoice"
+    ? state.invoices.find(invoice => invoice.number === targetId)
+    : state.orders.find(order => order.id === targetId);
+  if (!target) return;
+  const summary = targetType === "invoice" ? invoicePaymentSummary(target) : workOrderPaymentSummary(target);
+  if (summary.balance <= 0) return toast("This record has no remaining balance");
+  const labelText = targetType === "invoice" ? target.number : target.id;
+  showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(labelText)} · ${escapeHtml(target.customer || "")}</span><strong>${money(summary.balance)} remaining</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${summary.balance}" step=".01" placeholder="Enter partial or full amount" required/></label><label>Method<select name="method">${["cash", "card", "check", "bank", "other"].map(method => `<option value="${method}" ${method === initialMethod || (initialMethod === "processor" && method === "card") ? "selected" : ""}>${paymentMethodLabel(method)}</option>`).join("")}</select></label><label>Received date / time<input name="receivedAt" type="datetime-local" value="${localDateTimeValue()}" required/></label><label>Reference / receipt<input name="reference" maxlength="160" placeholder="Receipt, check, or transaction ID"/></label><label class="full">Notes<textarea name="note" maxlength="500" placeholder="Optional payment note"></textarea></label></div><div class="payment-preview"><span>Paid to date <b>${money(summary.paid)}</b></span><span>Current balance <b>${money(summary.balance)}</b></span></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("check", 14)} Record payment</button></div></form>`);
+  document.querySelector("#payment-form").onsubmit = event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const amount = Number(data.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > summary.balance) {
+      toast("Enter a payment amount within the remaining balance");
+      return;
+    }
+    void saveRecordedPayment(targetType, targetId, data, amount, event.target.querySelector("button[type=submit]"));
+  };
+}
+
+recordPayment = function (invoiceNumber, method = "cash") {
+  recordTargetPayment("invoice", invoiceNumber, method);
+};
+
+invoicePaid = function (invoice) {
+  return invoicePaymentSummary(invoice).paid;
+};
+
+invoiceBalance = function (invoice) {
+  return invoicePaymentSummary(invoice).balance;
+};
+
+const paymentStatusLabelCore = label;
+label = function (status) {
+  return ({ partial: "Partially paid", unpaid: "Unpaid" })[status] || paymentStatusLabelCore(status);
+};
+
+invoices = function () {
+  const q = query.toLowerCase();
+  const rows = state.invoices.filter(invoice => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map(invoice => {
+    const summary = invoicePaymentSummary(invoice);
+    const bd = invoiceTaxBreakdown(invoice);
+    return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${badge(summary.status)}</td><td><b>${money(summary.total)}</b><small>Subtotal ${money(bd.subtotal)} · Tax ${money(bd.tax)}</small><small>Paid ${money(summary.paid)} · Remaining ${money(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+  }).join("");
+  return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
+};
+
+const openOrderPaymentCore = openOrder;
+openOrder = function (id) {
+  openOrderPaymentCore(id);
+  const order = state.orders.find(item => item.id === id);
+  const modalBody = document.querySelector(".job-card-modal .modal-body");
+  if (!order || !modalBody) return;
+  const summary = workOrderPaymentSummary(order);
+  modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money(summary.total)}</b></div><div><span>Paid</span><b>${money(summary.paid)}</b></div><div><span>Remaining</span><b>${money(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
+  document.querySelector("#record-work-order-payment")?.addEventListener("click", () => recordTargetPayment("work_order", order.id));
+  lucide.createIcons();
 };
 
 async function startApp() {
