@@ -6,6 +6,7 @@ import {
   emptyState,
   greetingForNow,
   localIsoDate,
+  coalesceQueuedEntityMutation,
   mergeRemoteCollection,
   pendingCreateIdsForCollection,
   sidebarCatalog,
@@ -120,5 +121,36 @@ test('pendingCreateIdsForCollection reads only matching queued POST records', ()
   assert.deepEqual(
     pendingCreateIdsForCollection('inspectionTemplates', queue, { inspectiontemplates: 'inspectionTemplates' }),
     ['template-1'],
+  );
+});
+
+test('editing a queued create keeps it as a POST so refreshes preserve it', () => {
+  const existing = {
+    key: '/entities/customers/customer-1',
+    path: '/entities/customers',
+    method: 'POST',
+    body: '{"id":"customer-1","name":"Ada"}',
+  };
+  const incoming = {
+    path: '/entities/customers/customer-1',
+    method: 'PUT',
+    body: '{"id":"customer-1","name":"Ada Lovelace"}',
+    expectedUpdatedAt: '2026-10-05T12:00:00.000Z',
+  };
+  const queued = coalesceQueuedEntityMutation(existing, incoming);
+  const queue = [{ ...queued, key: existing.key }];
+  const pendingIds = pendingCreateIdsForCollection('customers', queue);
+
+  assert.equal(queued.path, '/entities/customers');
+  assert.equal(queued.method, 'POST');
+  assert.equal(queued.body, incoming.body);
+  assert.equal(queued.expectedUpdatedAt, null);
+  assert.deepEqual(
+    mergeRemoteCollection('customers', [], [{ id: 'customer-1', name: 'Ada Lovelace' }], null, pendingIds),
+    [{ id: 'customer-1', name: 'Ada Lovelace' }],
+  );
+  assert.deepEqual(
+    mergeRemoteCollection('customers', [], [{ id: 'deleted-customer' }], null, ['customer-1']),
+    [],
   );
 });

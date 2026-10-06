@@ -153,6 +153,16 @@ export function pendingCreateIdsForCollection(collection, queue = [], entityColl
   });
 }
 
+export function coalesceQueuedEntityMutation(existing, incoming) {
+  const preserveCreate = existing?.method === 'POST' && incoming.method === 'PUT';
+  return {
+    path: preserveCreate ? existing.path : incoming.path,
+    method: preserveCreate ? 'POST' : incoming.method,
+    body: incoming.body,
+    expectedUpdatedAt: preserveCreate ? null : incoming.expectedUpdatedAt || null,
+  };
+}
+
 /** Plain-language navigation. Order is the shop day: today, counter, floor, office. */
 export const sidebarCatalog = [
   {
@@ -213,6 +223,7 @@ if (typeof globalThis !== 'undefined') {
     localIsoDate,
     mergeRemoteCollection,
     pendingCreateIdsForCollection,
+    coalesceQueuedEntityMutation,
     sidebarCatalog,
     visibleSidebar,
   };

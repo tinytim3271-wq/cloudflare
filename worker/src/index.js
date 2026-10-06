@@ -663,9 +663,50 @@ async function handleAuthSession(context, analytics) {
   });
 }
 
-async function geocodeAddress(address) {
+const GEOCODE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const GEOCODE_REQUEST_INTERVAL_MS = 1000;
+
+async function waitForGeocodeSlot(env) {
+  while (true) {
+    const now = Date.now();
+    const reservation = await env.DB.prepare(`
+      UPDATE geocode_request_pacing
+      SET next_available_at = ?
+      WHERE id = 1 AND next_available_at <= ?
+      RETURNING id
+    `).bind(now + GEOCODE_REQUEST_INTERVAL_MS, now).first();
+    if (reservation) return;
+    const pacing = await env.DB.prepare(
+      'SELECT next_available_at FROM geocode_request_pacing WHERE id = 1',
+    ).first();
+    const nextAvailableAt = Number(pacing?.next_available_at);
+    if (!Number.isFinite(nextAvailableAt)) {
+      throw new Error('Geocoding request pacing is not initialized');
+    }
+    const delay = nextAvailableAt - Date.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.max(1, delay)));
+  }
+}
+
+async function getCachedGeocode(env, key) {
+  const cached = await env.DB.prepare(`
+    SELECT latitude, longitude, label
+    FROM geocode_cache
+    WHERE address_key = ? AND expires_at > ?
+  `).bind(key, Date.now()).first();
+  if (!cached) return null;
+  return { lat: Number(cached.latitude), lon: Number(cached.longitude), label: cached.label };
+}
+
+export async function geocodeAddress(address, env) {
   const query = String(address || '').trim();
   if (!query) return null;
+  const key = query.replace(/\s+/g, ' ').toLowerCase();
+  const cached = await getCachedGeocode(env, key);
+  if (cached) return cached;
+  await waitForGeocodeSlot(env);
+  const cachedAfterWait = await getCachedGeocode(env, key);
+  if (cachedAfterWait) return cachedAfterWait;
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
   const response = await fetch(url, {
     headers: {
@@ -677,7 +718,17 @@ async function geocodeAddress(address) {
   const results = await response.json();
   const hit = Array.isArray(results) ? results[0] : null;
   if (!hit?.lat || !hit?.lon) return null;
-  return { lat: Number(hit.lat), lon: Number(hit.lon), label: hit.display_name || query };
+  const result = { lat: Number(hit.lat), lon: Number(hit.lon), label: hit.display_name || query };
+  await env.DB.prepare(`
+    INSERT INTO geocode_cache (address_key, latitude, longitude, label, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(address_key) DO UPDATE SET
+      latitude = excluded.latitude,
+      longitude = excluded.longitude,
+      label = excluded.label,
+      expires_at = excluded.expires_at
+  `).bind(key, result.lat, result.lon, result.label, Date.now() + GEOCODE_CACHE_TTL_MS).run();
+  return result;
 }
 
 export async function drivingMiles(from, to) {
@@ -699,7 +750,7 @@ async function handleMileageCalculate(request, env, context) {
   const fromAddress = String(body.from || body.shopAddress || '').trim();
   const toAddress = String(body.to || body.jobAddress || '').trim();
   if (!fromAddress || !toAddress) throw new HttpError(400, 'Shop address and job site address are required');
-  const [from, to] = await Promise.all([geocodeAddress(fromAddress), geocodeAddress(toAddress)]);
+  const [from, to] = await Promise.all([geocodeAddress(fromAddress, env), geocodeAddress(toAddress, env)]);
   if (!from) throw new HttpError(422, 'Could not locate the shop address');
   if (!to) throw new HttpError(422, 'Could not locate the job site address');
   const oneWayMiles = await drivingMiles(from, to);
