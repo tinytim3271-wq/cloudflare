@@ -1,16 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEntityDeleteStatements, listChatMessagesForConversations, listEntities } from '../src/routes/entities.mjs';
-<<<<<<< HEAD
 import {
   assertUploadContentType,
   assertUploadSize,
   handleFiles,
   storeUploadedFile,
 } from '../src/routes/files.mjs';
-=======
-import { assertUploadContentType, assertUploadSize, handleFiles } from '../src/routes/files.mjs';
->>>>>>> upstream/cursor/critical-bug-management-817e
 import { HttpError } from '../src/http.mjs';
 
 function mockDb() {
