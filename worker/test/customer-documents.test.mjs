@@ -297,6 +297,42 @@ test('replayed or alternate public response cannot overwrite a locked estimate a
   assert.equal(saved.total, 165);
 });
 
+test('remote decline-all marks every line declined, zeros money, and locks the estimate', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  order.estimate.fees = [{ description: 'Shop supplies', amount: 12 }];
+  order.total = 277;
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+
+  const response = await handleCustomerDocument(new Request(link.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'decline' }),
+  }), fixture.env, token);
+
+  assert.equal(response.status, 200);
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.equal(saved.estimateApproval.status, 'declined');
+  assert.equal(saved.estimateApproval.source, 'remote');
+  assert.ok(saved.linesLockedAt);
+  assert.ok(saved.estimate.lines.every(line => line.approvalStatus === 'declined'));
+  assert.equal(saved.total, 0);
+  assert.equal(saved.labor, 0);
+  assert.equal(saved.parts, 0);
+  assert.equal(saved.tax, 0);
+  assert.equal(saved.estimate.total, 0);
+  assert.equal(saved.estimate.fees[0].amount, 12);
+  assert.deepEqual(saved.estimateApproval.decisions, { labor: 'declined', part: 'declined' });
+  assert.equal(fixture.links[0].result, 'declined');
+
+  await assert.rejects(
+    () => issueLink(fixture, 'estimate', 'RO-1100'),
+    error => error.status === 409 && /already locked/i.test(error.message),
+  );
+});
+
 test('losing claim on an unused token returns 409 before writing the document', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'invoices', 'INV-1100'), {

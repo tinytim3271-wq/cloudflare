@@ -83,6 +83,38 @@ export function approvedEstimate(estimate = {}, decisions = {}) {
   };
 }
 
+/**
+ * Full-card decline: every line is declined and money totals are zeroed.
+ * Fees are retained for audit but do not contribute to subtotal/tax/total.
+ */
+export function declinedEstimate(estimate = {}) {
+  const decisions = Object.fromEntries(
+    (estimate.lines || []).map((line, index) => [normalizeEstimateLine(line, index).id, 'declined']),
+  );
+  // approvedEstimate would still bill fees when no lines are approved; clear
+  // fee money while preserving the fee list for history.
+  const next = approvedEstimate({ ...estimate, fees: [] }, decisions);
+  return {
+    estimate: {
+      ...next,
+      fees: (estimate.fees || []).map(fee => ({
+        ...fee,
+        description: String(fee.description || 'Fee'),
+        amount: roundMoney(Math.max(0, Number(fee.amount) || 0)),
+      })),
+      labor: 0,
+      laborHours: 0,
+      parts: 0,
+      subtotal: 0,
+      tax: 0,
+      total: 0,
+      approvedLineCount: 0,
+      declinedLineCount: next.lines.length,
+    },
+    decisions,
+  };
+}
+
 export function invoiceRecordForOrder(order, issuedAt = new Date()) {
   const source = order.estimate || {};
   // Always recompute billable money from non-declined lines so stale/coherent
