@@ -2016,21 +2016,26 @@
   }
   function computePayPeriodTaxes(user, grossPay, ytd = {}) {
     const is1099 = String(user.taxStatus || "").includes("1099");
+    const filingStatus = normalizeFilingStatus(user.w4FilingStatus || user.filingStatus || "single");
+    const pretax = Math.max(0, Number(user.pretaxDeductionPerPeriod) || 0);
     if (is1099) {
       return {
         gross: roundCents(grossPay),
+        pretax: 0,
         federal: 0,
         socialSecurity: 0,
         medicare: 0,
         state: 0,
         employerSocialSecurity: 0,
         employerMedicare: 0,
+        socialSecurityWages: 0,
         net: roundCents(grossPay),
         method: "1099 \u2014 no employment tax withholding",
+        filingStatus,
+        adjustedAnnualWage: 0,
         is1099: true
       };
     }
-    const pretax = Math.max(0, Number(user.pretaxDeductionPerPeriod) || 0);
     const fit = computeFederalWithholding({
       grossPay,
       payFrequency: user.payFrequency || "Weekly",
@@ -7945,7 +7950,7 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -9609,10 +9614,10 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
             }
           };
         });
-        const taxForm = document.querySelector("#tax-report-form");
-        if (taxForm && !taxForm.dataset.filingBound) {
-          taxForm.dataset.filingBound = "1";
-          taxForm.addEventListener("submit", async (event) => {
+        const taxReportForm = document.querySelector("#tax-report-form");
+        if (taxReportForm && !taxReportForm.dataset.filingBound) {
+          taxReportForm.dataset.filingBound = "1";
+          taxReportForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
             const data = Object.fromEntries(new FormData(event.target));
@@ -9671,15 +9676,11 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         document.querySelectorAll("[data-print-w2]").forEach((button) => {
           button.onclick = () => printEmployeeAnnualForm(button.dataset.printW2);
         });
-      };
-      bindFilingTaxSettingsCore = bindExpandedFeatures;
-      bindExpandedFeatures = function() {
-        bindFilingTaxSettingsCore();
-        const taxForm = document.querySelector("#tax-settings-form");
-        if (taxForm && !taxForm.dataset.filingEnhanced) {
-          taxForm.dataset.filingEnhanced = "1";
-          const grid = taxForm.querySelector(".form-grid") || taxForm;
-          if (!taxForm.querySelector("[name=ein]")) {
+        const taxSettingsForm = document.querySelector("#tax-settings-form");
+        if (taxSettingsForm && !taxSettingsForm.dataset.filingEnhanced) {
+          taxSettingsForm.dataset.filingEnhanced = "1";
+          const grid = taxSettingsForm.querySelector(".form-grid") || taxSettingsForm;
+          if (!taxSettingsForm.querySelector("[name=ein]")) {
             grid.insertAdjacentHTML("beforeend", `
 <label>Federal EIN<input name="ein" value="${escapeHtml(state.taxSettings.ein || "")}" placeholder="XX-XXXXXXX"/></label>
 <label>TX taxpayer number<input name="texasTaxpayerNumber" value="${escapeHtml(state.taxSettings.texasTaxpayerNumber || "")}" placeholder="1-xxxxxxxxxx-x"/></label>
@@ -9687,7 +9688,7 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
 <label class="full">Local jurisdictions JSON<small>Array of {code,name,kind,rate,required} \u2014 city/transit/county/SPD</small>
 <textarea name="jurisdictionsJson" rows="4">${escapeHtml(JSON.stringify(state.taxSettings.jurisdictions || DEFAULT_TX_JURISDICTIONS, null, 0))}</textarea></label>`);
           }
-          taxForm.addEventListener("submit", async (event) => {
+          taxSettingsForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
             const data = Object.fromEntries(new FormData(event.target));
