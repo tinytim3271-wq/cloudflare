@@ -1,6 +1,7 @@
 import {
-  MECHPRO_SYSTEM_PROMPT,
+  buildAssistantSystemPrompt,
   calculateVoiceCost,
+  loadShopPricing,
   loadVoiceShopContext,
   recordAiUsage,
   selectAnthropicModel,
@@ -11,7 +12,7 @@ const DEEPGRAM_AGENT_URL = 'https://agent.deepgram.com/v1/agent/converse';
 const INPUT_SAMPLE_RATE = 16000;
 const LINEAR16_BYTES_PER_SAMPLE = 2;
 
-export function buildDeepgramSettings(env, shopContext = []) {
+export function buildDeepgramSettings(env, shopContext = [], pricing) {
   const route = selectAnthropicModel(env);
   const grounding = shopContext.length
     ? `\n\nCurrent read-only shop snapshot (may be incomplete or stale; say so and ask staff to verify when needed): ${JSON.stringify(shopContext)}`
@@ -42,7 +43,7 @@ export function buildDeepgramSettings(env, shopContext = []) {
             'anthropic-version': '2023-06-01',
           },
         },
-        prompt: `${MECHPRO_SYSTEM_PROMPT}
+        prompt: `${buildAssistantSystemPrompt(pricing, { allowEstimatePreparation: false })}
 
 This is a spoken conversation. Keep the delivery natural, but do not sacrifice needed detail or accuracy. The snapshot is context, not proof that no other record exists. Voice tools for live record refresh are not available yet; explicitly ask the user to open or identify a record when the snapshot is insufficient.${grounding}`,
       },
@@ -82,7 +83,7 @@ export class AiVoiceSession {
       throw new HttpError(503, 'Voice AI is not configured');
     }
 
-    const [upstreamResponse, shopContext] = await Promise.all([
+    const [upstreamResponse, shopContext, pricing] = await Promise.all([
       fetch(DEEPGRAM_AGENT_URL, {
         headers: {
           Upgrade: 'websocket',
@@ -90,6 +91,7 @@ export class AiVoiceSession {
         },
       }),
       loadVoiceShopContext(this.env, shopId),
+      loadShopPricing(this.env, shopId),
     ]);
     const upstream = upstreamResponse.webSocket;
     if (!upstream || upstreamResponse.status !== 101) {
@@ -101,7 +103,7 @@ export class AiVoiceSession {
     server.accept();
     upstream.accept();
 
-    const settings = JSON.stringify(buildDeepgramSettings(this.env, shopContext));
+    const settings = JSON.stringify(buildDeepgramSettings(this.env, shopContext, pricing));
     const model = selectAnthropicModel(this.env).model;
     let settingsSent = false;
     let inputAudioBytes = 0;

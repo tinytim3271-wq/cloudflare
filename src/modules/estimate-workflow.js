@@ -1,11 +1,25 @@
 const roundMoney = value => Math.round((Number(value) || 0) * 100) / 100;
 
+export const SHOP_ESTIMATE_RULES = Object.freeze({
+  laborRate: 140,
+  taxRate: 8.25,
+  shopSuppliesRate: 3,
+  shopSuppliesCap: 20,
+});
+
 export function isDeclinedEstimateLine(line) {
   return line?.approvalStatus === 'declined';
 }
 
 export function billableEstimateLines(lines = []) {
   return lines.filter(line => !isDeclinedEstimateLine(line));
+}
+
+export function normalizeTechnicianIds(line = {}) {
+  const source = Array.isArray(line.technicianIds)
+    ? line.technicianIds
+    : line.technicianId ? [line.technicianId] : [];
+  return [...new Set(source.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
 export function normalizeEstimateLine(line = {}, index = 0) {
@@ -29,12 +43,32 @@ export function normalizeEstimateLine(line = {}, index = 0) {
     hours,
     laborRate,
     total,
+    technicianIds: type === 'labor' ? normalizeTechnicianIds(line) : [],
     approvalStatus: ['approved', 'declined'].includes(line.approvalStatus) ? line.approvalStatus : 'pending',
   };
 }
 
+export function laborLinePrintRows(lines = [], technicians = []) {
+  const names = new Map(technicians.map(technician => [
+    String(technician.id || ''),
+    String(technician.name || technician.techName || technician.id || 'Technician unavailable'),
+  ]));
+  return lines
+    .map((line, index) => normalizeEstimateLine(line, index))
+    .filter(line => line.type === 'labor')
+    .flatMap(line => {
+      const technicianIds = normalizeTechnicianIds(line);
+      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: 'Unassigned' }];
+      return technicianIds.map(technicianId => ({
+        line,
+        technicianId,
+        technicianName: names.get(technicianId) || 'Technician unavailable',
+      }));
+    });
+}
+
 export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
-  const normalizedLines = lines.map(normalizeEstimateLine);
+  const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
   // Declined lines stay visible for audit, but must not affect money totals.
   const billableLines = billableEstimateLines(normalizedLines);
   const normalizedFees = fees.map(fee => ({
@@ -65,6 +99,40 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
   };
 }
 
+function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+  const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
+  let fees = estimate.fees || [];
+  let totals = calculateEstimate(lines, taxRate, fees);
+  const hasSuppliesFee = fees.some(fee => /shop supplies/i.test(fee.description));
+
+  if (repriceSupplies && hasSuppliesFee) {
+    const supplies = totals.labor > 0
+      ? roundMoney(Math.min(
+        SHOP_ESTIMATE_RULES.shopSuppliesCap,
+        totals.labor * SHOP_ESTIMATE_RULES.shopSuppliesRate / 100,
+      ))
+      : 0;
+    fees = fees.map(fee => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee)
+      .filter(fee => !/shop supplies/i.test(fee.description) || fee.amount > 0);
+    totals = calculateEstimate(lines, taxRate, fees);
+  }
+
+  const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+  const discountAmount = roundMoney(totals.subtotal * discountPercent / 100);
+  const subtotal = roundMoney(totals.subtotal - discountAmount);
+  const tax = roundMoney(subtotal * taxRate / 100);
+  return {
+    ...totals,
+    grossSubtotal: totals.subtotal,
+    discountPercent,
+    discountReason: String(estimate.discountReason || ''),
+    discountAmount,
+    subtotal,
+    tax,
+    total: roundMoney(subtotal + tax),
+  };
+}
+
 export function approvedEstimate(estimate = {}, decisions = {}) {
   const lines = (estimate.lines || []).map((line, index) => {
     const normalized = normalizeEstimateLine(line, index);
@@ -74,7 +142,7 @@ export function approvedEstimate(estimate = {}, decisions = {}) {
     };
   });
   const approvedLines = lines.filter(line => line.approvalStatus === 'approved');
-  const totals = calculateEstimate(approvedLines, estimate.taxRate, estimate.fees);
+  const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
   return {
     ...estimate,
     ...totals,
@@ -118,13 +186,11 @@ export function declinedEstimate(estimate = {}) {
 
 export function invoiceRecordForOrder(order, issuedAt = new Date()) {
   const source = order.estimate || {};
-  // Always recompute billable money from non-declined lines so stale/coherent
-  // full-card totals cannot inflate invoice subtotal/tax after partial approval.
-  const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+  const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
   const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, '').replace(/[^A-Za-z0-9-]/g, '')}`;
   const due = new Date(issuedAt);
   due.setDate(due.getDate() + 14);
-  const amount = roundMoney(order.total ?? estimate.total);
+  const amount = source.lines?.length ? estimate.total : roundMoney(order.total ?? estimate.total);
   return {
     id: number,
     number,
@@ -132,14 +198,18 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
     customer: order.customer,
     vehicle: order.vehicle,
     amount,
+    grossSubtotal: estimate.grossSubtotal,
     subtotal: estimate.subtotal,
+    discountPercent: estimate.discountPercent,
+    discountAmount: estimate.discountAmount,
+    discountReason: estimate.discountReason,
+    fees: estimate.fees,
     tax: estimate.tax,
     taxRate: Math.max(0, Number(estimate.taxRate) || 0),
-    fees: estimate.fees,
     status: 'sent',
     date: issuedAt.toISOString().slice(0, 10),
     due: due.toISOString().slice(0, 10),
-    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+    lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
     sourceEstimateApproval: order.estimateApproval || null,
     createdAt: issuedAt.toISOString(),
   };
@@ -184,7 +254,7 @@ export function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = 
     tax: estimate.tax,
     taxRate: estimate.taxRate,
     fees: estimate.fees,
-    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+    lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
     signature: null,
     sourceEstimateApproval: null,
     revisedAt: editedAt,

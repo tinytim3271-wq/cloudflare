@@ -7,7 +7,9 @@ import {
   declinedEstimate,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
+  laborLinePrintRows,
   normalizeEstimateLine,
+  normalizeTechnicianIds,
   workOrderWithEditedEstimate,
 } from './estimate-workflow.js';
 
@@ -38,6 +40,37 @@ test('customer decisions retain declined lines while totaling approved work only
   assert.equal(approved.lines[1].approvalStatus, 'declined');
   assert.equal(approved.subtotal, 165);
   assert.equal(approved.total, 178.61);
+});
+
+test('estimate approval recalculates supplies and discount for approved work and invoice', () => {
+  const estimate = {
+    ...calculateEstimate([
+      { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 140 },
+      { id: 'part', type: 'part', description: 'Optional sensor', quantity: 1, unitPrice: 100 },
+    ], 8.25, [{ description: 'Shop supplies', amount: 20 }]),
+    discountPercent: 10,
+    discountReason: 'Customer discount',
+  };
+  const approved = approvedEstimate(estimate, { labor: 'approved', part: 'declined' });
+
+  assert.deepEqual(approved.fees, [{ description: 'Shop supplies', amount: 4.2 }]);
+  assert.equal(approved.grossSubtotal, 144.2);
+  assert.equal(approved.discountAmount, 14.42);
+  assert.equal(approved.subtotal, 129.78);
+  assert.equal(approved.tax, 10.71);
+  assert.equal(approved.total, 140.49);
+
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1101',
+    customer: 'Customer',
+    vehicle: 'Vehicle',
+    total: approved.total,
+    estimate: approved,
+  }, new Date('2026-10-02T12:00:00.000Z'));
+  assert.equal(invoice.amount, approved.total);
+  assert.equal(invoice.discountAmount, 14.42);
+  assert.equal(invoice.subtotal + invoice.tax, invoice.amount);
+  assert.equal(invoice.lines.length, 1);
 });
 
 test('invoice carries approved estimate lines and signature provenance forward', () => {
@@ -187,4 +220,51 @@ test('editing an invoiced work order synchronizes unpaid invoice lines and total
   assert.equal(invoice.amount, 340.99);
   assert.equal(invoice.signature, null);
   assert.equal(invoice.revisedAt, '2026-10-06T04:00:00.000Z');
+});
+
+test('labor lines normalize none, one, or several technician ids as a unique list', () => {
+  assert.deepEqual(normalizeEstimateLine({ type: 'labor' }).technicianIds, []);
+  assert.deepEqual(normalizeEstimateLine({ type: 'labor', technicianId: 'tech-1' }).technicianIds, ['tech-1']);
+  assert.deepEqual(
+    normalizeTechnicianIds({ technicianIds: ['tech-1', 'tech-2', 'tech-1', ''] }),
+    ['tech-1', 'tech-2'],
+  );
+  assert.deepEqual(
+    normalizeEstimateLine({ type: 'part', technicianIds: ['tech-1'] }).technicianIds,
+    [],
+  );
+});
+
+test('printed job card expands each labor line to one row per technician', () => {
+  const rows = laborLinePrintRows([
+    { id: 'labor-a', type: 'labor', description: 'Replace fender', hours: 3.7, laborRate: 140, technicianIds: ['tech-1', 'tech-2', 'tech-3'] },
+    { id: 'labor-b', type: 'labor', description: 'Aim headlamp', hours: 0.9, laborRate: 140, technicianIds: [] },
+    { id: 'part-a', type: 'part', description: 'Fender', quantity: 1, unitPrice: 374.79 },
+  ], [
+    { id: 'tech-1', name: 'Alex' },
+    { id: 'tech-2', name: 'Blair' },
+    { id: 'tech-3', name: 'Casey' },
+  ]);
+
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.slice(0, 3).map(row => row.technicianName), ['Alex', 'Blair', 'Casey']);
+  assert.deepEqual(rows.slice(0, 3).map(row => row.line.id), ['labor-a', 'labor-a', 'labor-a']);
+  assert.equal(rows[3].line.id, 'labor-b');
+  assert.equal(rows[3].technicianName, 'Unassigned');
+});
+
+test('labor technician sets survive estimate calculation and invoice creation', () => {
+  const estimate = calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Repair', hours: 2, laborRate: 140, technicianIds: ['tech-1', 'tech-2'] },
+  ], 8.25);
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1200',
+    customer: 'Customer',
+    vehicle: 'Vehicle',
+    total: estimate.total,
+    estimate,
+  }, new Date('2026-10-04T12:00:00.000Z'));
+
+  assert.deepEqual(estimate.lines[0].technicianIds, ['tech-1', 'tech-2']);
+  assert.deepEqual(invoice.lines[0].technicianIds, ['tech-1', 'tech-2']);
 });

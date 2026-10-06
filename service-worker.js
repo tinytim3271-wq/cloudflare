@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mechpro-shell-v28';
+const CACHE_NAME = 'mechpro-shell-v29';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const SHELL_FILES = [
   './manifest.webmanifest',
   './mechpro-icon.svg',
   './assets/vendor/lucide.min.js',
+  './assets/vendor/dompurify.min.js',
   './assets/fonts/fonts.css',
   './assets/fonts/dm-sans-latin-400-normal.woff2',
   './assets/fonts/dm-sans-latin-500-normal.woff2',

@@ -50,7 +50,7 @@
     "test:guides": "node --test src/modules/repair-guide.test.mjs",
     "test:inspections": "node --test src/modules/shop-inspections.test.mjs",
     "test:autozone": "node --test src/modules/autozone-pro.test.mjs",
-    "test:estimate": "node --test src/modules/estimate-workflow.test.mjs",
+    "test:estimate": "node --test src/modules/estimate-workflow.test.mjs src/modules/estimate-templates.test.mjs",
     "test:payments": "node --test src/modules/payments.test.mjs",
     "test:market": "node --test scripts/market-pages.test.mjs",
     "test:mileage": "node --test src/modules/mileage.test.mjs",
@@ -71,7 +71,9 @@
     "protocols": [
       {
         "name": "MechPro authentication",
-        "schemes": ["mechpro"]
+        "schemes": [
+          "mechpro"
+        ]
       }
     ],
     "artifactName": "MechPro-Setup-${version}.${ext}",
@@ -138,6 +140,7 @@
   "dependencies": {
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
+    "dompurify": "^3.4.16",
     "posthog-node": "^5.52.4"
   },
   "overrides": {

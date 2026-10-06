@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
 import {
+  buildAssistantSystemPrompt,
   MECHPRO_SYSTEM_PROMPT,
   calculateTextCost,
   executeGroundingTool,
+  loadShopPricing,
+  prepareEstimateWorkOrderDraft,
+  readAudioWithinLimit,
   runAnthropicTurn,
   selectAnthropicModel,
   shouldEscalateToOpus,
+  transcribeDeepgramAudio,
 } from '../src/ai.mjs';
 import { AiChatSession } from '../src/chat-session.mjs';
 import { buildDeepgramSettings } from '../src/voice-session.mjs';
@@ -35,6 +40,68 @@ test('system prompt requires detailed, evidence-grounded answers', () => {
   assert.match(MECHPRO_SYSTEM_PROMPT, /never guess/i);
   assert.match(MECHPRO_SYSTEM_PROMPT, /ask for the missing VIN/i);
   assert.match(MECHPRO_SYSTEM_PROMPT, /read-only/i);
+  assert.match(buildAssistantSystemPrompt(), /prepare_estimate_work_order/);
+  assert.match(buildAssistantSystemPrompt(), /\$140\.00 per labor hour/);
+});
+
+test('assistant pricing prompt uses rates from tenant-scoped shop settings', async () => {
+  const statements = [];
+  const env = {
+    AI_ENABLED: '1',
+    ANTHROPIC_API_KEY: secret(),
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            statements.push({ sql, args });
+            return {
+              async all() {
+                return {
+                  results: [
+                    { entity_id: 'profile', data_json: JSON.stringify({ laborRate: 175 }) },
+                    { entity_id: 'tax', data_json: JSON.stringify({ rate: 6.5 }) },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const pricing = await loadShopPricing(env, 'shop-a');
+  assert.deepEqual(pricing, { laborRate: 175, taxRate: 6.5 });
+  assert.deepEqual(statements[0].args, ['shop-a', 'shopsettings', 'profile', 'tax']);
+  assert.match(statements[0].sql, /shop_id = \?/);
+
+  let payload;
+  await runAnthropicTurn(env, {
+    shopId: 'shop-a',
+    message: 'Prepare an estimate.',
+    fetcher: async (_url, init) => {
+      payload = JSON.parse(init.body);
+      return Response.json({
+        content: [{ type: 'text', text: 'I can prepare a reviewable estimate.' }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  assert.match(payload.system, /\$175\.00 per labor hour, 6\.50% tax/);
+});
+
+test('estimate and work-order tool creates a bounded review draft without persistence', () => {
+  const result = prepareEstimateWorkOrderDraft({
+    customer: { name: 'Caller' },
+    vehicle: { description: '2020 Example' },
+    complaint: 'Noise',
+    requestedServices: ['Inspect noise'],
+    parts: [{ description: 'Unpriced cover', quantity: 1, unitPrice: 0, priceStatus: 'pending' }],
+    labor: [{ description: 'Inspection', hours: 1, source: 'Caller-provided time' }],
+  });
+  assert.equal(result.kind, 'estimate_work_order_draft');
+  assert.equal(result.requiresUserReview, true);
+  assert.equal(result.saved, false);
+  assert.equal(result.draft.parts[0].priceStatus, 'pending');
 });
 
 test('grounding lookup is tenant-scoped and read-only', async () => {
@@ -120,6 +187,121 @@ test('Anthropic turn executes read-only tools and accumulates token usage', asyn
   assert.match(requests[1].body.messages.at(-1).content[0].content, /"readOnly":true/);
 });
 
+test('Anthropic turn returns a reviewable estimate action from the preparation tool', async () => {
+  const responses = [
+    {
+      content: [{
+        type: 'tool_use',
+        id: 'tool-draft',
+        name: 'prepare_estimate_work_order',
+        input: {
+          customer: { name: 'Caller' },
+          vehicle: { description: '2020 Example' },
+          complaint: 'Noise',
+          requestedServices: ['Inspect noise'],
+          parts: [],
+          labor: [{ description: 'Inspection', hours: 1, source: 'Customer-provided estimate' }],
+        },
+      }],
+      usage: { input_tokens: 20, output_tokens: 10 },
+    },
+    {
+      content: [{ type: 'text', text: 'I prepared a draft for review.' }],
+      usage: { input_tokens: 30, output_tokens: 10 },
+    },
+  ];
+  const result = await runAnthropicTurn({
+    AI_ENABLED: '1',
+    ANTHROPIC_API_KEY: secret(),
+  }, {
+    shopId: 'shop-a',
+    message: 'Create the estimate and work order.',
+    fetcher: async () => Response.json(responses.shift()),
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].kind, 'estimate_work_order_draft');
+  assert.equal(result.actions[0].saved, false);
+});
+
+test('Deepgram transcription fails honestly without a configured key', async () => {
+  await assert.rejects(
+    () => transcribeDeepgramAudio({ AI_ENABLED: '1' }, new Uint8Array([1]).buffer),
+    /Voice transcription is not configured/,
+  );
+});
+
+test('Deepgram transcription returns provider text without exposing the key', async () => {
+  const apiKey = secret();
+  const result = await transcribeDeepgramAudio({
+    AI_ENABLED: '1',
+    DEEPGRAM_API_KEY: apiKey,
+    DEEPGRAM_LISTEN_MODEL: 'nova-test',
+  }, new Uint8Array([1, 2, 3]).buffer, {
+    contentType: 'audio/webm',
+    fetcher: async (url, init) => {
+      assert.match(url, /model=nova-test/);
+      assert.equal(init.headers.Authorization, `Token ${apiKey}`);
+      assert.equal(init.headers['Content-Type'], 'audio/webm');
+      return Response.json({
+        results: { channels: [{ alternatives: [{ transcript: 'Create an estimate.' }] }] },
+        metadata: { duration: 12.5 },
+      });
+    },
+  });
+  assert.equal(result.transcript, 'Create an estimate.');
+  assert.equal(result.voiceSeconds, 12.5);
+});
+
+test('audio reader accepts bounded streams and cancels oversized uploads', async () => {
+  const bytes = await readAudioWithinLimit(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2]));
+      controller.enqueue(new Uint8Array([3]));
+      controller.close();
+    },
+  }), 3);
+  assert.deepEqual([...new Uint8Array(bytes)], [1, 2, 3]);
+
+  let chunk = 0;
+  let cancelled = false;
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (chunk === 2) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(new Uint8Array(chunk++ === 0 ? 6 : 5));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await assert.rejects(() => readAudioWithinLimit(stream, 10), error => error.status === 413);
+  assert.equal(cancelled, true);
+});
+
+test('phone turns do not receive estimate preparation tools they cannot return', async () => {
+  let payload;
+  const result = await runAnthropicTurn({
+    AI_ENABLED: '1',
+    ANTHROPIC_API_KEY: secret(),
+  }, {
+    shopId: 'shop-a',
+    message: 'Prepare an estimate.',
+    allowEstimatePreparation: false,
+    fetcher: async (_url, init) => {
+      payload = JSON.parse(init.body);
+      return Response.json({
+        content: [{ type: 'text', text: 'I cannot create a draft in this phone interaction.' }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  assert.equal(payload.tools.some(tool => tool.name === 'prepare_estimate_work_order'), false);
+  assert.match(payload.system, /cannot return structured drafts/);
+  assert.deepEqual(result.actions, []);
+});
+
 test('cost calculation leaves unknown rates null and applies configured markup', () => {
   assert.deepEqual(calculateTextCost({}, 'sonnet', 1000, 500), {
     providerCostUsd: null,
@@ -141,10 +323,12 @@ test('Deepgram settings use BYO Anthropic and do not expose the Deepgram credent
   const settings = buildDeepgramSettings({
     ANTHROPIC_API_KEY: anthropicSecret,
     DEEPGRAM_API_KEY: deepgramSecret,
-  }, [{ type: 'orders', id: 'RO-1', status: 'open' }]);
+  }, [{ type: 'orders', id: 'RO-1', status: 'open' }], { laborRate: 180, taxRate: 7 });
   assert.equal(settings.agent.think.provider.type, 'anthropic');
   assert.equal(settings.agent.think.endpoint.headers['x-api-key'], anthropicSecret);
   assert.match(settings.agent.think.prompt, /RO-1/);
+  assert.match(settings.agent.think.prompt, /\$180\.00 per labor hour, 7\.00% tax/);
+  assert.match(settings.agent.think.prompt, /cannot return structured drafts/);
   assert.doesNotMatch(JSON.stringify(settings), new RegExp(deepgramSecret));
 });
 
@@ -167,6 +351,9 @@ function assistantDb() {
             },
             async run() {
               return { success: true };
+            },
+            async all() {
+              return { results: [] };
             },
           };
         },
@@ -252,4 +439,42 @@ test('assistant feature flag fails closed before calling a provider', async (t) 
   assert.equal(response.status, 503);
   assert.match((await response.json()).message, /not enabled/);
   assert.equal(provider.mock.callCount(), 0);
+});
+
+test('successful audio transcription records shop-scoped Deepgram usage', async (t) => {
+  const DB = assistantDb();
+  const apiKey = secret();
+  const provider = t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.match(url, /^https:\/\/api\.deepgram\.com\/v1\/listen/);
+    assert.equal(init.headers.Authorization, `Token ${apiKey}`);
+    return Response.json({
+      results: { channels: [{ alternatives: [{ transcript: 'Create an estimate.' }] }] },
+      metadata: { duration: 30 },
+    });
+  });
+  const request = new Request('https://app.example.test/api/ai/transcribe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'audio/webm',
+      'X-MechPro-Dev-Email': 'admin@example.test',
+    },
+    body: new Uint8Array([1, 2, 3]),
+  });
+  const response = await worker.fetch(request, {
+    DB,
+    DEV_AUTH_BYPASS: '1',
+    AI_ENABLED: '1',
+    DEEPGRAM_API_KEY: apiKey,
+    DEEPGRAM_VOICE_USD_PER_MINUTE: '0.06',
+    AI_BILLING_MARKUP_MULTIPLIER: '2',
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).transcript, 'Create an estimate.');
+  assert.equal(provider.mock.callCount(), 1);
+  const usageInsert = DB.calls.find(call => /INSERT INTO ai_usage_events/.test(call.sql));
+  assert.ok(usageInsert);
+  assert.deepEqual(usageInsert.args.slice(1, 6), ['shop-a', 'local-development', 'voice', 'deepgram', 'nova-3']);
+  assert.equal(usageInsert.args[8], 30);
+  assert.equal(usageInsert.args[9], 0.03);
+  assert.equal(usageInsert.args[10], 0.06);
 });
