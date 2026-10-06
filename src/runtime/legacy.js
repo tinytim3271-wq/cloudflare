@@ -22,6 +22,7 @@ import {
   approvedEstimate,
   billableEstimateLines,
   calculateEstimate,
+  estimatePartPriceStatus,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
   laborLinePrintRows,
@@ -1642,7 +1643,7 @@ estimateFromEditor = function (root) {
       inventoryId: inventory?.id || null,
       inventorySku: inventory?.sku || "",
       committedQuantity: type === "part" && inventory ? quantity : 0,
-      priceStatus: row.dataset.priceStatus || "priced",
+      priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
       laborSource: row.dataset.laborSource || "",
       technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
     }, index);
@@ -1666,11 +1667,13 @@ refreshEstimateEditor = function (root) {
     const type = row.querySelector(".job-line-type").value;
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
+    row.dataset.priceStatus = priceStatus;
     row.querySelector(".job-inventory-field").hidden = type !== "part";
     row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
     row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
-    row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money(quantity * rate);
+    row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money(quantity * rate);
   });
   const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
   const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;

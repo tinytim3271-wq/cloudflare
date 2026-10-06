@@ -2871,6 +2871,9 @@ button{margin-top:12px;padding:8px 14px}
     const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
     return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
   }
+  function estimatePartPriceStatus(previousStatus, unitPrice) {
+    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
+  }
   function normalizeEstimateLine(line = {}, index = 0) {
     const type = line.type === "part" ? "part" : "labor";
     const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
@@ -9070,7 +9073,7 @@ ${catRows}
             inventoryId: inventory?.id || null,
             inventorySku: inventory?.sku || "",
             committedQuantity: type === "part" && inventory ? quantity : 0,
-            priceStatus: row.dataset.priceStatus || "priced",
+            priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
             technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
           }, index);
@@ -9093,11 +9096,13 @@ ${catRows}
           const type = row.querySelector(".job-line-type").value;
           const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
           const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+          const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
+          row.dataset.priceStatus = priceStatus;
           row.querySelector(".job-inventory-field").hidden = type !== "part";
           row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
           row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
           row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
-          row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money3(quantity * rate);
+          row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money3(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;

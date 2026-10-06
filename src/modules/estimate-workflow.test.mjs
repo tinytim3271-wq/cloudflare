@@ -5,6 +5,7 @@ import {
   billableEstimateLines,
   calculateEstimate,
   declinedEstimate,
+  estimatePartPriceStatus,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
   laborLinePrintRows,
@@ -172,6 +173,13 @@ test('line normalization uses quantity pricing for parts', () => {
   assert.equal(line.total, 246.9);
   assert.equal(line.hours, 0);
   assert.equal(line.partNumber, 'BAT-48');
+  assert.equal(normalizeEstimateLine({ type: 'labor', hours: 1, laborRate: 0 }).laborRate, 0);
+});
+
+test('a pending part becomes priced when a positive price is entered', () => {
+  assert.equal(estimatePartPriceStatus('pending', 0), 'pending');
+  assert.equal(estimatePartPriceStatus('pending', 12.5), 'priced');
+  assert.equal(estimatePartPriceStatus('priced', 0), 'priced');
 });
 
 test('editing approved work order lines recalculates totals and requires renewed approval', () => {
@@ -249,7 +257,9 @@ test('technicians assigned on labor lines can access the work order', () => {
   assert.equal(orderHasTechnician(order, { id: 'tech-2' }), true);
   assert.equal(orderHasTechnician(order, { id: 'tech-3' }), false);
   assert.equal(orderHasTechnician(order, { name: 'Legacy technician' }), true);
+  assert.equal(orderHasTechnician(order, { techName: 'Legacy technician' }), true);
   assert.equal(orderHasTechnician(order, { id: 'other' }), false);
+  assert.equal(orderHasTechnician({}, {}), false);
 });
 
 test('printed job card expands each labor line to one row per technician', () => {

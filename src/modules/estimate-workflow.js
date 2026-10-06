@@ -20,8 +20,13 @@ export function normalizeTechnicianIds(line = {}) {
   return [...new Set(source.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
+export function estimatePartPriceStatus(previousStatus, unitPrice) {
+  return previousStatus === 'pending' && Number(unitPrice) <= 0 ? 'pending' : 'priced';
+}
+
 export function orderHasTechnician(order = {}, technician = {}) {
-  if (technician.name && order.tech === technician.name) return true;
+  const names = [technician.name, technician.techName].filter(Boolean);
+  if (order.tech && names.includes(order.tech)) return true;
   const id = String(technician.id || '');
   return Boolean(id && (order.estimate?.lines || []).some(line => (
     line.type === 'labor' && normalizeTechnicianIds(line).includes(id)
