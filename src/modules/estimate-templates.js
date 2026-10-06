@@ -2,11 +2,12 @@ import { calculateEstimate, normalizeEstimateLine, SHOP_ESTIMATE_RULES } from '.
 
 export { SHOP_ESTIMATE_RULES };
 
+const REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
 const money = value => Math.round((Number(value) || 0) * 100) / 100;
 
 export function calculateShopEstimate(lines = [], {
-  taxRate = SHOP_ESTIMATE_RULES.taxRate,
-  laborRate = SHOP_ESTIMATE_RULES.laborRate,
+  taxRate = 0,
+  laborRate = 0,
   discountPercent = 0,
   discountReason = '',
   shopSupplies,
@@ -113,14 +114,14 @@ const referenceLines = [
     description: 'Collision component replacement labor',
     notes: '5.3 hours from Open Labor Project estimates for this vehicle: fender 3.7, headlamp 0.9, and one fender liner 0.7. These are not ALLDATA or Mitchell times, are not copied from a labor guide, and are not expert-verified.',
     hours: 5.3,
-    laborRate: 140,
+    laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
     laborSource: 'Open Labor Project estimate',
   },
 ];
 
 const referenceTotals = calculateShopEstimate(referenceLines, {
-  laborRate: 140,
-  taxRate: 8.25,
+  laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
+  taxRate: REFERENCE_ESTIMATE_RULES.taxRate,
   discountPercent: 10,
   discountReason: 'Tech-student discount',
   shopSupplies: 20,
@@ -174,7 +175,7 @@ export const REFERENCE_ESTIMATE = Object.freeze({
   ...referenceTotals,
 });
 
-export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
+export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE, pricing = {}) {
   const customer = typeof estimate.customer === 'object' ? estimate.customer : { name: estimate.customer };
   const vehicle = typeof estimate.vehicle === 'object' ? estimate.vehicle : { description: estimate.vehicle };
   const insurance = estimate.insurance || {};
@@ -202,8 +203,8 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
     complaint: complaintParts.join('\n'),
     requestedServices: (estimate.requestedServices || (estimate.lines || []).map(line => line.description)).join('\n'),
     estimate: calculateShopEstimate(estimate.lines || [], {
-      taxRate: estimate.taxRate,
-      laborRate: estimate.laborRate,
+      taxRate: estimate.taxRate ?? pricing.taxRate ?? 0,
+      laborRate: estimate.laborRate ?? pricing.laborRate ?? 0,
       discountPercent: estimate.discountPercent,
       discountReason: estimate.discountReason,
       shopSupplies: estimate.fees?.find(fee => fee.description === 'Shop supplies')?.amount,
@@ -217,7 +218,7 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
 
 export function estimateFromAssistantDraft(action = {}, pricing = {}) {
   const draft = action.draft || action;
-  const laborRate = Math.max(0, Number(pricing.laborRate ?? SHOP_ESTIMATE_RULES.laborRate) || 0);
+  const laborRate = Math.max(0, Number(pricing.laborRate) || 0);
   const partLines = (draft.parts || []).map((part, index) => ({
     id: `assistant-part-${index + 1}`,
     type: 'part',
@@ -239,7 +240,7 @@ export function estimateFromAssistantDraft(action = {}, pricing = {}) {
   }));
   const totals = calculateShopEstimate([...partLines, ...laborLines], {
     laborRate,
-    taxRate: pricing.taxRate ?? SHOP_ESTIMATE_RULES.taxRate,
+    taxRate: pricing.taxRate ?? 0,
     discountPercent: draft.discountPercent,
     discountReason: draft.discountReason,
     shopSupplies: pricing.shopSupplies,

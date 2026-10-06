@@ -2437,6 +2437,15 @@
     const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
     return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
   }
+  function estimatePartPriceStatus(previousStatus, unitPrice) {
+    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
+  }
+  function orderHasTechnician(order = {}, technician = {}) {
+    const names = [technician.name, technician.techName].filter(Boolean);
+    if (order.tech && names.includes(order.tech)) return true;
+    const id = String(technician.id || "");
+    return Boolean(id && (order.estimate?.lines || []).some((line) => line.type === "labor" && normalizeTechnicianIds(line).includes(id)));
+  }
   function normalizeEstimateLine(line = {}, index = 0) {
     const type = line.type === "part" ? "part" : "labor";
     const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
@@ -2467,11 +2476,12 @@
     ]));
     return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
       const technicianIds = normalizeTechnicianIds(line);
-      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: "Unassigned" }];
-      return technicianIds.map((technicianId) => ({
+      const assignments = !technicianIds.length ? [null] : technicianIds;
+      return assignments.map((technicianId, index) => ({
         line,
         technicianId,
-        technicianName: names.get(technicianId) || "Technician unavailable"
+        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
+        lineTotal: index === 0 ? line.total : null
       }));
     });
   }
@@ -2624,8 +2634,6 @@
     "src/modules/estimate-workflow.js"() {
       roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       SHOP_ESTIMATE_RULES = Object.freeze({
-        laborRate: 140,
-        taxRate: 8.25,
         shopSuppliesRate: 3,
         shopSuppliesCap: 20
       });
@@ -2634,12 +2642,16 @@
 
   // src/modules/estimate-templates.js
   function calculateShopEstimate(lines = [], {
-    taxRate = SHOP_ESTIMATE_RULES.taxRate,
+    taxRate = 0,
+    laborRate = 0,
     discountPercent = 0,
     discountReason = "",
     shopSupplies
   } = {}) {
-    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(
+      line.type === "labor" && line.laborRate == null ? { ...line, laborRate } : line,
+      index
+    ));
     const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
     const automaticSupplies = Math.min(
       SHOP_ESTIMATE_RULES.shopSuppliesCap,
@@ -2668,7 +2680,7 @@
       total: money(subtotal + tax)
     };
   }
-  function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
+  function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE, pricing = {}) {
     const customer = typeof estimate.customer === "object" ? estimate.customer : { name: estimate.customer };
     const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { description: estimate.vehicle };
     const insurance = estimate.insurance || {};
@@ -2676,9 +2688,8 @@
     const complaintParts = [
       `Claimant: ${customer.name || "Not provided"}.`,
       estimate.complaint,
-      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number not yet assigned.` : "",
-      laborSource ? `Labor source: ${laborSource}` : "",
-      ...(estimate.shopNotes || []).map((note) => `Shop note: ${note}`)
+      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number ${insurance.claimNumber || "not yet assigned"}.` : "",
+      laborSource ? `Labor source: ${laborSource}` : ""
     ].filter(Boolean);
     return {
       sourceEstimateNumber: estimate.number || "",
@@ -2691,18 +2702,21 @@
       complaint: complaintParts.join("\n"),
       requestedServices: (estimate.requestedServices || (estimate.lines || []).map((line) => line.description)).join("\n"),
       estimate: calculateShopEstimate(estimate.lines || [], {
-        taxRate: estimate.taxRate,
+        taxRate: estimate.taxRate ?? pricing.taxRate ?? 0,
+        laborRate: estimate.laborRate ?? pricing.laborRate ?? 0,
         discountPercent: estimate.discountPercent,
         discountReason: estimate.discountReason,
         shopSupplies: estimate.fees?.find((fee) => fee.description === "Shop supplies")?.amount
       }),
       exclusions: estimate.exclusions || [],
       insurance,
+      shopNotes: (estimate.shopNotes || []).map(String),
       plate: vehicle.plate || ""
     };
   }
-  function estimateFromAssistantDraft(action = {}) {
+  function estimateFromAssistantDraft(action = {}, pricing = {}) {
     const draft = action.draft || action;
+    const laborRate = Math.max(0, Number(pricing.laborRate) || 0);
     const partLines = (draft.parts || []).map((part, index) => ({
       id: `assistant-part-${index + 1}`,
       type: "part",
@@ -2719,12 +2733,15 @@
       description: String(labor.description || "Labor"),
       notes: String(labor.notes || labor.source || ""),
       hours: Math.max(0, Number(labor.hours) || 0),
-      laborRate: SHOP_ESTIMATE_RULES.laborRate,
+      laborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
     const totals = calculateShopEstimate([...partLines, ...laborLines], {
+      laborRate,
+      taxRate: pricing.taxRate ?? 0,
       discountPercent: draft.discountPercent,
-      discountReason: draft.discountReason
+      discountReason: draft.discountReason,
+      shopSupplies: pricing.shopSupplies
     });
     return {
       id: `assistant-estimate-${Date.now()}`,
@@ -2749,10 +2766,11 @@
       ...totals
     };
   }
-  var money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
+  var REFERENCE_ESTIMATE_RULES, money, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
   var init_estimate_templates = __esm({
     "src/modules/estimate-templates.js"() {
       init_estimate_workflow();
+      REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
       money = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       referenceLines = [
         {
@@ -2819,11 +2837,13 @@
           description: "Collision component replacement labor",
           notes: "5.3 hours from Open Labor Project estimates for this vehicle: fender 3.7, headlamp 0.9, and one fender liner 0.7. These are not ALLDATA or Mitchell times, are not copied from a labor guide, and are not expert-verified.",
           hours: 5.3,
-          laborRate: SHOP_ESTIMATE_RULES.laborRate,
+          laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
           laborSource: "Open Labor Project estimate"
         }
       ];
       referenceTotals = calculateShopEstimate(referenceLines, {
+        laborRate: REFERENCE_ESTIMATE_RULES.laborRate,
+        taxRate: REFERENCE_ESTIMATE_RULES.taxRate,
         discountPercent: 10,
         discountReason: "Tech-student discount",
         shopSupplies: 20
@@ -2844,7 +2864,7 @@
         },
         vehicle: {
           description: "2016 Mercedes-Benz GLA250",
-          vin: "DEMO-VEHICLE-VIN",
+          vin: "1M8GDM9AXKP042788",
           plate: "DEMO-01"
         },
         insurance: {
@@ -3113,8 +3133,8 @@
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
-    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]));
+    const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES2.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate2(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]));
     return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
   function guideLocal(vehicle, repair) {
@@ -3753,7 +3773,7 @@
   }
   function visibleOrders() {
     const user = currentUser();
-    return user?.role === "technician" ? state.orders.filter((order) => order.tech === user.techName) : state.orders;
+    return user?.role === "technician" ? state.orders.filter((order) => orderHasTechnician(order, user)) : state.orders;
   }
   function weekPeriod(date = /* @__PURE__ */ new Date()) {
     const day = date.getDay(), monday = new Date(date);
@@ -3775,19 +3795,45 @@
     return state.users.find((user) => user.techName === name && user.active);
   }
   function syncPayroll(order) {
-    if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return;
-    const employee = employeeByTech(order.tech);
-    if (!employee) return;
-    const hours = Number(order.laborHours ?? Number(order.labor || 0) / 165);
-    if (!hours) return;
-    const period = weekPeriod(), entry = state.payrollEntries.find((item) => item.workOrderId === order.id);
-    const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() };
-    if (entry) {
-      Object.assign(entry, line);
-      updatePayrollEntryInApi(entry);
-    } else {
-      state.payrollEntries.push(line);
-      pushPayrollEntryToApi(line);
+    if (!["completed", "invoiced"].includes(order.status)) return;
+    const lines = (order.estimate?.lines || []).filter((line) => line.type === "labor");
+    const assigned = /* @__PURE__ */ new Map();
+    for (const line of lines) {
+      for (const id of normalizeTechnicianIds(line)) {
+        assigned.set(id, (assigned.get(id) || 0) + Number(line.hours || 0));
+      }
+    }
+    if (order.tech && order.tech !== "Unassigned") {
+      const employee = employeeByTech(order.tech);
+      if (employee && !assigned.has(employee.id)) {
+        assigned.set(employee.id, Number(order.laborHours ?? Number(order.labor || 0) / 165));
+      }
+    }
+    const period = weekPeriod();
+    for (const [employeeId, hours] of assigned) {
+      const employee = state.users.find((user) => user.id === employeeId && user.active);
+      if (!employee || !hours) continue;
+      const entry = state.payrollEntries.find((item) => item.workOrderId === order.id && item.employeeId === employee.id);
+      const line = {
+        id: entry?.id || `payroll-${order.id}-${employee.id}`,
+        workOrderId: order.id,
+        employeeId: employee.id,
+        periodKey: period.key,
+        roNumber: order.id,
+        customer: order.customer,
+        vehicle: order.vehicle,
+        hours,
+        rate: Number(employee.payRate || 0),
+        amount: hours * Number(employee.payRate || 0),
+        completedAt: now()
+      };
+      if (entry) {
+        Object.assign(entry, line);
+        updatePayrollEntryInApi(entry);
+      } else {
+        state.payrollEntries.push(line);
+        pushPayrollEntryToApi(line);
+      }
     }
   }
   function syncAllPayroll() {
@@ -3834,7 +3880,7 @@
   }
   function startJobClock(workOrderId) {
     const order = state.orders.find((item) => item.id === workOrderId), user = currentUser();
-    if (!order || user.role !== "technician" || order.tech !== user.techName) {
+    if (!order || user.role !== "technician" || !orderHasTechnician(order, user)) {
       toast("Only the assigned technician can clock this job");
       return;
     }
@@ -5784,6 +5830,21 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const stored = state.shopSettingsRecords.find((item) => item.id === "profile") || {}, themeMode = ["device", "light", "dark"].includes(stored.themeMode) ? stored.themeMode : "device";
     return { ...shopProfileDefaults, ...stored, logoUrl: safeHttpUrl(stored.logoUrl) || shopProfileDefaults.logoUrl, brandColor: safeHexColor(stored.brandColor, shopProfileDefaults.brandColor), accentColor: safeHexColor(stored.accentColor, shopProfileDefaults.accentColor), themeMode, coupons: normalizedCoupons(stored.coupons), defaultVendor: String(stored.defaultVendor || ""), defaultVendorByKind: stored.defaultVendorByKind && typeof stored.defaultVendorByKind === "object" ? stored.defaultVendorByKind : {} };
   }
+  function currentShopPricing() {
+    return {
+      laborRate: Number(shopProfile().laborRate ?? 0),
+      taxRate: state.taxSettings.rate
+    };
+  }
+  function calculateShopEstimate2(lines, pricing = {}) {
+    const defaults = currentShopPricing();
+    return calculateShopEstimate(lines, {
+      ...defaults,
+      ...pricing,
+      laborRate: pricing.laborRate ?? defaults.laborRate,
+      taxRate: pricing.taxRate ?? defaults.taxRate
+    });
+  }
   function shopMileageRate() {
     return normalizeMileageRate(shopProfile().mileageRate);
   }
@@ -6673,7 +6734,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
     const billableLines = billableEstimateLines(estimate.lines);
     const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
-    const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money2(line.laborRate)}</td><td>${money2(line.total)}</td></tr>`).join("");
+    const laborRows = technicianRows.map(({ line, technicianName: name, lineTotal }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money2(line.laborRate)}</td><td>${lineTotal == null ? "" : money2(lineTotal)}</td></tr>`).join("");
     const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money2(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
     const win = window.open("", "_blank");
@@ -6750,7 +6811,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function normalizedEstimateSource(estimate) {
     if (!estimate) return null;
-    const totals = calculateShopEstimate(expandedEstimateLines(estimate), {
+    const totals = calculateShopEstimate2(expandedEstimateLines(estimate), {
       taxRate: estimate.taxRate ?? state.taxSettings.rate,
       discountPercent: estimate.discountPercent,
       discountReason: estimate.discountReason,
@@ -6762,11 +6823,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (!estimate) return;
     const totals = normalizedEstimateSource(estimate);
     showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
-    document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals));
+    document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals, currentShopPricing()));
   }
   function addEstimateSourceControls(form) {
     const body = form.querySelector(".modal-body");
     if (!body || document.querySelector("#estimate-source-picker")) return;
+    body.querySelector(".form-grid").insertAdjacentHTML("beforeend", `<label>Email<input name="email" type="email"/></label><label class="full">Address<input name="address"/></label><label>Vehicle plate<input name="plate"/></label><input name="internalNotes" type="hidden"/>`);
     const options = availableEstimateSources().map((estimate) => `<option value="${escapeAttr(estimate.id)}">${escapeHtml(estimate.number || "Saved draft")} \xB7 ${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer || "Customer")}</option>`).join("");
     body.insertAdjacentHTML("afterbegin", `<section class="estimate-fill-panel"><div><div class="eyebrow">Optional estimate fill</div><h3>Start from a completed estimate</h3><p>A blank order stays blank. Choose an estimate and apply it only when it belongs to this customer.</p></div><div><select id="estimate-source-picker"><option value="">Select an estimate\u2026</option>${options}</select><button type="button" class="secondary" id="apply-estimate-source">${icon("clipboard-plus", 14)} Fill fields</button></div></section>`);
     const estimator = form.querySelector(".new-order-estimator");
@@ -6774,7 +6836,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     form.querySelectorAll("[name=shopSupplies],[name=estimateDiscount],[name=estimateDiscountReason]").forEach((input) => input.addEventListener("input", () => refreshEstimateEditor(form.querySelector("#new-estimate-lines"))));
     document.querySelector("#apply-estimate-source").onclick = () => {
       const estimate = estimateSourceById(document.querySelector("#estimate-source-picker").value);
-      if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+      if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate), currentShopPricing()));
     };
   }
   function applyWorkOrderDraftToForm(form, draft) {
@@ -6784,10 +6846,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     customerSelect.dispatchEvent(new Event("change"));
     if (!option) form.elements.customer.value = draft.customer;
     form.elements.phone.value = draft.phone || "";
+    form.elements.email.value = draft.email || "";
+    form.elements.address.value = draft.address || "";
     form.elements.vehicleSelect.value = "";
     form.elements.vehicle.value = draft.vehicle || "";
     form.elements.vehicle.readOnly = false;
     form.elements.vin.value = draft.vin || "";
+    form.elements.plate.value = draft.plate || "";
+    form.elements.internalNotes.value = (draft.shopNotes || []).join("\n");
     form.elements.complaint.value = draft.complaint || "";
     form.elements.requestedServices.value = draft.requestedServices || "";
     const root = form.querySelector("#new-estimate-lines");
@@ -6814,7 +6880,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
   }
   async function saveAssistantDraft(action) {
-    const estimate = estimateFromAssistantDraft(action);
+    const estimate = estimateFromAssistantDraft(action, currentShopPricing());
     const number = `EST-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
     const record = {
       ...estimate,
@@ -6832,8 +6898,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       vin: estimate.vehicle.vin,
       plate: estimate.vehicle.plate
     };
-    state.estimates.push(record);
-    await pushEstimateToApi(record);
+    const saved = await apiFetch("/entities/estimates", {
+      method: "POST",
+      body: JSON.stringify(record)
+    });
+    state.estimates.push(saved?.queued ? record : saved || record);
     save();
     closeModal();
     openNewWithDraft(workOrderDraftFromEstimate({
@@ -6841,7 +6910,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       number,
       customer: estimate.customer,
       vehicle: estimate.vehicle
-    }));
+    }, currentShopPricing()));
   }
   function bindAssistantDraftActions() {
     document.querySelectorAll("[data-assistant-draft]").forEach((button) => {
@@ -6988,7 +7057,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, SHOP_ESTIMATE_RULES2, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, pushDraftCustomerCore, pushDraftOrderCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -7304,6 +7373,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         });
       };
       shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      SHOP_ESTIMATE_RULES2 = new Proxy(SHOP_ESTIMATE_RULES, {
+        get(rules, key) {
+          return key === "laborRate" ? Number(shopProfile().laborRate ?? 0) : rules[key];
+        }
+      });
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
@@ -7907,7 +7981,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
         const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const supplies = estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount;
+        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${supplies == null ? "" : supplies}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money2(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -7984,6 +8059,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           try {
             const saved = !isOfflineDesktop() && !isLocalShell() ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) }) : order;
             state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
+            syncPayroll(order);
             save();
             closeModal();
             toast(`${order.id} technician assignments saved`);
@@ -8082,8 +8158,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate ?? Number(shopProfile().laborRate ?? 140)}"/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money2(item.total)}</b></div>
   </article>`;
@@ -8099,6 +8176,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             type,
             description: row.querySelector(".job-line-description").value.trim(),
             notes: row.querySelector(".job-line-notes").value.trim(),
+            partNumber: type === "part" ? row.querySelector(".job-line-part-number").value.trim() : "",
             quantity,
             unitPrice,
             hours: type === "labor" ? quantity : 0,
@@ -8106,14 +8184,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
             inventoryId: inventory?.id || null,
             inventorySku: inventory?.sku || "",
             committedQuantity: type === "part" && inventory ? quantity : 0,
-            priceStatus: row.dataset.priceStatus || "priced",
+            priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
             technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
           }, index);
         }).filter((line) => line.description && line.quantity > 0);
         const form = root.closest("form");
         const suppliesValue = form?.querySelector("[name=shopSupplies]")?.value ?? root.dataset.shopSupplies;
-        const estimate = calculateShopEstimate(lines, {
+        const estimate = calculateShopEstimate2(lines, {
           taxRate: state.taxSettings.rate,
           discountPercent: form?.querySelector("[name=estimateDiscount]")?.value ?? root.dataset.discountPercent,
           discountReason: form?.querySelector("[name=estimateDiscountReason]")?.value ?? root.dataset.discountReason,
@@ -8129,11 +8207,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           const type = row.querySelector(".job-line-type").value;
           const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
           const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+          const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
           row.querySelector(".job-inventory-field").hidden = type !== "part";
+          row.querySelector(".job-part-number-field").hidden = type !== "part";
           row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
           row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
           row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
-          row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money2(quantity * rate);
+          row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money2(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
@@ -8143,7 +8223,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       };
       coherentOrderEstimate = function(order) {
         const source = order.estimate || {};
-        const estimate = calculateShopEstimate(expandedEstimateLines(source), {
+        const estimate = calculateShopEstimate2(expandedEstimateLines(source), {
           taxRate: source.taxRate ?? state.taxSettings.rate,
           discountPercent: source.discountPercent,
           discountReason: source.discountReason,
@@ -8158,6 +8238,39 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           exclusions: source.exclusions || order.exclusions || [],
           insurance: source.insurance || order.insurance || {}
         };
+      };
+      pushDraftCustomerCore = pushCustomerToApi;
+      pushCustomerToApi = async function(record) {
+        const form = document.querySelector("#new-form");
+        if (form && form.elements.customer.value.trim().toLowerCase() === String(record.name || "").trim().toLowerCase()) {
+          record.email = form.elements.email.value.trim() || record.email;
+          record.address = form.elements.address.value.trim() || record.address;
+        }
+        return pushDraftCustomerCore(record);
+      };
+      pushDraftOrderCore = pushOrderToApi;
+      pushOrderToApi = async function(record) {
+        const form = document.querySelector("#new-form");
+        if (form) {
+          record.email = form.elements.email.value.trim();
+          record.address = form.elements.address.value.trim();
+          record.plate = form.elements.plate.value.trim();
+          record.internalNotes = form.elements.internalNotes.value.trim();
+          record.customerDetails = {
+            ...record.customerDetails || {},
+            name: record.customer,
+            phone: record.phone || "",
+            email: record.email,
+            address: record.address
+          };
+          record.vehicleDetails = {
+            ...record.vehicleDetails || {},
+            description: record.vehicle,
+            vin: record.vin === "VIN pending" ? "" : record.vin,
+            plate: record.plate
+          };
+        }
+        return pushDraftOrderCore(record);
       };
       openNewEstimateFillCore = openNew;
       openNew = function() {
@@ -8256,7 +8369,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         document.querySelectorAll("[data-preview-estimate]").forEach((button) => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
         document.querySelectorAll("[data-fill-estimate]").forEach((button) => button.onclick = () => {
           const estimate = estimateSourceById(button.dataset.fillEstimate);
-          if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+          if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate), currentShopPricing()));
         });
       };
       recordPayment = function(invoiceNumber, method = "cash") {

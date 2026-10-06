@@ -44,12 +44,20 @@ test('reference work-order fill is explicit data and preserves sensitive shop no
   assert.equal(draft.customer, 'Jordan Example');
   assert.equal(draft.vehicle, '2016 Mercedes-Benz GLA250');
   assert.match(draft.vin, /^[A-HJ-NPR-Z0-9]{17}$/);
+  assert.equal(draft.email, 'customer@example.test');
+  assert.equal(draft.address, '123 Example Street, Sample City, TX 00000');
+  assert.equal(draft.plate, 'DEMO-01');
   assert.equal(draft.estimate.total, 2072.02);
   assert.match(draft.complaint, /Open Labor Project/);
   assert.doesNotMatch(draft.complaint, /Obtain written authorization/);
   assert.match(draft.shopNotes.join('\n'), /Obtain written authorization/);
   assert.equal(REFERENCE_ESTIMATE.customer.email, 'customer@example.test');
   assert.equal(REFERENCE_ESTIMATE.insurance.policy, 'TEST-POLICY-001');
+  const claimedDraft = workOrderDraftFromEstimate({
+    ...REFERENCE_ESTIMATE,
+    insurance: { ...REFERENCE_ESTIMATE.insurance, claimNumber: 'CLAIM-2046' },
+  });
+  assert.match(claimedDraft.complaint, /claim number CLAIM-2046/);
   assert.equal('dob' in REFERENCE_ESTIMATE.customer, false);
   assert.equal('driverLicense' in REFERENCE_ESTIMATE.customer, false);
 });
@@ -68,7 +76,19 @@ test('assistant estimate conversion uses shop-specific labor and tax pricing', (
   assert.equal(estimate.total, 298.47);
 });
 
-test('assistant draft totals are recomputed with shop rules instead of trusting model totals', () => {
+test('work-order conversion applies current shop pricing when estimate lines have no rate', () => {
+  const draft = workOrderDraftFromEstimate({
+    customer: { name: 'Caller' },
+    vehicle: { description: '2020 Example' },
+    lines: [{ type: 'labor', description: 'Inspection', hours: 1 }],
+  }, { laborRate: 175, taxRate: 6.5 });
+
+  assert.equal(draft.estimate.labor, 175);
+  assert.equal(draft.estimate.taxRate, 6.5);
+  assert.equal(draft.estimate.total, 191.97);
+});
+
+test('assistant draft totals use supplied shop pricing instead of model totals', () => {
   const estimate = estimateFromAssistantDraft({
     draft: {
       customer: { name: 'Caller' },
@@ -79,7 +99,7 @@ test('assistant draft totals are recomputed with shop rules instead of trusting 
       labor: [{ description: 'Inspection', hours: 1, source: 'Caller estimate' }],
       total: 1,
     },
-  });
+  }, { laborRate: 140, taxRate: 8.25 });
 
   assert.equal(estimate.labor, 140);
   assert.equal(estimate.parts, 100);

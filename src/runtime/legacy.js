@@ -21,17 +21,19 @@ import {
   approvedEstimate,
   billableEstimateLines,
   calculateEstimate,
+  estimatePartPriceStatus,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
   laborLinePrintRows,
   normalizeEstimateLine,
   normalizeTechnicianIds,
+  orderHasTechnician,
   workOrderWithEditedEstimate,
 } from '../modules/estimate-workflow.js';
 import {
   REFERENCE_ESTIMATE,
-  SHOP_ESTIMATE_RULES,
-  calculateShopEstimate,
+  SHOP_ESTIMATE_RULES as DEFAULT_SHOP_ESTIMATE_RULES,
+  calculateShopEstimate as calculateShopEstimateWithDefaults,
   estimateFromAssistantDraft,
   workOrderDraftFromEstimate,
 } from '../modules/estimate-templates.js';
@@ -273,12 +275,53 @@ const roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Tec
 const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
 function currentUser() { const session = authSession(); if (!session || !desktopEntitlementVerified) return null; const email = String(session.claims.email || "").trim().toLowerCase(); const profile = state.users.find(user => user.id === state.currentUserId && user.active && user.email.toLowerCase() === email) || null; if (!profile) return null; const jwtRole = sessionClaimRole(session.claims); return jwtRole && jwtRole !== profile.role ? { ...profile, role: jwtRole } : profile }
 function canAccess(route) { return !!currentUser() && roleRoutes[currentUser().role].includes(route) }
-function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => order.tech === user.techName) : state.orders }
+function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => orderHasTechnician(order, user)) : state.orders }
 function weekPeriod(date = new Date()) { const day = date.getDay(), monday = new Date(date); monday.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); monday.setHours(0, 0, 0, 0); const friday = new Date(monday); friday.setDate(monday.getDate() + 4); return { key: monday.toISOString().slice(0, 10), start: monday.toLocaleDateString("en-US", { month: "short", day: "numeric" }), end: friday.toLocaleDateString("en-US", { month: "short", day: "numeric" }) } }
 function shopDayLabel(date = new Date()) { return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) }
 function relativePromiseHint() { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); return `Tomorrow, ${tomorrow.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }
 function employeeByTech(name) { return state.users.find(user => user.techName === name && user.active) }
-function syncPayroll(order) { if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return; const employee = employeeByTech(order.tech); if (!employee) return; const hours = Number(order.laborHours ?? (Number(order.labor || 0) / 165)); if (!hours) return; const period = weekPeriod(), entry = state.payrollEntries.find(item => item.workOrderId === order.id); const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() }; if (entry) { Object.assign(entry, line); updatePayrollEntryInApi(entry) } else { state.payrollEntries.push(line); pushPayrollEntryToApi(line) } }
+function syncPayroll(order) {
+  if (!["completed", "invoiced"].includes(order.status)) return;
+  const lines = (order.estimate?.lines || []).filter(line => line.type === "labor");
+  const assigned = new Map();
+  for (const line of lines) {
+    for (const id of normalizeTechnicianIds(line)) {
+      assigned.set(id, (assigned.get(id) || 0) + Number(line.hours || 0));
+    }
+  }
+  if (order.tech && order.tech !== "Unassigned") {
+    const employee = employeeByTech(order.tech);
+    if (employee && !assigned.has(employee.id)) {
+      assigned.set(employee.id, Number(order.laborHours ?? (Number(order.labor || 0) / 165)));
+    }
+  }
+  const period = weekPeriod();
+  for (const [employeeId, hours] of assigned) {
+    const employee = state.users.find(user => user.id === employeeId && user.active);
+    if (!employee || !hours) continue;
+    const entry = state.payrollEntries.find(item => item.workOrderId === order.id && item.employeeId === employee.id);
+    const line = {
+      id: entry?.id || `payroll-${order.id}-${employee.id}`,
+      workOrderId: order.id,
+      employeeId: employee.id,
+      periodKey: period.key,
+      roNumber: order.id,
+      customer: order.customer,
+      vehicle: order.vehicle,
+      hours,
+      rate: Number(employee.payRate || 0),
+      amount: hours * Number(employee.payRate || 0),
+      completedAt: now(),
+    };
+    if (entry) {
+      Object.assign(entry, line);
+      updatePayrollEntryInApi(entry);
+    } else {
+      state.payrollEntries.push(line);
+      pushPayrollEntryToApi(line);
+    }
+  }
+}
 function syncAllPayroll() { state.orders.forEach(syncPayroll); save() }
 function now() { return new Date().toISOString() }
 function openShift(userId = currentUser()?.id) { return state.shiftEntries.find(entry => entry.userId === userId && !entry.clockOut) }
@@ -288,7 +331,7 @@ function formatTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "
 function formatHours(hours) { return `${Number(hours || 0).toFixed(2)} hr` }
 function jobTrackedHours(workOrderId) { return state.jobClockEntries.filter(entry => entry.workOrderId === workOrderId && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }
 function toggleShift() { const user = currentUser(), shift = openShift(user.id); if (shift) { shift.clockOut = now(); shift.hours = hoursBetween(shift.clockIn, shift.clockOut); updateShiftEntryInApi(shift); toast(`Shift clocked out: ${formatHours(shift.hours)}`) } else { const entry = { id: `shift-${Date.now()}`, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.shiftEntries.push(entry); pushShiftEntryToApi(entry); toast("Shift clocked in") }; save(); render() }
-function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || order.tech !== user.techName) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
+function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || !orderHasTechnician(order, user)) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
 function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
 function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
@@ -516,6 +559,28 @@ function safeHexColor(value, fallback) { const color = String(value || "").trim(
 function safeHttpUrl(value) { const source = String(value || "").trim(); if (!source) return ""; try { const url = new URL(source, globalThis.location?.href || "https://local.invalid/"); return ["http:", "https:"].includes(url.protocol) ? url.href : "" } catch { return "" } }
 function normalizedCoupons(value) { return (Array.isArray(value) ? value : []).map(coupon => ({ id: String(coupon.id || `coupon-${Date.now()}`), code: String(coupon.code || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24), percent: Math.min(100, Math.max(0, Number(coupon.percent) || 0)), active: coupon.active !== false })).filter(coupon => coupon.code && coupon.percent > 0) }
 function shopProfile() { const stored = state.shopSettingsRecords.find(item => item.id === "profile") || {}, themeMode = ["device", "light", "dark"].includes(stored.themeMode) ? stored.themeMode : "device"; return { ...shopProfileDefaults, ...stored, logoUrl: safeHttpUrl(stored.logoUrl) || shopProfileDefaults.logoUrl, brandColor: safeHexColor(stored.brandColor, shopProfileDefaults.brandColor), accentColor: safeHexColor(stored.accentColor, shopProfileDefaults.accentColor), themeMode, coupons: normalizedCoupons(stored.coupons), defaultVendor: String(stored.defaultVendor || ""), defaultVendorByKind: stored.defaultVendorByKind && typeof stored.defaultVendorByKind === "object" ? stored.defaultVendorByKind : {} } }
+const SHOP_ESTIMATE_RULES = new Proxy(DEFAULT_SHOP_ESTIMATE_RULES, {
+  get(rules, key) {
+    return key === "laborRate"
+      ? Number(shopProfile().laborRate ?? 0)
+      : rules[key];
+  },
+});
+function currentShopPricing() {
+  return {
+    laborRate: Number(shopProfile().laborRate ?? 0),
+    taxRate: state.taxSettings.rate,
+  };
+}
+function calculateShopEstimate(lines, pricing = {}) {
+  const defaults = currentShopPricing();
+  return calculateShopEstimateWithDefaults(lines, {
+    ...defaults,
+    ...pricing,
+    laborRate: pricing.laborRate ?? defaults.laborRate,
+    taxRate: pricing.taxRate ?? defaults.taxRate,
+  });
+}
 
 function shopMileageRate() { return Mileage.normalizeMileageRate(shopProfile().mileageRate) }
 function bindWorkOrderMileage(rootSelector) {
@@ -1305,7 +1370,7 @@ function printJobCard(order) {
   const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
   const billableLines = billableEstimateLines(estimate.lines);
   const technicianRows = laborLinePrintRows(billableLines, state.users.map(user => ({ id: user.id, name: user.techName || user.name })));
-  const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.laborRate)}</td><td>${money(line.total)}</td></tr>`).join("");
+  const laborRows = technicianRows.map(({ line, technicianName: name, lineTotal }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.laborRate)}</td><td>${lineTotal == null ? "" : money(lineTotal)}</td></tr>`).join("");
   const partRows = billableLines.filter(line => line.type === "part").map(line => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
   const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
   const win = window.open("", "_blank");
@@ -1366,7 +1431,8 @@ openOrder = function (id) {
       : wasApproved
         ? "Saving creates a revision and clears the prior customer approval."
         : "Changes recalculate labor, parts, tax, and total before saving.";
-  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+  const supplies = estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount;
+  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${supplies == null ? "" : supplies}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -1430,6 +1496,7 @@ openOrder = function (id) {
         ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) })
         : order;
       state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
+      syncPayroll(order);
       save();
       closeModal();
       toast(`${order.id} technician assignments saved`);
@@ -1602,7 +1669,7 @@ function showEstimatePreview(estimate) {
   if (!estimate) return;
   const totals = normalizedEstimateSource(estimate);
   showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
-  document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals));
+  document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals, currentShopPricing()));
 }
 
 estimateEditorLine = function (line = {}, index = 0, removable = true) {
@@ -1614,8 +1681,9 @@ estimateEditorLine = function (line = {}, index = 0, removable = true) {
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || SHOP_ESTIMATE_RULES.laborRate}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate ?? Number(shopProfile().laborRate ?? 140)}"/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money(item.total)}</b></div>
   </article>`;
@@ -1632,6 +1700,7 @@ estimateFromEditor = function (root) {
       type,
       description: row.querySelector(".job-line-description").value.trim(),
       notes: row.querySelector(".job-line-notes").value.trim(),
+      partNumber: type === "part" ? row.querySelector(".job-line-part-number").value.trim() : "",
       quantity,
       unitPrice,
       hours: type === "labor" ? quantity : 0,
@@ -1639,7 +1708,7 @@ estimateFromEditor = function (root) {
       inventoryId: inventory?.id || null,
       inventorySku: inventory?.sku || "",
       committedQuantity: type === "part" && inventory ? quantity : 0,
-      priceStatus: row.dataset.priceStatus || "priced",
+      priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
       laborSource: row.dataset.laborSource || "",
       technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
     }, index);
@@ -1663,11 +1732,13 @@ refreshEstimateEditor = function (root) {
     const type = row.querySelector(".job-line-type").value;
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
+    const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
     row.querySelector(".job-inventory-field").hidden = type !== "part";
+    row.querySelector(".job-part-number-field").hidden = type !== "part";
     row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
     row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
-    row.querySelector(".job-line-total b").textContent = row.dataset.priceStatus === "pending" ? "Pending" : money(quantity * rate);
+    row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money(quantity * rate);
   });
   const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
   const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
@@ -1698,6 +1769,7 @@ coherentOrderEstimate = function (order) {
 function addEstimateSourceControls(form) {
   const body = form.querySelector(".modal-body");
   if (!body || document.querySelector("#estimate-source-picker")) return;
+  body.querySelector(".form-grid").insertAdjacentHTML("beforeend", `<label>Email<input name="email" type="email"/></label><label class="full">Address<input name="address"/></label><label>Vehicle plate<input name="plate"/></label><input name="internalNotes" type="hidden"/>`);
   const options = availableEstimateSources().map(estimate => `<option value="${escapeAttr(estimate.id)}">${escapeHtml(estimate.number || "Saved draft")} · ${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer || "Customer")}</option>`).join("");
   body.insertAdjacentHTML("afterbegin", `<section class="estimate-fill-panel"><div><div class="eyebrow">Optional estimate fill</div><h3>Start from a completed estimate</h3><p>A blank order stays blank. Choose an estimate and apply it only when it belongs to this customer.</p></div><div><select id="estimate-source-picker"><option value="">Select an estimate…</option>${options}</select><button type="button" class="secondary" id="apply-estimate-source">${icon("clipboard-plus", 14)} Fill fields</button></div></section>`);
   const estimator = form.querySelector(".new-order-estimator");
@@ -1705,7 +1777,7 @@ function addEstimateSourceControls(form) {
   form.querySelectorAll("[name=shopSupplies],[name=estimateDiscount],[name=estimateDiscountReason]").forEach(input => input.addEventListener("input", () => refreshEstimateEditor(form.querySelector("#new-estimate-lines"))));
   document.querySelector("#apply-estimate-source").onclick = () => {
     const estimate = estimateSourceById(document.querySelector("#estimate-source-picker").value);
-    if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+    if (estimate) applyWorkOrderDraftToForm(form, workOrderDraftFromEstimate(normalizedEstimateSource(estimate), currentShopPricing()));
   };
 }
 
@@ -1716,10 +1788,14 @@ function applyWorkOrderDraftToForm(form, draft) {
   customerSelect.dispatchEvent(new Event("change"));
   if (!option) form.elements.customer.value = draft.customer;
   form.elements.phone.value = draft.phone || "";
+  form.elements.email.value = draft.email || "";
+  form.elements.address.value = draft.address || "";
   form.elements.vehicleSelect.value = "";
   form.elements.vehicle.value = draft.vehicle || "";
   form.elements.vehicle.readOnly = false;
   form.elements.vin.value = draft.vin || "";
+  form.elements.plate.value = draft.plate || "";
+  form.elements.internalNotes.value = (draft.shopNotes || []).join("\n");
   form.elements.complaint.value = draft.complaint || "";
   form.elements.requestedServices.value = draft.requestedServices || "";
   const root = form.querySelector("#new-estimate-lines");
@@ -1734,6 +1810,41 @@ function applyWorkOrderDraftToForm(form, draft) {
   refreshEstimateEditor(root);
   toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
 }
+
+const pushDraftCustomerCore = pushCustomerToApi;
+pushCustomerToApi = async function (record) {
+  const form = document.querySelector("#new-form");
+  if (form && form.elements.customer.value.trim().toLowerCase() === String(record.name || "").trim().toLowerCase()) {
+    record.email = form.elements.email.value.trim() || record.email;
+    record.address = form.elements.address.value.trim() || record.address;
+  }
+  return pushDraftCustomerCore(record);
+};
+
+const pushDraftOrderCore = pushOrderToApi;
+pushOrderToApi = async function (record) {
+  const form = document.querySelector("#new-form");
+  if (form) {
+    record.email = form.elements.email.value.trim();
+    record.address = form.elements.address.value.trim();
+    record.plate = form.elements.plate.value.trim();
+    record.internalNotes = form.elements.internalNotes.value.trim();
+    record.customerDetails = {
+      ...(record.customerDetails || {}),
+      name: record.customer,
+      phone: record.phone || "",
+      email: record.email,
+      address: record.address,
+    };
+    record.vehicleDetails = {
+      ...(record.vehicleDetails || {}),
+      description: record.vehicle,
+      vin: record.vin === "VIN pending" ? "" : record.vin,
+      plate: record.plate,
+    };
+  }
+  return pushDraftOrderCore(record);
+};
 
 const openNewEstimateFillCore = openNew;
 function openNewWithDraft(draft = null) {
@@ -1762,7 +1873,7 @@ liveAssistant = function () {
 };
 
 async function saveAssistantDraft(action) {
-  const estimate = estimateFromAssistantDraft(action);
+  const estimate = estimateFromAssistantDraft(action, currentShopPricing());
   const number = `EST-${new Date().getFullYear()}-${String(state.estimates.length + 1001).padStart(4, "0")}`;
   const record = {
     ...estimate,
@@ -1780,8 +1891,11 @@ async function saveAssistantDraft(action) {
     vin: estimate.vehicle.vin,
     plate: estimate.vehicle.plate,
   };
-  state.estimates.push(record);
-  await pushEstimateToApi(record);
+  const saved = await apiFetch("/entities/estimates", {
+    method: "POST",
+    body: JSON.stringify(record),
+  });
+  state.estimates.push(saved?.queued ? record : saved || record);
   save();
   closeModal();
   openNewWithDraft(workOrderDraftFromEstimate({
@@ -1789,7 +1903,7 @@ async function saveAssistantDraft(action) {
     number,
     customer: estimate.customer,
     vehicle: estimate.vehicle,
-  }));
+  }, currentShopPricing()));
 }
 
 function bindAssistantDraftActions() {
@@ -1878,7 +1992,7 @@ bindEstimateActions = function () {
   document.querySelectorAll("[data-preview-estimate]").forEach(button => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
   document.querySelectorAll("[data-fill-estimate]").forEach(button => button.onclick = () => {
     const estimate = estimateSourceById(button.dataset.fillEstimate);
-    if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+    if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate), currentShopPricing()));
   });
 };
 
