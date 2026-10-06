@@ -2,14 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   approvedEstimate,
+  assignedLaborHours,
+  assignedTechnicianIds,
   billableEstimateLines,
   calculateEstimate,
   declinedEstimate,
+  estimateEditorLaborRate,
+  estimateEditorPriceStatus,
+  estimateEditorShopSupplies,
   invoiceRecordForOrder,
   invoiceWithEditedWorkOrder,
+  isTechnicianAssigned,
   laborLinePrintRows,
   normalizeEstimateLine,
   normalizeTechnicianIds,
+  orderWithTechnicianAssignments,
   workOrderWithEditedEstimate,
 } from './estimate-workflow.js';
 
@@ -222,6 +229,25 @@ test('editing an invoiced work order synchronizes unpaid invoice lines and total
   assert.equal(invoice.revisedAt, '2026-10-06T04:00:00.000Z');
 });
 
+test('editing discounted work preserves coherent order and invoice totals', () => {
+  const order = workOrderWithEditedEstimate({}, {
+    taxRate: 8.25,
+    discountPercent: 10,
+    discountReason: 'Customer discount',
+    fees: [{ description: 'Shop supplies', amount: 4.2 }],
+    lines: [{ id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 140 }],
+  });
+  const invoice = invoiceWithEditedWorkOrder({}, order);
+
+  assert.equal(order.estimate.grossSubtotal, 144.2);
+  assert.equal(order.estimate.discountAmount, 14.42);
+  assert.equal(order.total, 140.49);
+  assert.equal(invoice.grossSubtotal, 144.2);
+  assert.equal(invoice.discountAmount, 14.42);
+  assert.equal(invoice.amount, 140.49);
+  assert.equal(invoice.subtotal + invoice.tax, invoice.amount);
+});
+
 test('labor lines normalize none, one, or several technician ids as a unique list', () => {
   assert.deepEqual(normalizeEstimateLine({ type: 'labor' }).technicianIds, []);
   assert.deepEqual(normalizeEstimateLine({ type: 'labor', technicianId: 'tech-1' }).technicianIds, ['tech-1']);
@@ -249,8 +275,39 @@ test('printed job card expands each labor line to one row per technician', () =>
   assert.equal(rows.length, 4);
   assert.deepEqual(rows.slice(0, 3).map(row => row.technicianName), ['Alex', 'Blair', 'Casey']);
   assert.deepEqual(rows.slice(0, 3).map(row => row.line.id), ['labor-a', 'labor-a', 'labor-a']);
+  assert.deepEqual(rows.slice(0, 3).map(row => row.showAmount), [true, false, false]);
   assert.equal(rows[3].line.id, 'labor-b');
   assert.equal(rows[3].technicianName, 'Unassigned');
+});
+
+test('labor assignments drive visibility, clock authorization, payroll hours, and immutable saves', () => {
+  const original = {
+    id: 'RO-1201',
+    estimate: {
+      lines: [
+        { id: 'labor-a', type: 'labor', hours: 2, technicianIds: ['tech-1'] },
+        { id: 'labor-b', type: 'labor', hours: 1.5, technicianIds: [] },
+      ],
+    },
+  };
+  const revised = orderWithTechnicianAssignments(original, {
+    'labor-a': ['tech-1', 'tech-2'],
+    'labor-b': ['tech-2'],
+  });
+
+  assert.deepEqual(original.estimate.lines[0].technicianIds, ['tech-1']);
+  assert.deepEqual(assignedTechnicianIds(revised), ['tech-1', 'tech-2']);
+  assert.equal(assignedLaborHours(revised, 'tech-1'), 2);
+  assert.equal(assignedLaborHours(revised, 'tech-2'), 3.5);
+  assert.equal(isTechnicianAssigned(revised, { id: 'tech-2' }), true);
+});
+
+test('editor helpers preserve zero pricing, automatic supplies, and price pending transitions', () => {
+  assert.equal(estimateEditorLaborRate({ laborRate: 0 }, 140), 0);
+  assert.equal(estimateEditorShopSupplies([]), '');
+  assert.equal(estimateEditorShopSupplies([{ description: 'Shop supplies', amount: 0 }]), 0);
+  assert.equal(estimateEditorPriceStatus('pending', 0), 'pending');
+  assert.equal(estimateEditorPriceStatus('pending', 25), 'priced');
 });
 
 test('labor technician sets survive estimate calculation and invoice creation', () => {
