@@ -1903,12 +1903,12 @@
   // src/modules/file-upload.js
   async function uploadErrorMessage(response) {
     const fallback = `Upload to storage failed (${response.status})`;
-    const text2 = await response.text().catch(() => "");
-    if (!text2) return fallback;
+    const text = await response.text().catch(() => "");
+    if (!text) return fallback;
     try {
-      return JSON.parse(text2).message || fallback;
+      return JSON.parse(text).message || fallback;
     } catch {
-      return text2.trim() || fallback;
+      return text.trim() || fallback;
     }
   }
   function uploadFailureMessage(error, fallback) {
