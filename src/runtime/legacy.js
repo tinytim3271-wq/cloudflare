@@ -35,6 +35,7 @@ import {
   estimateFromAssistantDraft,
   workOrderDraftFromEstimate,
 } from '../modules/estimate-templates.js';
+import { KEY_OPERATIONS, assertKeyJobAllowed, isRoAuthorizedForKeys, simulateKeyJob, simulateObdScan } from '../modules/shop-os/bay.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
@@ -150,6 +151,8 @@ const seed = {
     { id: "apt-1052", sampleData: true, customer: "Demo Customer D", vehicle: "2019 Ram 1500 Laramie", date: "2026-09-10", time: "09:30", service: "60k mile service", tech: "Tech A", bay: "Bay 3", status: "scheduled" }
   ],
   purchases: [],
+  diagnosticSessions: [],
+  keyJobs: [],
   shopSettingsRecords: [],
   customers: [
     { name: "Demo Customer A", phone: "555-0142", email: "customer-a@example.com", vehicles: 2, visits: 6, spend: 2834.17 },
@@ -263,14 +266,14 @@ async function loadJobClockEntriesFromApi() { try { state.jobClockEntries = awai
 async function pushPayrollEntryToApi(record) { try { await apiFetch("/entities/payrollentries", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync payroll entry to API", error) } }
 async function updatePayrollEntryInApi(record) { try { await apiFetch(`/entities/payrollentries/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync payroll entry update to API", error) } }
 async function loadPayrollEntriesFromApi() { try { state.payrollEntries = await apiFetch("/entities/payrollentries"); save() } catch (error) { console.error("Failed to load payroll entries from API; using local data", error) } }
-const shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
+const shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
 async function saveShopEntity(type, record) { const saved = await apiFetch(`/entities/${type}${record.updatedAt ? `/${encodeURIComponent(record.id)}` : ""}`, { method: record.updatedAt ? "PUT" : "POST", body: JSON.stringify(record) }), value = saved?.queued ? record : saved, collection = shopEntityCollections[type], index = state[collection].findIndex(item => item.id === value.id); if (index >= 0) state[collection][index] = value; else state[collection].push(value); save(); return value }
 async function loadShopEntities() { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => { state[shopEntityCollections[type]] = results[index] }); save() } catch (error) { console.error("Failed to load shop operations; using local data", error) } }
 function icon(name, size = 18) { return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>` }
 function money(value) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value) }
 function initials(name) { return name.split(/\s+/).map(x => x[0]).slice(0, 2).join("").toUpperCase() }
 const roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
+const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai"] };
 function currentUser() { const session = authSession(); if (!session || !desktopEntitlementVerified) return null; const email = String(session.claims.email || "").trim().toLowerCase(); const profile = state.users.find(user => user.id === state.currentUserId && user.active && user.email.toLowerCase() === email) || null; if (!profile) return null; const jwtRole = sessionClaimRole(session.claims); return jwtRole && jwtRole !== profile.role ? { ...profile, role: jwtRole } : profile }
 function canAccess(route) { return !!currentUser() && roleRoutes[currentUser().role].includes(route) }
 function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => order.tech === user.techName) : state.orders }
@@ -2838,4 +2841,85 @@ bindExpandedFeatures = function () {
 };
 
 /* === MECHPRO_FILING_OVERRIDES_END === */
+
+function orderChoices() {
+  return state.orders.map(order => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.id)} · ${escapeHtml(order.vehicle)} · ${escapeHtml(order.customer)}</option>`).join("");
+}
+
+function obdBay() {
+  const latest = [...state.diagnosticSessions].reverse()[0];
+  const result = latest ? `<section class="data-panel"><h3>Latest simulated scan</h3><p>${escapeHtml(latest.label)}</p><p class="mono">${escapeHtml(latest.vin)} · ${escapeHtml(latest.vehicle || "")}</p><ul>${(latest.dtcs || []).map(dtc => `<li><b>${escapeHtml(dtc.code)}</b> ${escapeHtml(dtc.description)}</li>`).join("")}</ul><p>Readiness: ${escapeHtml(Object.entries(latest.readiness || {}).map(([name, value]) => `${name} ${value}`).join(" · "))}</p></section>` : `<div class="home-empty"><p>No scans yet. Run the bench simulator against a repair order.</p></div>`;
+  return shell(`${heading("Diagnostics", "OBD bay", "Basic OBD-II from the bench simulator. Live ELM327 and OEM tools stay in Shop operations and OEM Diagnostics.", false)}<div class="messaging-status idle">${icon("info", 17)}<div><strong>Simulator</strong><span>These readings are sample data, not a connected adapter.</span></div></div><form class="form-grid" id="obd-scan-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><div class="full"><button class="primary" type="submit">${icon("activity", 14)} Run simulated scan</button></div></form>${result}`);
+}
+
+function keyProgrammingBay() {
+  const rows = [...state.keyJobs].reverse().map(job => `<tr><td>${escapeHtml(job.operation)}</td><td class="mono">${escapeHtml(job.roNumber || "")}</td><td>${escapeHtml(job.vehicle || "")}</td><td>${job.simulated ? "Simulator" : "Live"}</td><td>${escapeHtml(job.message || "")}</td></tr>`).join("");
+  return shell(`${heading("Authorized keys", "Key programming", "Identify, add, program, or test a key only when this vehicle has a signed repair order.", false)}<div class="messaging-status idle">${icon("shield", 17)}<div><strong>Signed repair order required</strong><span>Immobilizer bypass, cloning, and rolling-code requests are refused. Live tools need a shop-licensed programmer.</span></div></div><form class="form-grid" id="key-job-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><label>Operation<select name="operation">${KEY_OPERATIONS.map(item => `<option value="${item.id}">${item.label}</option>`).join("")}</select></label><label>Mode<select name="mode"><option value="simulator">Simulator</option><option value="live">Licensed programmer</option></select></label><label class="full">Notes<textarea name="notes" rows="3" placeholder="Customer authorization notes"></textarea></label><div class="full"><button class="primary" type="submit">${icon("key", 14)} Record key job</button></div></form><div class="data-panel"><table><thead><tr><th>Operation</th><th>RO</th><th>Vehicle</th><th>Mode</th><th>Result</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No key jobs recorded.</td></tr>`}</tbody></table></div>`);
+}
+
+async function rememberBayRecord(type, collection, record) {
+  const list = state[collection];
+  const index = list.findIndex(item => item.id === record.id);
+  if (index >= 0) list[index] = record;
+  else list.push(record);
+  save();
+  try { await saveShopEntity(type, record); } catch (error) { console.error(`Could not sync ${type}`, error); }
+}
+
+function bindShopOs() {
+  document.querySelector("#obd-scan-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const order = state.orders.find(item => item.id === new FormData(event.target).get("orderId"));
+    if (!order) { toast("Select a repair order"); return; }
+    const scan = simulateObdScan(order);
+    await rememberBayRecord("diagnosticsessions", "diagnosticSessions", { id: `scan-${Date.now()}`, orderId: order.id, customer: order.customer, ...scan });
+    toast("Simulated scan saved");
+    render();
+  });
+  document.querySelector("#key-job-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const order = state.orders.find(item => item.id === data.orderId);
+    try {
+      assertKeyJobAllowed({ order, estimates: state.estimates, operation: data.operation, notes: data.notes, liveProgrammer: data.mode === "live" });
+      const result = simulateKeyJob({ operation: data.operation, vin: order.vin });
+      const authorization = state.estimates.find(estimate => isRoAuthorizedForKeys(order, [estimate]));
+      await rememberBayRecord("keyprogrammingjobs", "keyJobs", {
+        id: `key-${Date.now()}`,
+        orderId: order.id,
+        roNumber: order.id,
+        customer: order.customer,
+        vehicle: order.vehicle,
+        vin: order.vin,
+        operation: data.operation,
+        notes: String(data.notes || "").trim(),
+        simulated: true,
+        authorizationName: authorization?.authorizationName || "",
+        message: result.message,
+        createdAt: now(),
+      });
+      toast("Key job recorded on the simulator");
+      render();
+    } catch (error) {
+      toast(error.message || "Key job blocked");
+    }
+  });
+}
+
+const renderShopOsCore = render;
+render = function () {
+  if (currentUser() && (state.route === "obd" || state.route === "keys")) {
+    const root = document.querySelector("#root");
+    const markup = state.route === "obd" ? obdBay() : keyProgrammingBay();
+    root.innerHTML = DOMPurify.sanitize(markup, { USE_PROFILES: { html: true } });
+    lucide.createIcons();
+    bind();
+    bindExpandedFeatures();
+    attachShopOperationsRoute();
+    bindShopOs();
+    return;
+  }
+  renderShopOsCore();
+};
+
 void startApp();

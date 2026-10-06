@@ -186,6 +186,8 @@ export const sidebarCatalog = [
     items: [
       { route: 'shopops', icon: 'blocks', label: 'Vehicles & parts' },
       { route: 'oem-diagnostics', icon: 'radio-tower', label: 'OEM diagnostics', requiresOem: true },
+      { route: 'obd', icon: 'activity', label: 'OBD bay' },
+      { route: 'keys', icon: 'key', label: 'Key programming' },
       { route: 'ai', icon: 'sparkles', label: 'AI workbench' },
     ],
   },

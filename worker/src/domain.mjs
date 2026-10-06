@@ -3,6 +3,7 @@ export const ENTITY_TYPES = new Set([
   'employees', 'shiftentries', 'jobclockentries', 'payrollentries', 'conversations',
   'chatmessages', 'inventory', 'vendors', 'services', 'inspectiontemplates',
   'inspections', 'reminders', 'shopsettings', 'appointments', 'purchases',
+  'diagnosticsessions', 'keyprogrammingjobs',
 ]);
 
 export const WRITE_ROLES = {
@@ -17,9 +18,14 @@ export const WRITE_ROLES = {
   vendors: ['admin', 'office'],
   services: ['admin', 'office', 'service_writer'],
   inspectiontemplates: ['admin', 'office', 'service_writer'],
+  diagnosticsessions: ['admin', 'technician', 'service_writer'],
+  keyprogrammingjobs: ['admin', 'technician', 'service_writer'],
 };
 
-export const READ_ROLES = { payrollentries: ['admin', 'office'] };
+export const READ_ROLES = {
+  payrollentries: ['admin', 'office'],
+  keyprogrammingjobs: ['admin', 'technician', 'service_writer'],
+};
 
 export function normalizeEntityType(value) {
   const type = String(value || '').trim().toLowerCase();

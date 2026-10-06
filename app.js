@@ -2901,11 +2901,12 @@ button{margin-top:12px;padding:8px 14px}
     ]));
     return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
       const technicianIds = normalizeTechnicianIds(line);
-      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: "Unassigned" }];
-      return technicianIds.map((technicianId) => ({
+      const assignments = !technicianIds.length ? [null] : technicianIds;
+      return assignments.map((technicianId, index) => ({
         line,
         technicianId,
-        technicianName: names.get(technicianId) || "Technician unavailable"
+        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
+        lineTotal: index === 0 ? line.total : null
       }));
     });
   }
@@ -3067,11 +3068,15 @@ button{margin-top:12px;padding:8px 14px}
   // src/modules/estimate-templates.js
   function calculateShopEstimate(lines = [], {
     taxRate = 0,
+    laborRate = 0,
     discountPercent = 0,
     discountReason = "",
     shopSupplies
   } = {}) {
-    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(
+      line.type === "labor" && line.laborRate == null ? { ...line, laborRate } : line,
+      index
+    ));
     const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
     const automaticSupplies = Math.min(
       SHOP_SUPPLIES_RULES.shopSuppliesCap,
@@ -3108,9 +3113,8 @@ button{margin-top:12px;padding:8px 14px}
     const complaintParts = [
       `Claimant: ${customer.name || "Not provided"}.`,
       estimate.complaint,
-      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number not yet assigned.` : "",
-      laborSource ? `Labor source: ${laborSource}` : "",
-      ...(estimate.shopNotes || []).map((note) => `Shop note: ${note}`)
+      insurance.company || insurance.policy ? `Insurance: ${insurance.company || "Carrier not provided"}; policy ${insurance.policy || "not provided"}; claim number ${insurance.claimNumber || "not yet assigned"}.` : "",
+      laborSource ? `Labor source: ${laborSource}` : ""
     ].filter(Boolean);
     return {
       sourceEstimateNumber: estimate.number || "",
@@ -3124,17 +3128,20 @@ button{margin-top:12px;padding:8px 14px}
       requestedServices: (estimate.requestedServices || (estimate.lines || []).map((line) => line.description)).join("\n"),
       estimate: calculateShopEstimate(estimate.lines || [], {
         taxRate: estimate.taxRate,
+        laborRate: estimate.laborRate,
         discountPercent: estimate.discountPercent,
         discountReason: estimate.discountReason,
         shopSupplies: estimate.fees?.find((fee) => fee.description === "Shop supplies")?.amount
       }),
       exclusions: estimate.exclusions || [],
       insurance,
+      shopNotes: (estimate.shopNotes || []).map(String),
       plate: vehicle.plate || ""
     };
   }
-  function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0 } = {}) {
+  function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0, shopSupplies } = {}) {
     const draft = action.draft || action;
+    const resolvedLaborRate = Math.max(0, Number(laborRate) || 0);
     const partLines = (draft.parts || []).map((part, index) => ({
       id: `assistant-part-${index + 1}`,
       type: "part",
@@ -3151,13 +3158,15 @@ button{margin-top:12px;padding:8px 14px}
       description: String(labor.description || "Labor"),
       notes: String(labor.notes || labor.source || ""),
       hours: Math.max(0, Number(labor.hours) || 0),
-      laborRate: Math.max(0, Number(laborRate) || 0),
+      laborRate: resolvedLaborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
     const totals = calculateShopEstimate([...partLines, ...laborLines], {
+      laborRate: resolvedLaborRate,
       taxRate,
       discountPercent: draft.discountPercent,
-      discountReason: draft.discountReason
+      discountReason: draft.discountReason,
+      shopSupplies
     });
     return {
       id: `assistant-estimate-${Date.now()}`,
@@ -3279,7 +3288,7 @@ button{margin-top:12px;padding:8px 14px}
         },
         vehicle: {
           description: "2016 Mercedes-Benz GLA250",
-          vin: "DEMO-VEHICLE-VIN",
+          vin: "1M8GDM9AXKP042788",
           plate: "DEMO-01"
         },
         insurance: {
@@ -3310,6 +3319,68 @@ button{margin-top:12px;padding:8px 14px}
         fees: referenceTotals.fees,
         ...referenceTotals
       });
+    }
+  });
+
+  // src/modules/shop-os/bay.js
+  function signedEstimateForOrder(order, estimates = []) {
+    if (!order?.id) return null;
+    return estimates.find((estimate) => estimate.workOrderId === order.id && estimate.status === "approved" && estimate.signedAt && String(estimate.authorizationName || "").trim()) || null;
+  }
+  function isRoAuthorizedForKeys(order, estimates = []) {
+    return Boolean(signedEstimateForOrder(order, estimates));
+  }
+  function assertKeyJobAllowed({ order, estimates, operation, notes, liveProgrammer = false }) {
+    const request = `${operation || ""} ${notes || ""}`;
+    if (FORBIDDEN_KEY_REQUEST.test(request)) {
+      throw new Error("That request is not available. Key work stays on a signed repair order.");
+    }
+    if (!KEY_OPERATIONS.some((item) => item.id === operation)) {
+      throw new Error("Choose identify, add, program, or test.");
+    }
+    if (!isRoAuthorizedForKeys(order, estimates)) {
+      throw new Error("A signed repair order for this vehicle is required before key programming.");
+    }
+    if (liveProgrammer) {
+      throw new Error("Live programming needs a shop-licensed programmer. This session stays on the simulator.");
+    }
+  }
+  function simulateObdScan(vehicle = {}) {
+    const vin = String(vehicle.vin || "SIMULATEDVIN00001").toUpperCase();
+    return {
+      mode: "simulator",
+      label: "Bench simulator. This is not a live adapter reading.",
+      vin,
+      vehicle: vehicle.vehicle || vehicle.label || "Selected vehicle",
+      dtcs: [{ code: "P0420", description: "Catalyst system efficiency below threshold (simulated)" }],
+      freezeFrame: { rpm: 780, coolantC: 90, speedKph: 0 },
+      readiness: { misfire: "complete", fuel: "complete", catalyst: "incomplete" },
+      live: [
+        { pid: "rpm", value: 780, unit: "rpm" },
+        { pid: "coolant", value: 90, unit: "C" }
+      ],
+      scannedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  function simulateKeyJob({ operation, vin }) {
+    const label2 = KEY_OPERATIONS.find((item) => item.id === operation)?.label || operation;
+    return {
+      ok: true,
+      simulated: true,
+      operation,
+      message: `Simulator recorded ${label2} for ${vin || "the selected vehicle"}. This is not a live programmer.`
+    };
+  }
+  var KEY_OPERATIONS, FORBIDDEN_KEY_REQUEST;
+  var init_bay = __esm({
+    "src/modules/shop-os/bay.js"() {
+      KEY_OPERATIONS = [
+        { id: "identify", label: "Identify" },
+        { id: "add", label: "Add key" },
+        { id: "program", label: "Program remote" },
+        { id: "test", label: "Test" }
+      ];
+      FORBIDDEN_KEY_REQUEST = /bypass|clon(?:e|ing)|rolling[-\s]?code|stolen|immobilizer\s+bypass|\bfrp\b/i;
     }
   });
 
@@ -7805,7 +7876,73 @@ ${catRows}
       });
     }
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore;
+  function orderChoices() {
+    return state.orders.map((order) => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.id)} \xB7 ${escapeHtml(order.vehicle)} \xB7 ${escapeHtml(order.customer)}</option>`).join("");
+  }
+  function obdBay() {
+    const latest = [...state.diagnosticSessions].reverse()[0];
+    const result = latest ? `<section class="data-panel"><h3>Latest simulated scan</h3><p>${escapeHtml(latest.label)}</p><p class="mono">${escapeHtml(latest.vin)} \xB7 ${escapeHtml(latest.vehicle || "")}</p><ul>${(latest.dtcs || []).map((dtc) => `<li><b>${escapeHtml(dtc.code)}</b> ${escapeHtml(dtc.description)}</li>`).join("")}</ul><p>Readiness: ${escapeHtml(Object.entries(latest.readiness || {}).map(([name, value2]) => `${name} ${value2}`).join(" \xB7 "))}</p></section>` : `<div class="home-empty"><p>No scans yet. Run the bench simulator against a repair order.</p></div>`;
+    return shell(`${heading("Diagnostics", "OBD bay", "Basic OBD-II from the bench simulator. Live ELM327 and OEM tools stay in Shop operations and OEM Diagnostics.", false)}<div class="messaging-status idle">${icon("info", 17)}<div><strong>Simulator</strong><span>These readings are sample data, not a connected adapter.</span></div></div><form class="form-grid" id="obd-scan-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><div class="full"><button class="primary" type="submit">${icon("activity", 14)} Run simulated scan</button></div></form>${result}`);
+  }
+  function keyProgrammingBay() {
+    const rows = [...state.keyJobs].reverse().map((job) => `<tr><td>${escapeHtml(job.operation)}</td><td class="mono">${escapeHtml(job.roNumber || "")}</td><td>${escapeHtml(job.vehicle || "")}</td><td>${job.simulated ? "Simulator" : "Live"}</td><td>${escapeHtml(job.message || "")}</td></tr>`).join("");
+    return shell(`${heading("Authorized keys", "Key programming", "Identify, add, program, or test a key only when this vehicle has a signed repair order.", false)}<div class="messaging-status idle">${icon("shield", 17)}<div><strong>Signed repair order required</strong><span>Immobilizer bypass, cloning, and rolling-code requests are refused. Live tools need a shop-licensed programmer.</span></div></div><form class="form-grid" id="key-job-form"><label class="full">Repair order<select name="orderId" required>${orderChoices() || `<option value="">No repair orders</option>`}</select></label><label>Operation<select name="operation">${KEY_OPERATIONS.map((item) => `<option value="${item.id}">${item.label}</option>`).join("")}</select></label><label>Mode<select name="mode"><option value="simulator">Simulator</option><option value="live">Licensed programmer</option></select></label><label class="full">Notes<textarea name="notes" rows="3" placeholder="Customer authorization notes"></textarea></label><div class="full"><button class="primary" type="submit">${icon("key", 14)} Record key job</button></div></form><div class="data-panel"><table><thead><tr><th>Operation</th><th>RO</th><th>Vehicle</th><th>Mode</th><th>Result</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No key jobs recorded.</td></tr>`}</tbody></table></div>`);
+  }
+  async function rememberBayRecord(type, collection, record) {
+    const list = state[collection];
+    const index = list.findIndex((item) => item.id === record.id);
+    if (index >= 0) list[index] = record;
+    else list.push(record);
+    save();
+    try {
+      await saveShopEntity(type, record);
+    } catch (error) {
+      console.error(`Could not sync ${type}`, error);
+    }
+  }
+  function bindShopOs() {
+    document.querySelector("#obd-scan-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const order = state.orders.find((item) => item.id === new FormData(event.target).get("orderId"));
+      if (!order) {
+        toast("Select a repair order");
+        return;
+      }
+      const scan = simulateObdScan(order);
+      await rememberBayRecord("diagnosticsessions", "diagnosticSessions", { id: `scan-${Date.now()}`, orderId: order.id, customer: order.customer, ...scan });
+      toast("Simulated scan saved");
+      render();
+    });
+    document.querySelector("#key-job-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const order = state.orders.find((item) => item.id === data.orderId);
+      try {
+        assertKeyJobAllowed({ order, estimates: state.estimates, operation: data.operation, notes: data.notes, liveProgrammer: data.mode === "live" });
+        const result = simulateKeyJob({ operation: data.operation, vin: order.vin });
+        const authorization = state.estimates.find((estimate) => isRoAuthorizedForKeys(order, [estimate]));
+        await rememberBayRecord("keyprogrammingjobs", "keyJobs", {
+          id: `key-${Date.now()}`,
+          orderId: order.id,
+          roNumber: order.id,
+          customer: order.customer,
+          vehicle: order.vehicle,
+          vin: order.vin,
+          operation: data.operation,
+          notes: String(data.notes || "").trim(),
+          simulated: true,
+          authorizationName: authorization?.authorizationName || "",
+          message: result.message,
+          createdAt: now()
+        });
+        toast("Key job recorded on the simulator");
+        render();
+      } catch (error) {
+        toast(error.message || "Key job blocked");
+      }
+    });
+  }
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -7829,6 +7966,7 @@ ${catRows}
       init_payments();
       init_estimate_workflow();
       init_estimate_templates();
+      init_bay();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -7859,6 +7997,8 @@ ${catRows}
           { id: "apt-1052", sampleData: true, customer: "Demo Customer D", vehicle: "2019 Ram 1500 Laramie", date: "2026-09-10", time: "09:30", service: "60k mile service", tech: "Tech A", bay: "Bay 3", status: "scheduled" }
         ],
         purchases: [],
+        diagnosticSessions: [],
+        keyJobs: [],
         shopSettingsRecords: [],
         customers: [
           { name: "Demo Customer A", phone: "555-0142", email: "customer-a@example.com", vehicles: 2, visits: 6, spend: 2834.17 },
@@ -7952,9 +8092,9 @@ ${catRows}
       mutationQueueStore = createMutationQueueStore({ storage: localStorage, storeKey: MUTATION_QUEUE_STORE });
       flushingMutationQueue = false;
       window.addEventListener("online", flushMutationQueue);
-      shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
+      shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
+      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai"] };
       attentionDismissBound = false;
       userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
@@ -9575,6 +9715,21 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
           }, { capture: true });
         }
       };
+      renderShopOsCore = render;
+      render = function() {
+        if (currentUser() && (state.route === "obd" || state.route === "keys")) {
+          const root = document.querySelector("#root");
+          const markup = state.route === "obd" ? obdBay() : keyProgrammingBay();
+          root.innerHTML = DOMPurify.sanitize(markup, { USE_PROFILES: { html: true } });
+          lucide.createIcons();
+          bind();
+          bindExpandedFeatures();
+          attachShopOperationsRoute();
+          bindShopOs();
+          return;
+        }
+        renderShopOsCore();
+      };
       void startApp();
     }
   });
@@ -9811,6 +9966,8 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
       items: [
         { route: "shopops", icon: "blocks", label: "Vehicles & parts" },
         { route: "oem-diagnostics", icon: "radio-tower", label: "OEM diagnostics", requiresOem: true },
+        { route: "obd", icon: "activity", label: "OBD bay" },
+        { route: "keys", icon: "key", label: "Key programming" },
         { route: "ai", icon: "sparkles", label: "AI workbench" }
       ]
     },
