@@ -1,4 +1,4 @@
-import DOMPurify from 'dompurify';
+/* global DOMPurify */
 import { storageKeys } from '../shared/config.js';
 import { escapeAttr, escapeHtml } from '../shared/html.js';
 import { DESKTOP_ENTITLEMENT_INTERVAL, isDesktopApp } from '../modules/platform/detect.js';
