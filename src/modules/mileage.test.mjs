@@ -87,6 +87,39 @@ test('applyMileageToOrder stores trip fields and invoice-ready estimate', () => 
   assert.equal(order.total, order.estimate.total);
 });
 
+test('applyMileageToOrder does not duplicate or retain a mileage-only charge', () => {
+  const order = applyMileageToOrder({
+    tripMilesOneWay: 10,
+    tripMiles: 20,
+    mileageRate: 0.68,
+    mileageCharge: 13.6,
+    labor: 0,
+    laborHours: 0,
+    parts: 13.6,
+    tax: 1.12,
+    total: 14.72,
+    estimate: {
+      lines: [mileageLineItem(20, 0.68)],
+      fees: [],
+      labor: 0,
+      laborHours: 0,
+      parts: 13.6,
+      subtotal: 13.6,
+      tax: 1.12,
+      taxRate: 8.25,
+      total: 14.72,
+    },
+  }, { oneWayMiles: 10, rate: 0.68, taxRate: 8.25 });
+
+  assert.equal(order.total, 14.72);
+  assert.equal(order.estimate.lines.filter((line) => line.kind === 'mileage').length, 1);
+
+  const cleared = applyMileageToOrder(order, { oneWayMiles: 0, rate: 0.68, taxRate: 8.25 });
+  assert.equal(cleared.mileageCharge, 0);
+  assert.equal(cleared.estimate.lines.some((line) => line.kind === 'mileage'), false);
+  assert.equal(cleared.total, 0);
+});
+
 test('applyMileageToOrder preserves parts when recalculating mileage without an estimate', () => {
   const order = applyMileageToOrder({
     labor: 0,

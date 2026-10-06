@@ -196,11 +196,14 @@
       const labor = Number(baseEstimate.labor ?? order.labor) || 0;
       const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
       const existingMileageParts = (Array.isArray(baseEstimate.lines) ? baseEstimate.lines : []).filter((line) => line?.kind === "mileage").reduce((sum, line) => sum + (Number(line.parts) || 0), 0);
-      const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts);
-      const aggregateCharge = Math.max(
+      const partsWithoutMileage = roundMoney(Math.max(
+        0,
+        (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts
+      ));
+      const aggregateCharge = roundMoney(Math.max(
         0,
         Number(order.total) > 0 ? Number(order.total) - (Number(order.tax) || 0) - priorCharge : (Number(baseEstimate.subtotal) || 0) - priorCharge
-      );
+      ));
       const hasAggregateSnapshot = baseEstimate.aggregateBaseSubtotal != null && Number.isFinite(Number(baseEstimate.aggregateBaseSubtotal));
       const aggregateOnly = hasAggregateSnapshot || !labor && !partsWithoutMileage && aggregateCharge > 0;
       const aggregateBaseSubtotal = hasAggregateSnapshot ? Math.max(0, Number(baseEstimate.aggregateBaseSubtotal)) : aggregateCharge;
@@ -2764,7 +2767,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         const saved = await pushOrderToApi(order);
         state.orders.unshift(saved || order);
         if (!state.customers.some((x) => x.name.toLowerCase() === customerName.toLowerCase())) {
-          const record = { name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
+          const record = { id: mutationId(), name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
           state.customers.unshift(record);
           try {
             await pushCustomerToApi(record);

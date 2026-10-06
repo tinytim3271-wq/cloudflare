@@ -134,13 +134,16 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
     const existingMileageParts = (Array.isArray(baseEstimate.lines) ? baseEstimate.lines : [])
       .filter((line) => line?.kind === 'mileage')
       .reduce((sum, line) => sum + (Number(line.parts) || 0), 0);
-    const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts);
-    const aggregateCharge = Math.max(
+    const partsWithoutMileage = roundMoney(Math.max(
+      0,
+      (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts,
+    ));
+    const aggregateCharge = roundMoney(Math.max(
       0,
       Number(order.total) > 0
         ? Number(order.total) - (Number(order.tax) || 0) - priorCharge
         : (Number(baseEstimate.subtotal) || 0) - priorCharge,
-    );
+    ));
     const hasAggregateSnapshot = baseEstimate.aggregateBaseSubtotal != null
       && Number.isFinite(Number(baseEstimate.aggregateBaseSubtotal));
     const aggregateOnly = hasAggregateSnapshot || (!labor && !partsWithoutMileage && aggregateCharge > 0);
