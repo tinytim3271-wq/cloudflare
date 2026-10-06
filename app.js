@@ -334,6 +334,1986 @@
     }
   });
 
+  // node_modules/dompurify/dist/purify.es.mjs
+  function _OverloadYield(e, d) {
+    this.v = e, this.k = d;
+  }
+  function _arrayLikeToArray(r, a) {
+    (null == a || a > r.length) && (a = r.length);
+    for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e];
+    return n;
+  }
+  function _arrayWithHoles(r) {
+    if (Array.isArray(r)) return r;
+  }
+  function _iterableToArrayLimit(r, l) {
+    var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"];
+    if (null != t) {
+      var e, n, i, u, a = [], f = true, o = false;
+      try {
+        if (i = (t = t.call(r)).next, 0 === l) {
+          if (Object(t) !== t) return;
+          f = false;
+        } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = true) ;
+      } catch (r2) {
+        o = true, n = r2;
+      } finally {
+        try {
+          if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return;
+        } finally {
+          if (o) throw n;
+        }
+      }
+      return a;
+    }
+  }
+  function _nonIterableRest() {
+    throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+  }
+  function _slicedToArray(r, e) {
+    return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest();
+  }
+  function _unsupportedIterableToArray(r, a) {
+    if (r) {
+      if ("string" == typeof r) return _arrayLikeToArray(r, a);
+      var t = {}.toString.call(r).slice(8, -1);
+      return "Object" === t && r.constructor && (t = r.constructor.name), "Map" === t || "Set" === t ? Array.from(r) : "Arguments" === t || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : void 0;
+    }
+  }
+  function AsyncGenerator(e) {
+    var t, n;
+    function resume(t2, n2) {
+      try {
+        var r = e[t2](n2), o = r.value, u = o instanceof _OverloadYield;
+        Promise.resolve(u ? o.v : o).then(function(n3) {
+          if (u) {
+            var i = "return" === t2 && o.k ? t2 : "next";
+            if (!o.k || n3.done) return resume(i, n3);
+            n3 = e[i](n3).value;
+          }
+          settle(!!r.done, n3);
+        }, function(e2) {
+          resume("throw", e2);
+        });
+      } catch (e2) {
+        settle(2, e2);
+      }
+    }
+    function settle(e2, r) {
+      2 === e2 ? t.reject(r) : t.resolve({
+        value: r,
+        done: e2
+      }), (t = t.next) ? resume(t.key, t.arg) : n = null;
+    }
+    this._invoke = function(e2, r) {
+      return new Promise(function(o, u) {
+        var i = {
+          key: e2,
+          arg: r,
+          resolve: o,
+          reject: u,
+          next: null
+        };
+        n ? n = n.next = i : (t = n = i, resume(e2, r));
+      });
+    }, "function" != typeof e.return && (this.return = void 0);
+  }
+  function unapply(func) {
+    return function(thisArg) {
+      if (thisArg instanceof RegExp) thisArg.lastIndex = 0;
+      for (var _len3 = arguments.length, args = new Array(_len3 > 1 ? _len3 - 1 : 0), _key3 = 1; _key3 < _len3; _key3++) args[_key3 - 1] = arguments[_key3];
+      return apply(func, thisArg, args);
+    };
+  }
+  function unconstruct(Func) {
+    return function() {
+      for (var _len4 = arguments.length, args = new Array(_len4), _key4 = 0; _key4 < _len4; _key4++) args[_key4] = arguments[_key4];
+      return construct(Func, args);
+    };
+  }
+  function addToSet(set, array) {
+    let transformCaseFunc = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : stringToLowerCase;
+    if (setPrototypeOf) setPrototypeOf(set, null);
+    if (!arrayIsArray(array)) return set;
+    let l = array.length;
+    while (l--) {
+      let element = array[l];
+      if (typeof element === "string") {
+        const lcElement = transformCaseFunc(element);
+        if (lcElement !== element) {
+          if (!isFrozen(array)) array[l] = lcElement;
+          element = lcElement;
+        }
+      }
+      set[element] = true;
+    }
+    return set;
+  }
+  function cleanArray(array) {
+    for (let index = 0; index < array.length; index++) if (!objectHasOwnProperty(array, index)) array[index] = null;
+    return array;
+  }
+  function clone(object) {
+    const newObject = create(null);
+    for (const _ref2 of entries(object)) {
+      var _ref3 = _slicedToArray(_ref2, 2);
+      const property = _ref3[0];
+      const value2 = _ref3[1];
+      if (objectHasOwnProperty(object, property)) {
+        if (arrayIsArray(value2)) newObject[property] = cleanArray(value2);
+        else if (value2 && typeof value2 === "object" && value2.constructor === Object) newObject[property] = clone(value2);
+        else newObject[property] = value2;
+      }
+    }
+    return newObject;
+  }
+  function stringifyValue(value2) {
+    switch (typeof value2) {
+      case "string":
+        return value2;
+      case "number":
+        return numberToString(value2);
+      case "boolean":
+        return booleanToString(value2);
+      case "bigint":
+        return bigintToString ? bigintToString(value2) : "0";
+      case "symbol":
+        return symbolToString ? symbolToString(value2) : "Symbol()";
+      case "undefined":
+        return objectToString(value2);
+      case "function":
+      case "object": {
+        if (value2 === null) return objectToString(value2);
+        const valueAsRecord = value2;
+        const valueToString = lookupGetter(valueAsRecord, "toString");
+        if (typeof valueToString === "function") {
+          const stringified = valueToString(valueAsRecord);
+          return typeof stringified === "string" ? stringified : objectToString(stringified);
+        }
+        return objectToString(value2);
+      }
+      default:
+        return objectToString(value2);
+    }
+  }
+  function lookupGetter(object, prop) {
+    while (object !== null) {
+      const desc = getOwnPropertyDescriptor(object, prop);
+      if (desc) {
+        if (desc.get) return unapply(desc.get);
+        if (typeof desc.value === "function") return unapply(desc.value);
+      }
+      object = getPrototypeOf(object);
+    }
+    function fallbackValue() {
+      return null;
+    }
+    return fallbackValue;
+  }
+  function isRegex(value2) {
+    try {
+      regExpTest(value2, "");
+      return true;
+    } catch (_unused) {
+      return false;
+    }
+  }
+  function createDOMPurify() {
+    let window2 = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : getGlobal();
+    const DOMPurify = (root) => createDOMPurify(root);
+    DOMPurify.version = "3.4.16";
+    DOMPurify.removed = [];
+    if (!window2 || !window2.document || window2.document.nodeType !== NODE_TYPE.document || !window2.Element) {
+      DOMPurify.isSupported = false;
+      return DOMPurify;
+    }
+    let document2 = window2.document;
+    const originalDocument = document2;
+    const currentScript = originalDocument.currentScript;
+    window2.DocumentFragment;
+    const HTMLTemplateElement = window2.HTMLTemplateElement, Node = window2.Node, Element = window2.Element, NodeFilter = window2.NodeFilter;
+    window2.NamedNodeMap === void 0 && (window2.NamedNodeMap || window2.MozNamedAttrMap);
+    window2.HTMLFormElement;
+    const DOMParser = window2.DOMParser, trustedTypes = window2.trustedTypes;
+    const ElementPrototype = Element.prototype;
+    const cloneNode = lookupGetter(ElementPrototype, "cloneNode");
+    const remove = lookupGetter(ElementPrototype, "remove");
+    const removeAttributeNode = lookupGetter(ElementPrototype, "removeAttributeNode");
+    const getNextSibling = lookupGetter(ElementPrototype, "nextSibling");
+    const getChildNodes = lookupGetter(ElementPrototype, "childNodes");
+    const getParentNode = lookupGetter(ElementPrototype, "parentNode");
+    const getShadowRoot = lookupGetter(ElementPrototype, "shadowRoot");
+    const getAttributes = lookupGetter(ElementPrototype, "attributes");
+    const getNodeType = Node && Node.prototype ? lookupGetter(Node.prototype, "nodeType") : null;
+    const getNodeName = Node && Node.prototype ? lookupGetter(Node.prototype, "nodeName") : null;
+    const getOwnerDocument = Node && Node.prototype ? lookupGetter(Node.prototype, "ownerDocument") : null;
+    const _readNodeType = function _readNodeType2(node) {
+      return getNodeType ? getNodeType(node) : node.nodeType;
+    };
+    const _readNodeName = function _readNodeName2(node) {
+      return getNodeName ? getNodeName(node) : node.nodeName;
+    };
+    if (typeof HTMLTemplateElement === "function") {
+      const template = document2.createElement("template");
+      if (template.content && template.content.ownerDocument) document2 = template.content.ownerDocument;
+    }
+    let trustedTypesPolicy;
+    let emptyHTML = "";
+    let defaultTrustedTypesPolicy;
+    let defaultTrustedTypesPolicyResolved = false;
+    let IN_TRUSTED_TYPES_POLICY = 0;
+    const _assertNotInTrustedTypesPolicy = function _assertNotInTrustedTypesPolicy2() {
+      if (IN_TRUSTED_TYPES_POLICY > 0) throw typeErrorCreate('A configured TRUSTED_TYPES_POLICY callback (createHTML or createScriptURL) must not call DOMPurify.sanitize, as that causes infinite recursion. Do not pass a policy whose callbacks wrap DOMPurify as TRUSTED_TYPES_POLICY; see the "DOMPurify and Trusted Types" section of the README.');
+    };
+    const _createTrustedHTML = function _createTrustedHTML2(html2) {
+      _assertNotInTrustedTypesPolicy();
+      IN_TRUSTED_TYPES_POLICY++;
+      try {
+        return trustedTypesPolicy.createHTML(html2);
+      } finally {
+        IN_TRUSTED_TYPES_POLICY--;
+      }
+    };
+    const _createTrustedScriptURL = function _createTrustedScriptURL2(scriptUrl) {
+      _assertNotInTrustedTypesPolicy();
+      IN_TRUSTED_TYPES_POLICY++;
+      try {
+        return trustedTypesPolicy.createScriptURL(scriptUrl);
+      } finally {
+        IN_TRUSTED_TYPES_POLICY--;
+      }
+    };
+    const _getDefaultTrustedTypesPolicy = function _getDefaultTrustedTypesPolicy2() {
+      if (!defaultTrustedTypesPolicyResolved) {
+        defaultTrustedTypesPolicy = _createTrustedTypesPolicy(trustedTypes, currentScript);
+        defaultTrustedTypesPolicyResolved = true;
+      }
+      return defaultTrustedTypesPolicy;
+    };
+    const _document = document2, implementation = _document.implementation, createNodeIterator = _document.createNodeIterator, createDocumentFragment = _document.createDocumentFragment, getElementsByTagName = _document.getElementsByTagName;
+    const importNode = originalDocument.importNode;
+    let hooks = _createHooksMap();
+    DOMPurify.isSupported = typeof entries === "function" && typeof getParentNode === "function" && implementation && implementation.createHTMLDocument !== void 0;
+    const MUSTACHE_EXPR$1 = MUSTACHE_EXPR, ERB_EXPR$1 = ERB_EXPR, TMPLIT_EXPR$1 = TMPLIT_EXPR, DATA_ATTR$1 = DATA_ATTR, ARIA_ATTR$1 = ARIA_ATTR, IS_SCRIPT_OR_DATA$1 = IS_SCRIPT_OR_DATA, ATTR_WHITESPACE$1 = ATTR_WHITESPACE, CUSTOM_ELEMENT$1 = CUSTOM_ELEMENT;
+    let IS_ALLOWED_URI$1 = IS_ALLOWED_URI;
+    let ALLOWED_TAGS = null;
+    const DEFAULT_ALLOWED_TAGS = addToSet({}, [
+      ...html$1,
+      ...svg$1,
+      ...svgFilters,
+      ...mathMl$1,
+      ...text
+    ]);
+    let ALLOWED_ATTR = null;
+    const DEFAULT_ALLOWED_ATTR = addToSet({}, [
+      ...html,
+      ...svg,
+      ...mathMl,
+      ...xml
+    ]);
+    let CUSTOM_ELEMENT_HANDLING = Object.seal(create(null, {
+      tagNameCheck: {
+        writable: true,
+        configurable: false,
+        enumerable: true,
+        value: null
+      },
+      attributeNameCheck: {
+        writable: true,
+        configurable: false,
+        enumerable: true,
+        value: null
+      },
+      allowCustomizedBuiltInElements: {
+        writable: true,
+        configurable: false,
+        enumerable: true,
+        value: false
+      }
+    }));
+    let FORBID_TAGS = null;
+    let FORBID_ATTR = null;
+    const EXTRA_ELEMENT_HANDLING = Object.seal(create(null, {
+      tagCheck: {
+        writable: true,
+        configurable: false,
+        enumerable: true,
+        value: null
+      },
+      attributeCheck: {
+        writable: true,
+        configurable: false,
+        enumerable: true,
+        value: null
+      }
+    }));
+    let ALLOW_ARIA_ATTR = true;
+    let ALLOW_DATA_ATTR = true;
+    let ALLOW_UNKNOWN_PROTOCOLS = false;
+    let ALLOW_SELF_CLOSE_IN_ATTR = true;
+    let SAFE_FOR_TEMPLATES = false;
+    let SAFE_FOR_XML = true;
+    let WHOLE_DOCUMENT = false;
+    let SET_CONFIG = false;
+    let SET_CONFIG_ALLOWED_TAGS = null;
+    let SET_CONFIG_ALLOWED_ATTR = null;
+    let FORCE_BODY = false;
+    let RETURN_DOM = false;
+    let RETURN_DOM_FRAGMENT = false;
+    let RETURN_TRUSTED_TYPE = false;
+    let SANITIZE_DOM = true;
+    let SANITIZE_NAMED_PROPS = false;
+    const SANITIZE_NAMED_PROPS_PREFIX = "user-content-";
+    let KEEP_CONTENT = true;
+    let IN_PLACE = false;
+    let USE_PROFILES = {};
+    let FORBID_CONTENTS = null;
+    const DEFAULT_FORBID_CONTENTS = addToSet({}, [
+      "annotation-xml",
+      "audio",
+      "colgroup",
+      "desc",
+      "foreignobject",
+      "head",
+      "iframe",
+      "math",
+      "mi",
+      "mn",
+      "mo",
+      "ms",
+      "mtext",
+      "noembed",
+      "noframes",
+      "noscript",
+      "plaintext",
+      "script",
+      "selectedcontent",
+      "style",
+      "svg",
+      "template",
+      "thead",
+      "title",
+      "video",
+      "xmp"
+    ]);
+    let DATA_URI_TAGS = null;
+    const DEFAULT_DATA_URI_TAGS = addToSet({}, [
+      "audio",
+      "video",
+      "img",
+      "source",
+      "image",
+      "track"
+    ]);
+    let URI_SAFE_ATTRIBUTES = null;
+    const DEFAULT_URI_SAFE_ATTRIBUTES = addToSet({}, [
+      "alt",
+      "class",
+      "for",
+      "id",
+      "label",
+      "name",
+      "pattern",
+      "placeholder",
+      "role",
+      "summary",
+      "title",
+      "value",
+      "style",
+      "xmlns"
+    ]);
+    const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
+    const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+    const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+    let NAMESPACE = HTML_NAMESPACE;
+    let IS_EMPTY_INPUT = false;
+    let ALLOWED_NAMESPACES = null;
+    const DEFAULT_ALLOWED_NAMESPACES = addToSet({}, [
+      MATHML_NAMESPACE,
+      SVG_NAMESPACE,
+      HTML_NAMESPACE
+    ], stringToString);
+    const DEFAULT_MATHML_TEXT_INTEGRATION_POINTS = freeze([
+      "mi",
+      "mo",
+      "mn",
+      "ms",
+      "mtext"
+    ]);
+    let MATHML_TEXT_INTEGRATION_POINTS = addToSet({}, DEFAULT_MATHML_TEXT_INTEGRATION_POINTS);
+    const DEFAULT_HTML_INTEGRATION_POINTS = freeze(["annotation-xml"]);
+    let HTML_INTEGRATION_POINTS = addToSet({}, DEFAULT_HTML_INTEGRATION_POINTS);
+    const COMMON_SVG_AND_HTML_ELEMENTS = addToSet({}, [
+      "title",
+      "style",
+      "font",
+      "a",
+      "script"
+    ]);
+    let PARSER_MEDIA_TYPE = null;
+    const SUPPORTED_PARSER_MEDIA_TYPES = ["application/xhtml+xml", "text/html"];
+    const DEFAULT_PARSER_MEDIA_TYPE = "text/html";
+    let transformCaseFunc = null;
+    let CONFIG = null;
+    const formElement = document2.createElement("form");
+    const isRegexOrFunction = function isRegexOrFunction2(testValue) {
+      return testValue instanceof RegExp || testValue instanceof Function;
+    };
+    const _parseConfig = function _parseConfig2() {
+      let cfg = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : {};
+      if (CONFIG && CONFIG === cfg) return;
+      if (!cfg || typeof cfg !== "object") cfg = {};
+      cfg = clone(cfg);
+      PARSER_MEDIA_TYPE = SUPPORTED_PARSER_MEDIA_TYPES.indexOf(cfg.PARSER_MEDIA_TYPE) === -1 ? DEFAULT_PARSER_MEDIA_TYPE : cfg.PARSER_MEDIA_TYPE;
+      transformCaseFunc = PARSER_MEDIA_TYPE === "application/xhtml+xml" ? stringToString : stringToLowerCase;
+      ALLOWED_TAGS = _resolveSetOption(cfg, "ALLOWED_TAGS", DEFAULT_ALLOWED_TAGS, { transform: transformCaseFunc });
+      ALLOWED_ATTR = _resolveSetOption(cfg, "ALLOWED_ATTR", DEFAULT_ALLOWED_ATTR, { transform: transformCaseFunc });
+      ALLOWED_NAMESPACES = _resolveSetOption(cfg, "ALLOWED_NAMESPACES", DEFAULT_ALLOWED_NAMESPACES, { transform: stringToString });
+      URI_SAFE_ATTRIBUTES = _resolveSetOption(cfg, "ADD_URI_SAFE_ATTR", DEFAULT_URI_SAFE_ATTRIBUTES, {
+        transform: transformCaseFunc,
+        base: DEFAULT_URI_SAFE_ATTRIBUTES
+      });
+      DATA_URI_TAGS = _resolveSetOption(cfg, "ADD_DATA_URI_TAGS", DEFAULT_DATA_URI_TAGS, {
+        transform: transformCaseFunc,
+        base: DEFAULT_DATA_URI_TAGS
+      });
+      FORBID_CONTENTS = _resolveSetOption(cfg, "FORBID_CONTENTS", DEFAULT_FORBID_CONTENTS, { transform: transformCaseFunc });
+      FORBID_TAGS = _resolveSetOption(cfg, "FORBID_TAGS", clone({}), { transform: transformCaseFunc });
+      FORBID_ATTR = _resolveSetOption(cfg, "FORBID_ATTR", clone({}), { transform: transformCaseFunc });
+      USE_PROFILES = objectHasOwnProperty(cfg, "USE_PROFILES") ? cfg.USE_PROFILES && typeof cfg.USE_PROFILES === "object" ? clone(cfg.USE_PROFILES) : cfg.USE_PROFILES : false;
+      ALLOW_ARIA_ATTR = cfg.ALLOW_ARIA_ATTR !== false;
+      ALLOW_DATA_ATTR = cfg.ALLOW_DATA_ATTR !== false;
+      ALLOW_UNKNOWN_PROTOCOLS = cfg.ALLOW_UNKNOWN_PROTOCOLS || false;
+      ALLOW_SELF_CLOSE_IN_ATTR = cfg.ALLOW_SELF_CLOSE_IN_ATTR !== false;
+      SAFE_FOR_TEMPLATES = cfg.SAFE_FOR_TEMPLATES || false;
+      SAFE_FOR_XML = cfg.SAFE_FOR_XML !== false;
+      WHOLE_DOCUMENT = cfg.WHOLE_DOCUMENT || false;
+      RETURN_DOM = cfg.RETURN_DOM || false;
+      RETURN_DOM_FRAGMENT = cfg.RETURN_DOM_FRAGMENT || false;
+      RETURN_TRUSTED_TYPE = cfg.RETURN_TRUSTED_TYPE || false;
+      FORCE_BODY = cfg.FORCE_BODY || false;
+      SANITIZE_DOM = cfg.SANITIZE_DOM !== false;
+      SANITIZE_NAMED_PROPS = cfg.SANITIZE_NAMED_PROPS || false;
+      KEEP_CONTENT = cfg.KEEP_CONTENT !== false;
+      IN_PLACE = cfg.IN_PLACE || false;
+      IS_ALLOWED_URI$1 = isRegex(cfg.ALLOWED_URI_REGEXP) ? cfg.ALLOWED_URI_REGEXP : IS_ALLOWED_URI;
+      NAMESPACE = typeof cfg.NAMESPACE === "string" ? cfg.NAMESPACE : HTML_NAMESPACE;
+      MATHML_TEXT_INTEGRATION_POINTS = _resolveObjectOption(cfg, "MATHML_TEXT_INTEGRATION_POINTS", () => addToSet({}, DEFAULT_MATHML_TEXT_INTEGRATION_POINTS));
+      HTML_INTEGRATION_POINTS = _resolveObjectOption(cfg, "HTML_INTEGRATION_POINTS", () => addToSet({}, DEFAULT_HTML_INTEGRATION_POINTS));
+      const customElementHandling = _resolveObjectOption(cfg, "CUSTOM_ELEMENT_HANDLING", () => create(null));
+      CUSTOM_ELEMENT_HANDLING = create(null);
+      if (objectHasOwnProperty(customElementHandling, "tagNameCheck") && isRegexOrFunction(customElementHandling.tagNameCheck)) CUSTOM_ELEMENT_HANDLING.tagNameCheck = customElementHandling.tagNameCheck;
+      if (objectHasOwnProperty(customElementHandling, "attributeNameCheck") && isRegexOrFunction(customElementHandling.attributeNameCheck)) CUSTOM_ELEMENT_HANDLING.attributeNameCheck = customElementHandling.attributeNameCheck;
+      if (objectHasOwnProperty(customElementHandling, "allowCustomizedBuiltInElements") && typeof customElementHandling.allowCustomizedBuiltInElements === "boolean") CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements = customElementHandling.allowCustomizedBuiltInElements;
+      seal(CUSTOM_ELEMENT_HANDLING);
+      if (SAFE_FOR_TEMPLATES) ALLOW_DATA_ATTR = false;
+      if (RETURN_DOM_FRAGMENT) RETURN_DOM = true;
+      if (USE_PROFILES) {
+        ALLOWED_TAGS = addToSet({}, text);
+        ALLOWED_ATTR = create(null);
+        if (USE_PROFILES.html === true) {
+          addToSet(ALLOWED_TAGS, html$1);
+          addToSet(ALLOWED_ATTR, html);
+        }
+        if (USE_PROFILES.svg === true) {
+          addToSet(ALLOWED_TAGS, svg$1);
+          addToSet(ALLOWED_ATTR, svg);
+          addToSet(ALLOWED_ATTR, xml);
+        }
+        if (USE_PROFILES.svgFilters === true) {
+          addToSet(ALLOWED_TAGS, svgFilters);
+          addToSet(ALLOWED_ATTR, svg);
+          addToSet(ALLOWED_ATTR, xml);
+        }
+        if (USE_PROFILES.mathMl === true) {
+          addToSet(ALLOWED_TAGS, mathMl$1);
+          addToSet(ALLOWED_ATTR, mathMl);
+          addToSet(ALLOWED_ATTR, xml);
+        }
+      }
+      EXTRA_ELEMENT_HANDLING.tagCheck = null;
+      EXTRA_ELEMENT_HANDLING.attributeCheck = null;
+      if (objectHasOwnProperty(cfg, "ADD_TAGS")) {
+        if (typeof cfg.ADD_TAGS === "function") EXTRA_ELEMENT_HANDLING.tagCheck = cfg.ADD_TAGS;
+        else if (arrayIsArray(cfg.ADD_TAGS)) {
+          if (ALLOWED_TAGS === DEFAULT_ALLOWED_TAGS) ALLOWED_TAGS = clone(ALLOWED_TAGS);
+          addToSet(ALLOWED_TAGS, cfg.ADD_TAGS, transformCaseFunc);
+        }
+      }
+      if (objectHasOwnProperty(cfg, "ADD_ATTR")) {
+        if (typeof cfg.ADD_ATTR === "function") EXTRA_ELEMENT_HANDLING.attributeCheck = cfg.ADD_ATTR;
+        else if (arrayIsArray(cfg.ADD_ATTR)) {
+          if (ALLOWED_ATTR === DEFAULT_ALLOWED_ATTR) ALLOWED_ATTR = clone(ALLOWED_ATTR);
+          addToSet(ALLOWED_ATTR, cfg.ADD_ATTR, transformCaseFunc);
+        }
+      }
+      if (objectHasOwnProperty(cfg, "ADD_FORBID_CONTENTS") && arrayIsArray(cfg.ADD_FORBID_CONTENTS)) {
+        if (FORBID_CONTENTS === DEFAULT_FORBID_CONTENTS) FORBID_CONTENTS = clone(FORBID_CONTENTS);
+        addToSet(FORBID_CONTENTS, cfg.ADD_FORBID_CONTENTS, transformCaseFunc);
+      }
+      if (KEEP_CONTENT) ALLOWED_TAGS["#text"] = true;
+      if (WHOLE_DOCUMENT) addToSet(ALLOWED_TAGS, [
+        "html",
+        "head",
+        "body"
+      ]);
+      if (ALLOWED_TAGS.table) {
+        addToSet(ALLOWED_TAGS, ["tbody"]);
+        delete FORBID_TAGS.tbody;
+      }
+      if (cfg.TRUSTED_TYPES_POLICY) {
+        if (typeof cfg.TRUSTED_TYPES_POLICY.createHTML !== "function") throw typeErrorCreate('TRUSTED_TYPES_POLICY configuration option must provide a "createHTML" hook.');
+        if (typeof cfg.TRUSTED_TYPES_POLICY.createScriptURL !== "function") throw typeErrorCreate('TRUSTED_TYPES_POLICY configuration option must provide a "createScriptURL" hook.');
+        const previousTrustedTypesPolicy = trustedTypesPolicy;
+        trustedTypesPolicy = cfg.TRUSTED_TYPES_POLICY;
+        try {
+          emptyHTML = _createTrustedHTML("");
+        } catch (error) {
+          trustedTypesPolicy = previousTrustedTypesPolicy;
+          throw error;
+        }
+      } else if (cfg.TRUSTED_TYPES_POLICY === null) {
+        trustedTypesPolicy = void 0;
+        emptyHTML = "";
+      } else {
+        if (trustedTypesPolicy === void 0) trustedTypesPolicy = _getDefaultTrustedTypesPolicy();
+        if (trustedTypesPolicy && typeof emptyHTML === "string") emptyHTML = _createTrustedHTML("");
+      }
+      if (freeze) freeze(cfg);
+      CONFIG = cfg;
+    };
+    const ALL_SVG_TAGS = addToSet({}, [
+      ...svg$1,
+      ...svgFilters,
+      ...svgDisallowed
+    ]);
+    const ALL_MATHML_TAGS = addToSet({}, [...mathMl$1, ...mathMlDisallowed]);
+    const _checkSvgNamespace = function _checkSvgNamespace2(tagName, parent, parentTagName) {
+      if (parent.namespaceURI === HTML_NAMESPACE) return tagName === "svg";
+      if (parent.namespaceURI === MATHML_NAMESPACE) return tagName === "svg" && (parentTagName === "annotation-xml" || MATHML_TEXT_INTEGRATION_POINTS[parentTagName]);
+      return Boolean(ALL_SVG_TAGS[tagName]);
+    };
+    const _checkMathMlNamespace = function _checkMathMlNamespace2(tagName, parent, parentTagName) {
+      if (parent.namespaceURI === HTML_NAMESPACE) return tagName === "math";
+      if (parent.namespaceURI === SVG_NAMESPACE) return tagName === "math" && HTML_INTEGRATION_POINTS[parentTagName];
+      return Boolean(ALL_MATHML_TAGS[tagName]);
+    };
+    const _checkHtmlNamespace = function _checkHtmlNamespace2(tagName, parent, parentTagName) {
+      if (parent.namespaceURI === SVG_NAMESPACE && !HTML_INTEGRATION_POINTS[parentTagName]) return false;
+      if (parent.namespaceURI === MATHML_NAMESPACE && !MATHML_TEXT_INTEGRATION_POINTS[parentTagName]) return false;
+      return !ALL_MATHML_TAGS[tagName] && (COMMON_SVG_AND_HTML_ELEMENTS[tagName] || !ALL_SVG_TAGS[tagName]);
+    };
+    const _checkValidNamespace = function _checkValidNamespace2(element) {
+      let parent = getParentNode(element);
+      if (!parent || !parent.tagName) parent = {
+        namespaceURI: NAMESPACE,
+        tagName: "template"
+      };
+      const tagName = stringToLowerCase(element.tagName);
+      const parentTagName = stringToLowerCase(parent.tagName);
+      if (!ALLOWED_NAMESPACES[element.namespaceURI]) return false;
+      if (element.namespaceURI === SVG_NAMESPACE) return _checkSvgNamespace(tagName, parent, parentTagName);
+      if (element.namespaceURI === MATHML_NAMESPACE) return _checkMathMlNamespace(tagName, parent, parentTagName);
+      if (element.namespaceURI === HTML_NAMESPACE) return _checkHtmlNamespace(tagName, parent, parentTagName);
+      if (PARSER_MEDIA_TYPE === "application/xhtml+xml" && ALLOWED_NAMESPACES[element.namespaceURI]) return true;
+      return false;
+    };
+    const _forceRemove = function _forceRemove2(node) {
+      arrayPush(DOMPurify.removed, { element: node });
+      try {
+        getParentNode(node).removeChild(node);
+      } catch (_) {
+        remove(node);
+        if (!getParentNode(node)) throw typeErrorCreate("a node selected for removal could not be detached from its tree and cannot be safely returned; refusing to sanitize in place");
+      }
+    };
+    const _stripAttributeNode = function _stripAttributeNode2(element, attribute, name) {
+      try {
+        removeAttributeNode(element, attribute);
+      } catch (_) {
+        try {
+          element.removeAttribute(name);
+        } catch (_2) {
+        }
+      }
+    };
+    const _neutralizeRoot = function _neutralizeRoot2(root) {
+      _neutralizeSubtree(root);
+      const childNodes = getChildNodes(root);
+      if (childNodes) {
+        const snapshot = [];
+        arrayForEach(childNodes, (child) => {
+          arrayPush(snapshot, child);
+        });
+        arrayForEach(snapshot, (child) => {
+          try {
+            remove(child);
+          } catch (_) {
+          }
+        });
+      }
+      const attributes = getAttributes(root);
+      if (attributes) for (let i = attributes.length - 1; i >= 0; --i) {
+        const attribute = attributes[i];
+        const name = attribute && attribute.name;
+        if (typeof name === "string") _stripAttributeNode(root, attribute, name);
+      }
+    };
+    const _removeAttribute = function _removeAttribute2(name, element, attr) {
+      if (!attr) try {
+        attr = element.getAttributeNode(name);
+      } catch (_) {
+        attr = null;
+      }
+      arrayPush(DOMPurify.removed, {
+        attribute: attr || null,
+        from: element
+      });
+      try {
+        if (attr) removeAttributeNode(element, attr);
+        else element.removeAttribute(name);
+      } catch (_) {
+        try {
+          element.removeAttribute(name);
+        } catch (_2) {
+        }
+      }
+      if (name === "is") {
+        if (RETURN_DOM || RETURN_DOM_FRAGMENT) try {
+          _forceRemove(element);
+        } catch (_) {
+        }
+        else try {
+          element.setAttribute(name, "");
+        } catch (_) {
+        }
+      }
+    };
+    const _stripDisallowedAttributes = function _stripDisallowedAttributes2(element) {
+      const attributes = getAttributes(element);
+      if (!attributes) return;
+      for (let i = attributes.length - 1; i >= 0; --i) {
+        const attribute = attributes[i];
+        const name = attribute && attribute.name;
+        if (typeof name !== "string" || ALLOWED_ATTR[transformCaseFunc(name)]) continue;
+        _stripAttributeNode(element, attribute, name);
+      }
+    };
+    const _neutralizeSubtree = function _neutralizeSubtree2(root) {
+      const stack = [root];
+      while (stack.length > 0) {
+        const node = stack.pop();
+        if (_readNodeType(node) === NODE_TYPE.element) _stripDisallowedAttributes(node);
+        const childNodes = getChildNodes(node);
+        if (childNodes) for (let i = childNodes.length - 1; i >= 0; --i) stack.push(childNodes[i]);
+      }
+    };
+    const _isPatchLinkageAttribute = function _isPatchLinkageAttribute2(lcName, lcTag) {
+      if (!SAFE_FOR_XML) return false;
+      if (lcName === "patchsrc") return true;
+      return lcName === "for" && lcTag !== "label" && lcTag !== "output";
+    };
+    const _neutralizePatchLinkage = function _neutralizePatchLinkage2(root) {
+      if (!SAFE_FOR_XML) return;
+      const stack = [root];
+      while (stack.length > 0) {
+        const node = stack.pop();
+        const nodeType = _readNodeType(node);
+        if (nodeType === NODE_TYPE.processingInstruction || nodeType === NODE_TYPE.comment && regExpTest(COMMENT_MARKUP_PROBE, node.data)) {
+          try {
+            remove(node);
+          } catch (_) {
+          }
+          continue;
+        }
+        if (nodeType === NODE_TYPE.element) {
+          const element = node;
+          const lcTag = transformCaseFunc(_readNodeName(node));
+          try {
+            if (element.hasAttribute && element.hasAttribute("patchsrc")) element.removeAttribute("patchsrc");
+            if (element.hasAttribute && element.hasAttribute("for") && _isPatchLinkageAttribute("for", lcTag)) element.removeAttribute("for");
+          } catch (_) {
+          }
+        }
+        const childNodes = getChildNodes(node);
+        if (childNodes) for (let i = childNodes.length - 1; i >= 0; --i) stack.push(childNodes[i]);
+      }
+    };
+    const _initDocument = function _initDocument2(dirty) {
+      let doc = null;
+      let leadingWhitespace = null;
+      if (FORCE_BODY) dirty = "<remove></remove>" + dirty;
+      else {
+        const matches = stringMatch(dirty, /^[\r\n\t ]+/);
+        leadingWhitespace = matches && matches[0];
+      }
+      if (PARSER_MEDIA_TYPE === "application/xhtml+xml" && NAMESPACE === HTML_NAMESPACE) dirty = '<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body>' + dirty + "</body></html>";
+      const dirtyPayload = trustedTypesPolicy ? _createTrustedHTML(dirty) : dirty;
+      if (NAMESPACE === HTML_NAMESPACE) try {
+        doc = new DOMParser().parseFromString(dirtyPayload, PARSER_MEDIA_TYPE);
+      } catch (_) {
+      }
+      if (!doc || !doc.documentElement) {
+        doc = implementation.createDocument(NAMESPACE, "template", null);
+        try {
+          doc.documentElement.innerHTML = IS_EMPTY_INPUT ? emptyHTML : dirtyPayload;
+        } catch (_) {
+        }
+      }
+      const body = doc.body || doc.documentElement;
+      if (dirty && leadingWhitespace) body.insertBefore(document2.createTextNode(leadingWhitespace), body.childNodes[0] || null);
+      if (NAMESPACE === HTML_NAMESPACE) return getElementsByTagName.call(doc, WHOLE_DOCUMENT ? "html" : "body")[0];
+      return WHOLE_DOCUMENT ? doc.documentElement : body;
+    };
+    const _createNodeIterator = function _createNodeIterator2(root) {
+      const doc = getOwnerDocument ? getOwnerDocument(root) : root.ownerDocument;
+      return createNodeIterator.call(doc || root, root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT | NodeFilter.SHOW_TEXT | NodeFilter.SHOW_PROCESSING_INSTRUCTION | NodeFilter.SHOW_CDATA_SECTION, null);
+    };
+    const _stripTemplateExpressions = function _stripTemplateExpressions2(value2) {
+      value2 = stringReplace(value2, MUSTACHE_EXPR$1, " ");
+      value2 = stringReplace(value2, ERB_EXPR$1, " ");
+      value2 = stringReplace(value2, TMPLIT_EXPR$1, " ");
+      return value2;
+    };
+    const _scrubTemplateExpressions2 = function _scrubTemplateExpressions(node) {
+      var _node$querySelectorAl;
+      node.normalize();
+      const doc = getOwnerDocument ? getOwnerDocument(node) : node.ownerDocument;
+      const walker = createNodeIterator.call(doc || node, node, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_COMMENT | NodeFilter.SHOW_CDATA_SECTION | NodeFilter.SHOW_PROCESSING_INSTRUCTION, null);
+      let currentNode = walker.nextNode();
+      while (currentNode) {
+        currentNode.data = _stripTemplateExpressions(currentNode.data);
+        currentNode = walker.nextNode();
+      }
+      const templates = (_node$querySelectorAl = node.querySelectorAll) === null || _node$querySelectorAl === void 0 ? void 0 : _node$querySelectorAl.call(node, "template");
+      if (templates) arrayForEach(templates, (tmpl) => {
+        if (_isDocumentFragment(tmpl.content)) _scrubTemplateExpressions2(tmpl.content);
+      });
+    };
+    const _isClobbered = function _isClobbered2(element) {
+      const realTagName = getNodeName ? getNodeName(element) : null;
+      if (typeof realTagName !== "string") return false;
+      if (transformCaseFunc(realTagName) !== "form") return false;
+      return typeof element.nodeName !== "string" || typeof element.textContent !== "string" || typeof element.removeChild !== "function" || element.attributes !== getAttributes(element) || typeof element.removeAttribute !== "function" || typeof element.removeAttributeNode !== "function" || typeof element.getAttributeNode !== "function" || typeof element.setAttribute !== "function" || typeof element.namespaceURI !== "string" || typeof element.insertBefore !== "function" || typeof element.hasChildNodes !== "function" || element.nodeType !== getNodeType(element) || element.childNodes !== getChildNodes(element);
+    };
+    const _isDocumentFragment = function _isDocumentFragment2(value2) {
+      if (!getNodeType || typeof value2 !== "object" || value2 === null) return false;
+      try {
+        return getNodeType(value2) === NODE_TYPE.documentFragment;
+      } catch (_) {
+        return false;
+      }
+    };
+    const _isNode = function _isNode2(value2) {
+      if (!getNodeType || typeof value2 !== "object" || value2 === null) return false;
+      try {
+        return typeof getNodeType(value2) === "number";
+      } catch (_) {
+        return false;
+      }
+    };
+    function _executeHooks(hooks2, currentNode, data) {
+      if (hooks2.length === 0) return;
+      arrayForEach(hooks2, (hook) => {
+        hook.call(DOMPurify, currentNode, data, CONFIG);
+      });
+    }
+    const _isUnsafeNode = function _isUnsafeNode2(currentNode, tagName) {
+      if (SAFE_FOR_XML && currentNode.hasChildNodes() && !_isNode(currentNode.firstElementChild) && regExpTest(ELEMENT_MARKUP_PROBE, currentNode.textContent) && regExpTest(ELEMENT_MARKUP_PROBE, currentNode.innerHTML)) return true;
+      if (SAFE_FOR_XML && currentNode.namespaceURI === HTML_NAMESPACE && LITERAL_TEXT_ELEMENTS[tagName] && (_isNode(currentNode.firstElementChild) || typeof currentNode.textContent === "string" && regExpTest(LITERAL_TEXT_CLOSE[tagName], currentNode.textContent))) return true;
+      if (currentNode.nodeType === NODE_TYPE.processingInstruction) return true;
+      if (SAFE_FOR_XML && currentNode.nodeType === NODE_TYPE.comment && regExpTest(COMMENT_MARKUP_PROBE, currentNode.data)) return true;
+      return false;
+    };
+    const _matchesNameCheck = function _matchesNameCheck2(check2, name) {
+      if (check2 instanceof RegExp) return regExpTest(check2, name);
+      if (check2 instanceof Function) {
+        for (var _len = arguments.length, args = new Array(_len > 2 ? _len - 2 : 0), _key = 2; _key < _len; _key++) args[_key - 2] = arguments[_key];
+        return Boolean(check2(name, ...args));
+      }
+      return false;
+    };
+    const _sanitizeDisallowedNode = function _sanitizeDisallowedNode2(currentNode, tagName, root) {
+      if (!FORBID_TAGS[tagName] && _isBasicCustomElement(tagName) && _matchesNameCheck(CUSTOM_ELEMENT_HANDLING.tagNameCheck, tagName)) return false;
+      if (KEEP_CONTENT && !FORBID_CONTENTS[tagName]) {
+        const parentNode = getParentNode(currentNode);
+        const childNodes = getChildNodes(currentNode);
+        if (childNodes && parentNode) {
+          const childCount = childNodes.length;
+          for (let i = childCount - 1; i >= 0; --i) {
+            const hoisted = currentNode === root ? cloneNode(childNodes[i], true) : childNodes[i];
+            parentNode.insertBefore(hoisted, getNextSibling(currentNode));
+          }
+        }
+      }
+      _forceRemove(currentNode);
+      return true;
+    };
+    const _forkSharedAllowlist = function _forkSharedAllowlist2(hookList, set, defaultSet, setConfigSet) {
+      if (hookList.length === 0) return set;
+      return set === defaultSet || set === setConfigSet ? clone(set) : set;
+    };
+    const _handleHookDetachedNode = function _handleHookDetachedNode2(currentNode, root) {
+      if (currentNode === root || getParentNode(currentNode) !== null) return false;
+      if (IN_PLACE) _neutralizeSubtree(currentNode);
+      return true;
+    };
+    const _sanitizeElements = function _sanitizeElements2(currentNode, root) {
+      _executeHooks(hooks.beforeSanitizeElements, currentNode, null);
+      if (_handleHookDetachedNode(currentNode, root)) return true;
+      if (_isClobbered(currentNode)) {
+        _forceRemove(currentNode);
+        return true;
+      }
+      const tagName = transformCaseFunc(_readNodeName(currentNode));
+      ALLOWED_TAGS = _forkSharedAllowlist(hooks.uponSanitizeElement, ALLOWED_TAGS, DEFAULT_ALLOWED_TAGS, SET_CONFIG_ALLOWED_TAGS);
+      _executeHooks(hooks.uponSanitizeElement, currentNode, {
+        tagName,
+        allowedTags: ALLOWED_TAGS
+      });
+      if (_handleHookDetachedNode(currentNode, root)) return true;
+      if (_isUnsafeNode(currentNode, tagName)) {
+        _forceRemove(currentNode);
+        return true;
+      }
+      if (FORBID_TAGS[tagName] || !(EXTRA_ELEMENT_HANDLING.tagCheck instanceof Function && EXTRA_ELEMENT_HANDLING.tagCheck(tagName)) && !ALLOWED_TAGS[tagName]) {
+        const removed = _sanitizeDisallowedNode(currentNode, tagName, root);
+        if (removed === false) {
+          _executeHooks(hooks.afterSanitizeElements, currentNode, null);
+          if (_handleHookDetachedNode(currentNode, root)) return true;
+        }
+        return removed;
+      }
+      if (_readNodeType(currentNode) === NODE_TYPE.element && !_checkValidNamespace(currentNode)) {
+        _forceRemove(currentNode);
+        return true;
+      }
+      if ((tagName === "noscript" || tagName === "noembed" || tagName === "noframes") && regExpTest(FALLBACK_TAG_CLOSE, currentNode.innerHTML)) {
+        _forceRemove(currentNode);
+        return true;
+      }
+      if (SAFE_FOR_TEMPLATES && currentNode.nodeType === NODE_TYPE.text) {
+        const content = _stripTemplateExpressions(currentNode.textContent);
+        if (currentNode.textContent !== content) {
+          arrayPush(DOMPurify.removed, { element: currentNode.cloneNode() });
+          currentNode.textContent = content;
+        }
+      }
+      _executeHooks(hooks.afterSanitizeElements, currentNode, null);
+      return _handleHookDetachedNode(currentNode, root);
+    };
+    const _isValidAttribute = function _isValidAttribute2(lcTag, lcName, value2) {
+      if (FORBID_ATTR[lcName]) return false;
+      if (_isPatchLinkageAttribute(lcName, lcTag)) return false;
+      if (SANITIZE_DOM && (lcName === "id" || lcName === "name") && (value2 in document2 || value2 in formElement)) return false;
+      const nameIsPermitted = ALLOWED_ATTR[lcName] || EXTRA_ELEMENT_HANDLING.attributeCheck instanceof Function && EXTRA_ELEMENT_HANDLING.attributeCheck(lcName, lcTag);
+      if (ALLOW_DATA_ATTR && regExpTest(DATA_ATTR$1, lcName)) return true;
+      if (ALLOW_ARIA_ATTR && regExpTest(ARIA_ATTR$1, lcName)) return true;
+      if (!nameIsPermitted) return _isBasicCustomElement(lcTag) && _matchesNameCheck(CUSTOM_ELEMENT_HANDLING.tagNameCheck, lcTag) && _matchesNameCheck(CUSTOM_ELEMENT_HANDLING.attributeNameCheck, lcName, lcTag) || lcName === "is" && CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements && _matchesNameCheck(CUSTOM_ELEMENT_HANDLING.tagNameCheck, value2);
+      if (URI_SAFE_ATTRIBUTES[lcName]) return true;
+      if (regExpTest(IS_ALLOWED_URI$1, stringReplace(value2, ATTR_WHITESPACE$1, ""))) return true;
+      if ((lcName === "src" || lcName === "xlink:href" || lcName === "href") && lcTag !== "script" && stringIndexOf(value2, "data:") === 0 && DATA_URI_TAGS[lcTag]) return true;
+      if (ALLOW_UNKNOWN_PROTOCOLS && !regExpTest(IS_SCRIPT_OR_DATA$1, stringReplace(value2, ATTR_WHITESPACE$1, ""))) return true;
+      return !value2;
+    };
+    const RESERVED_CUSTOM_ELEMENT_NAMES = addToSet({}, [
+      "annotation-xml",
+      "color-profile",
+      "font-face",
+      "font-face-format",
+      "font-face-name",
+      "font-face-src",
+      "font-face-uri",
+      "missing-glyph"
+    ]);
+    const _isBasicCustomElement = function _isBasicCustomElement2(tagName) {
+      return !RESERVED_CUSTOM_ELEMENT_NAMES[stringToLowerCase(tagName)] && regExpTest(CUSTOM_ELEMENT$1, tagName);
+    };
+    const _applyTrustedTypesToAttribute = function _applyTrustedTypesToAttribute2(lcTag, lcName, namespaceURI, value2) {
+      if (trustedTypesPolicy && typeof trustedTypes === "object" && typeof trustedTypes.getAttributeType === "function" && !namespaceURI) switch (trustedTypes.getAttributeType(lcTag, lcName)) {
+        case "TrustedHTML":
+          return _createTrustedHTML(value2);
+        case "TrustedScriptURL":
+          return _createTrustedScriptURL(value2);
+      }
+      return value2;
+    };
+    const _setAttributeValue = function _setAttributeValue2(currentNode, name, namespaceURI, value2) {
+      try {
+        if (namespaceURI) currentNode.setAttributeNS(namespaceURI, name, value2);
+        else currentNode.setAttribute(name, value2);
+        if (_isClobbered(currentNode)) {
+          _forceRemove(currentNode);
+          return false;
+        }
+        return true;
+      } catch (_) {
+        _removeAttribute(name, currentNode);
+        return false;
+      }
+    };
+    const _sanitizeAttributes = function _sanitizeAttributes2(currentNode, root) {
+      _executeHooks(hooks.beforeSanitizeAttributes, currentNode, null);
+      if (_handleHookDetachedNode(currentNode, root)) return;
+      const attributes = currentNode.attributes;
+      if (!attributes || _isClobbered(currentNode)) return;
+      ALLOWED_ATTR = _forkSharedAllowlist(hooks.uponSanitizeAttribute, ALLOWED_ATTR, DEFAULT_ALLOWED_ATTR, SET_CONFIG_ALLOWED_ATTR);
+      const hookEvent = {
+        attrName: "",
+        attrValue: "",
+        keepAttr: true,
+        allowedAttributes: ALLOWED_ATTR,
+        forceKeepAttr: void 0
+      };
+      let l = attributes.length;
+      const lcTag = transformCaseFunc(currentNode.nodeName);
+      while (l--) {
+        const attr = attributes[l];
+        const name = attr.name, namespaceURI = attr.namespaceURI, attrValue = attr.value;
+        const lcName = transformCaseFunc(name);
+        const initValue = attrValue;
+        let value2 = name === "value" ? initValue : stringTrim(initValue);
+        let recreatedNamedProp = false;
+        hookEvent.attrName = lcName;
+        hookEvent.attrValue = value2;
+        hookEvent.keepAttr = true;
+        hookEvent.forceKeepAttr = void 0;
+        _executeHooks(hooks.uponSanitizeAttribute, currentNode, hookEvent);
+        value2 = hookEvent.attrValue;
+        if (SANITIZE_NAMED_PROPS && (lcName === "id" || lcName === "name") && stringIndexOf(value2, SANITIZE_NAMED_PROPS_PREFIX) !== 0) {
+          _removeAttribute(name, currentNode, attr);
+          value2 = SANITIZE_NAMED_PROPS_PREFIX + value2;
+          recreatedNamedProp = true;
+        }
+        if (SAFE_FOR_XML && regExpTest(/((--!?|])>)|<\/(style|script|title|xmp|textarea|noscript|iframe|noembed|noframes)/i, value2)) {
+          _removeAttribute(name, currentNode, attr);
+          continue;
+        }
+        if (lcName === "attributename" && stringMatch(value2, "href")) {
+          _removeAttribute(name, currentNode, attr);
+          continue;
+        }
+        if (hookEvent.forceKeepAttr) continue;
+        if (!hookEvent.keepAttr) {
+          _removeAttribute(name, currentNode, attr);
+          continue;
+        }
+        if (!ALLOW_SELF_CLOSE_IN_ATTR && regExpTest(SELF_CLOSING_TAG, value2)) {
+          _removeAttribute(name, currentNode, attr);
+          continue;
+        }
+        if (SAFE_FOR_TEMPLATES) value2 = _stripTemplateExpressions(value2);
+        if (!_isValidAttribute(lcTag, lcName, value2)) {
+          _removeAttribute(name, currentNode, attr);
+          continue;
+        }
+        value2 = _applyTrustedTypesToAttribute(lcTag, lcName, namespaceURI, value2);
+        if (value2 !== initValue) {
+          if (_setAttributeValue(currentNode, name, namespaceURI, value2) && recreatedNamedProp) arrayPop(DOMPurify.removed);
+        }
+      }
+      _executeHooks(hooks.afterSanitizeAttributes, currentNode, null);
+      _handleHookDetachedNode(currentNode, root);
+    };
+    const _sanitizeShadowDOM2 = function _sanitizeShadowDOM(fragment) {
+      let shadowNode = null;
+      const shadowIterator = _createNodeIterator(fragment);
+      _executeHooks(hooks.beforeSanitizeShadowDOM, fragment, null);
+      while (shadowNode = shadowIterator.nextNode()) {
+        _executeHooks(hooks.uponSanitizeShadowNode, shadowNode, null);
+        _sanitizeElements(shadowNode, fragment);
+        _sanitizeAttributes(shadowNode, fragment);
+        if (_isDocumentFragment(shadowNode.content)) _sanitizeShadowDOM2(shadowNode.content);
+        if (_readNodeType(shadowNode) === NODE_TYPE.element) {
+          const innerSr = getShadowRoot(shadowNode);
+          if (_isDocumentFragment(innerSr)) {
+            _sanitizeAttachedShadowRoots(innerSr);
+            _sanitizeShadowDOM2(innerSr);
+          }
+        }
+      }
+      _executeHooks(hooks.afterSanitizeShadowDOM, fragment, null);
+    };
+    const _sanitizeAttachedShadowRoots = function _sanitizeAttachedShadowRoots2(root) {
+      const stack = [{
+        node: root,
+        shadow: null
+      }];
+      while (stack.length > 0) {
+        const item = stack.pop();
+        if (item.shadow) {
+          _sanitizeShadowDOM2(item.shadow);
+          continue;
+        }
+        const node = item.node;
+        const isElement = _readNodeType(node) === NODE_TYPE.element;
+        const childNodes = getChildNodes(node);
+        if (childNodes) for (let i = childNodes.length - 1; i >= 0; --i) stack.push({
+          node: childNodes[i],
+          shadow: null
+        });
+        if (isElement) {
+          const rootName = getNodeName ? getNodeName(node) : null;
+          if (typeof rootName === "string" && transformCaseFunc(rootName) === "template") {
+            const content = node.content;
+            if (_isDocumentFragment(content)) stack.push({
+              node: content,
+              shadow: null
+            });
+          }
+        }
+        if (isElement) {
+          const sr = getShadowRoot(node);
+          if (_isDocumentFragment(sr)) stack.push({
+            node: null,
+            shadow: sr
+          }, {
+            node: sr,
+            shadow: null
+          });
+        }
+      }
+    };
+    DOMPurify.sanitize = function(dirty) {
+      let cfg = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {};
+      let body = null;
+      let importedNode = null;
+      let currentNode = null;
+      let returnNode = null;
+      IS_EMPTY_INPUT = !dirty;
+      if (IS_EMPTY_INPUT) dirty = "<!-->";
+      if (typeof dirty !== "string" && !_isNode(dirty)) {
+        dirty = stringifyValue(dirty);
+        if (typeof dirty !== "string") throw typeErrorCreate("dirty is not a string, aborting");
+      }
+      if (!DOMPurify.isSupported) return dirty;
+      if (SET_CONFIG) {
+        ALLOWED_TAGS = SET_CONFIG_ALLOWED_TAGS;
+        ALLOWED_ATTR = SET_CONFIG_ALLOWED_ATTR;
+      } else _parseConfig(cfg);
+      if (hooks.uponSanitizeElement.length > 0 || hooks.uponSanitizeAttribute.length > 0) ALLOWED_TAGS = clone(ALLOWED_TAGS);
+      if (hooks.uponSanitizeAttribute.length > 0) ALLOWED_ATTR = clone(ALLOWED_ATTR);
+      DOMPurify.removed = [];
+      const inPlace = IN_PLACE && typeof dirty !== "string" && _isNode(dirty);
+      if (inPlace) {
+        _neutralizePatchLinkage(dirty);
+        const nn = _readNodeName(dirty);
+        if (typeof nn === "string") {
+          const tagName = transformCaseFunc(nn);
+          if (!ALLOWED_TAGS[tagName] || FORBID_TAGS[tagName]) {
+            _neutralizeRoot(dirty);
+            throw typeErrorCreate("root node is forbidden and cannot be sanitized in-place");
+          }
+        }
+        if (_isClobbered(dirty)) {
+          _neutralizeRoot(dirty);
+          throw typeErrorCreate("root node is clobbered and cannot be sanitized in-place");
+        }
+        try {
+          _sanitizeAttachedShadowRoots(dirty);
+        } catch (error) {
+          _neutralizeRoot(dirty);
+          throw error;
+        }
+      } else if (_isNode(dirty)) {
+        body = _initDocument("<!---->");
+        importedNode = body.ownerDocument.importNode(dirty, true);
+        if (importedNode.nodeType === NODE_TYPE.element && importedNode.nodeName === "BODY") body = importedNode;
+        else if (importedNode.nodeName === "HTML") body = importedNode;
+        else body.appendChild(importedNode);
+        _sanitizeAttachedShadowRoots(body);
+      } else {
+        if (!RETURN_DOM && !SAFE_FOR_TEMPLATES && !WHOLE_DOCUMENT && dirty.indexOf("<") === -1) return trustedTypesPolicy && RETURN_TRUSTED_TYPE ? _createTrustedHTML(dirty) : dirty;
+        body = _initDocument(dirty);
+        if (!body) return RETURN_DOM ? null : RETURN_TRUSTED_TYPE ? emptyHTML : "";
+      }
+      if (body && FORCE_BODY) _forceRemove(body.firstChild);
+      const walkRoot = inPlace ? dirty : body;
+      try {
+        const nodeIterator = _createNodeIterator(walkRoot);
+        while (currentNode = nodeIterator.nextNode()) {
+          _sanitizeElements(currentNode, walkRoot);
+          _sanitizeAttributes(currentNode, walkRoot);
+          if (_isDocumentFragment(currentNode.content)) _sanitizeShadowDOM2(currentNode.content);
+        }
+      } catch (error) {
+        if (inPlace) {
+          _neutralizeRoot(dirty);
+          arrayForEach(DOMPurify.removed, (entry) => {
+            if (entry.element) _neutralizeSubtree(entry.element);
+          });
+        }
+        throw error;
+      }
+      if (inPlace) {
+        let rootWasRemoved = false;
+        arrayForEach(DOMPurify.removed, (entry) => {
+          if (entry.element) {
+            if (entry.element === dirty) rootWasRemoved = true;
+            _neutralizeSubtree(entry.element);
+          }
+        });
+        if (rootWasRemoved) throw typeErrorCreate("a node selected for removal could not be safely returned; refusing to sanitize in place");
+        if (SAFE_FOR_TEMPLATES) _scrubTemplateExpressions2(dirty);
+        return dirty;
+      }
+      if (RETURN_DOM) {
+        if (SAFE_FOR_TEMPLATES) _scrubTemplateExpressions2(body);
+        if (RETURN_DOM_FRAGMENT) {
+          returnNode = createDocumentFragment.call(body.ownerDocument);
+          while (body.firstChild) returnNode.appendChild(body.firstChild);
+        } else returnNode = body;
+        if (ALLOWED_ATTR.shadowroot || ALLOWED_ATTR.shadowrootmode) returnNode = importNode.call(originalDocument, returnNode, true);
+        return returnNode;
+      }
+      let serializedHTML = WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
+      if (WHOLE_DOCUMENT && ALLOWED_TAGS["!doctype"] && body.ownerDocument && body.ownerDocument.doctype && body.ownerDocument.doctype.name && regExpTest(DOCTYPE_NAME, body.ownerDocument.doctype.name)) serializedHTML = "<!DOCTYPE " + body.ownerDocument.doctype.name + ">\n" + serializedHTML;
+      if (SAFE_FOR_TEMPLATES) serializedHTML = _stripTemplateExpressions(serializedHTML);
+      return trustedTypesPolicy && RETURN_TRUSTED_TYPE ? _createTrustedHTML(serializedHTML) : serializedHTML;
+    };
+    DOMPurify.setConfig = function() {
+      let cfg = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : {};
+      _parseConfig(cfg);
+      SET_CONFIG = true;
+      SET_CONFIG_ALLOWED_TAGS = ALLOWED_TAGS;
+      SET_CONFIG_ALLOWED_ATTR = ALLOWED_ATTR;
+    };
+    DOMPurify.clearConfig = function() {
+      CONFIG = null;
+      SET_CONFIG = false;
+      SET_CONFIG_ALLOWED_TAGS = null;
+      SET_CONFIG_ALLOWED_ATTR = null;
+      trustedTypesPolicy = defaultTrustedTypesPolicy;
+      emptyHTML = "";
+    };
+    DOMPurify.isValidAttribute = function(tag, attr, value2) {
+      if (!CONFIG) _parseConfig({});
+      const lcTag = transformCaseFunc(tag);
+      const lcName = transformCaseFunc(attr);
+      return _isValidAttribute(lcTag, lcName, value2);
+    };
+    DOMPurify.addHook = function(entryPoint, hookFunction) {
+      if (typeof hookFunction !== "function") return;
+      if (!objectHasOwnProperty(hooks, entryPoint)) return;
+      arrayPush(hooks[entryPoint], hookFunction);
+    };
+    DOMPurify.removeHook = function(entryPoint, hookFunction) {
+      if (!objectHasOwnProperty(hooks, entryPoint)) return;
+      if (hookFunction !== void 0) {
+        const index = arrayLastIndexOf(hooks[entryPoint], hookFunction);
+        return index === -1 ? void 0 : arraySplice(hooks[entryPoint], index, 1)[0];
+      }
+      return arrayPop(hooks[entryPoint]);
+    };
+    DOMPurify.removeHooks = function(entryPoint) {
+      if (!objectHasOwnProperty(hooks, entryPoint)) return;
+      hooks[entryPoint] = [];
+    };
+    DOMPurify.removeAllHooks = function() {
+      hooks = _createHooksMap();
+    };
+    return DOMPurify;
+  }
+  var entries, setPrototypeOf, isFrozen, getPrototypeOf, getOwnPropertyDescriptor, freeze, seal, create, _ref, apply, construct, arrayForEach, arrayLastIndexOf, arrayPop, arrayPush, arraySplice, arrayIsArray, stringToLowerCase, stringToString, stringMatch, stringReplace, stringIndexOf, stringTrim, numberToString, booleanToString, bigintToString, symbolToString, objectHasOwnProperty, objectToString, regExpTest, typeErrorCreate, html$1, svg$1, svgFilters, svgDisallowed, mathMl$1, mathMlDisallowed, text, html, svg, mathMl, xml, MUSTACHE_EXPR, ERB_EXPR, TMPLIT_EXPR, DATA_ATTR, ARIA_ATTR, IS_ALLOWED_URI, IS_SCRIPT_OR_DATA, ATTR_WHITESPACE, DOCTYPE_NAME, CUSTOM_ELEMENT, ELEMENT_MARKUP_PROBE, COMMENT_MARKUP_PROBE, FALLBACK_TAG_CLOSE, SELF_CLOSING_TAG, NODE_TYPE, LITERAL_TEXT_ELEMENT_NAMES, LITERAL_TEXT_ELEMENTS, LITERAL_TEXT_CLOSE, getGlobal, _createTrustedTypesPolicy, _createHooksMap, _resolveSetOption, _resolveObjectOption, purify_default;
+  var init_purify_es = __esm({
+    "node_modules/dompurify/dist/purify.es.mjs"() {
+      AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || "@@asyncIterator"] = function() {
+        return this;
+      }, AsyncGenerator.prototype.next = function(e) {
+        return this._invoke("next", e);
+      }, AsyncGenerator.prototype.throw = function(e) {
+        return this._invoke("throw", e);
+      }, AsyncGenerator.prototype.return = function(e) {
+        return this._invoke("return", e);
+      };
+      entries = Object.entries;
+      setPrototypeOf = Object.setPrototypeOf;
+      isFrozen = Object.isFrozen;
+      getPrototypeOf = Object.getPrototypeOf;
+      getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+      freeze = Object.freeze;
+      seal = Object.seal;
+      create = Object.create;
+      _ref = typeof Reflect !== "undefined" && Reflect;
+      apply = _ref.apply;
+      construct = _ref.construct;
+      if (!freeze) freeze = function freeze2(x) {
+        return x;
+      };
+      if (!seal) seal = function seal2(x) {
+        return x;
+      };
+      if (!apply) apply = function apply2(func, thisArg) {
+        for (var _len = arguments.length, args = new Array(_len > 2 ? _len - 2 : 0), _key = 2; _key < _len; _key++) args[_key - 2] = arguments[_key];
+        return func.apply(thisArg, args);
+      };
+      if (!construct) construct = function construct2(Func) {
+        for (var _len2 = arguments.length, args = new Array(_len2 > 1 ? _len2 - 1 : 0), _key2 = 1; _key2 < _len2; _key2++) args[_key2 - 1] = arguments[_key2];
+        return new Func(...args);
+      };
+      arrayForEach = unapply(Array.prototype.forEach);
+      Array.prototype.indexOf;
+      arrayLastIndexOf = unapply(Array.prototype.lastIndexOf);
+      arrayPop = unapply(Array.prototype.pop);
+      arrayPush = unapply(Array.prototype.push);
+      Array.prototype.slice;
+      arraySplice = unapply(Array.prototype.splice);
+      arrayIsArray = Array.isArray;
+      stringToLowerCase = unapply(String.prototype.toLowerCase);
+      stringToString = unapply(String.prototype.toString);
+      stringMatch = unapply(String.prototype.match);
+      stringReplace = unapply(String.prototype.replace);
+      stringIndexOf = unapply(String.prototype.indexOf);
+      stringTrim = unapply(String.prototype.trim);
+      numberToString = unapply(Number.prototype.toString);
+      booleanToString = unapply(Boolean.prototype.toString);
+      bigintToString = typeof BigInt === "undefined" ? null : unapply(BigInt.prototype.toString);
+      symbolToString = typeof Symbol === "undefined" ? null : unapply(Symbol.prototype.toString);
+      objectHasOwnProperty = unapply(Object.prototype.hasOwnProperty);
+      objectToString = unapply(Object.prototype.toString);
+      regExpTest = unapply(RegExp.prototype.test);
+      typeErrorCreate = unconstruct(TypeError);
+      html$1 = freeze([
+        "a",
+        "abbr",
+        "acronym",
+        "address",
+        "area",
+        "article",
+        "aside",
+        "audio",
+        "b",
+        "bdi",
+        "bdo",
+        "big",
+        "blink",
+        "blockquote",
+        "body",
+        "br",
+        "button",
+        "canvas",
+        "caption",
+        "center",
+        "cite",
+        "code",
+        "col",
+        "colgroup",
+        "content",
+        "data",
+        "datalist",
+        "dd",
+        "decorator",
+        "del",
+        "details",
+        "dfn",
+        "dialog",
+        "dir",
+        "div",
+        "dl",
+        "dt",
+        "element",
+        "em",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "font",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hgroup",
+        "hr",
+        "html",
+        "i",
+        "img",
+        "input",
+        "ins",
+        "kbd",
+        "label",
+        "legend",
+        "li",
+        "main",
+        "map",
+        "mark",
+        "marquee",
+        "menu",
+        "menuitem",
+        "meter",
+        "nav",
+        "nobr",
+        "ol",
+        "optgroup",
+        "option",
+        "output",
+        "p",
+        "picture",
+        "pre",
+        "progress",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "search",
+        "section",
+        "select",
+        "shadow",
+        "slot",
+        "small",
+        "source",
+        "spacer",
+        "span",
+        "strike",
+        "strong",
+        "style",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "template",
+        "textarea",
+        "tfoot",
+        "th",
+        "thead",
+        "time",
+        "tr",
+        "track",
+        "tt",
+        "u",
+        "ul",
+        "var",
+        "video",
+        "wbr"
+      ]);
+      svg$1 = freeze([
+        "svg",
+        "a",
+        "altglyph",
+        "altglyphdef",
+        "altglyphitem",
+        "animatecolor",
+        "animatemotion",
+        "animatetransform",
+        "circle",
+        "clippath",
+        "defs",
+        "desc",
+        "ellipse",
+        "enterkeyhint",
+        "exportparts",
+        "filter",
+        "font",
+        "g",
+        "glyph",
+        "glyphref",
+        "hkern",
+        "image",
+        "inputmode",
+        "line",
+        "lineargradient",
+        "marker",
+        "mask",
+        "metadata",
+        "mpath",
+        "part",
+        "path",
+        "pattern",
+        "polygon",
+        "polyline",
+        "radialgradient",
+        "rect",
+        "stop",
+        "style",
+        "switch",
+        "symbol",
+        "text",
+        "textpath",
+        "title",
+        "tref",
+        "tspan",
+        "view",
+        "vkern"
+      ]);
+      svgFilters = freeze([
+        "feBlend",
+        "feColorMatrix",
+        "feComponentTransfer",
+        "feComposite",
+        "feConvolveMatrix",
+        "feDiffuseLighting",
+        "feDisplacementMap",
+        "feDistantLight",
+        "feDropShadow",
+        "feFlood",
+        "feFuncA",
+        "feFuncB",
+        "feFuncG",
+        "feFuncR",
+        "feGaussianBlur",
+        "feImage",
+        "feMerge",
+        "feMergeNode",
+        "feMorphology",
+        "feOffset",
+        "fePointLight",
+        "feSpecularLighting",
+        "feSpotLight",
+        "feTile",
+        "feTurbulence"
+      ]);
+      svgDisallowed = freeze([
+        "animate",
+        "color-profile",
+        "cursor",
+        "discard",
+        "font-face",
+        "font-face-format",
+        "font-face-name",
+        "font-face-src",
+        "font-face-uri",
+        "foreignobject",
+        "hatch",
+        "hatchpath",
+        "mesh",
+        "meshgradient",
+        "meshpatch",
+        "meshrow",
+        "missing-glyph",
+        "script",
+        "set",
+        "solidcolor",
+        "unknown",
+        "use"
+      ]);
+      mathMl$1 = freeze([
+        "math",
+        "menclose",
+        "merror",
+        "mfenced",
+        "mfrac",
+        "mglyph",
+        "mi",
+        "mlabeledtr",
+        "mmultiscripts",
+        "mn",
+        "mo",
+        "mover",
+        "mpadded",
+        "mphantom",
+        "mroot",
+        "mrow",
+        "ms",
+        "mspace",
+        "msqrt",
+        "mstyle",
+        "msub",
+        "msup",
+        "msubsup",
+        "mtable",
+        "mtd",
+        "mtext",
+        "mtr",
+        "munder",
+        "munderover",
+        "mprescripts"
+      ]);
+      mathMlDisallowed = freeze([
+        "maction",
+        "maligngroup",
+        "malignmark",
+        "mlongdiv",
+        "mscarries",
+        "mscarry",
+        "msgroup",
+        "mstack",
+        "msline",
+        "msrow",
+        "semantics",
+        "annotation",
+        "annotation-xml",
+        "mprescripts",
+        "none"
+      ]);
+      text = freeze(["#text"]);
+      html = freeze([
+        "accept",
+        "action",
+        "align",
+        "alt",
+        "autocapitalize",
+        "autocomplete",
+        "autopictureinpicture",
+        "autoplay",
+        "background",
+        "bgcolor",
+        "border",
+        "capture",
+        "cellpadding",
+        "cellspacing",
+        "checked",
+        "cite",
+        "class",
+        "clear",
+        "color",
+        "cols",
+        "colspan",
+        "command",
+        "commandfor",
+        "controls",
+        "controlslist",
+        "coords",
+        "crossorigin",
+        "datetime",
+        "decoding",
+        "default",
+        "dir",
+        "disabled",
+        "disablepictureinpicture",
+        "disableremoteplayback",
+        "download",
+        "draggable",
+        "enctype",
+        "enterkeyhint",
+        "exportparts",
+        "face",
+        "for",
+        "headers",
+        "height",
+        "hidden",
+        "high",
+        "href",
+        "hreflang",
+        "id",
+        "inert",
+        "inputmode",
+        "integrity",
+        "ismap",
+        "kind",
+        "label",
+        "lang",
+        "list",
+        "loading",
+        "loop",
+        "low",
+        "max",
+        "maxlength",
+        "media",
+        "method",
+        "min",
+        "minlength",
+        "multiple",
+        "muted",
+        "name",
+        "nonce",
+        "noshade",
+        "novalidate",
+        "nowrap",
+        "open",
+        "optimum",
+        "part",
+        "pattern",
+        "placeholder",
+        "playsinline",
+        "popover",
+        "popovertarget",
+        "popovertargetaction",
+        "poster",
+        "preload",
+        "pubdate",
+        "radiogroup",
+        "readonly",
+        "rel",
+        "required",
+        "rev",
+        "reversed",
+        "role",
+        "rows",
+        "rowspan",
+        "spellcheck",
+        "scope",
+        "selected",
+        "shape",
+        "size",
+        "sizes",
+        "slot",
+        "span",
+        "srclang",
+        "start",
+        "src",
+        "srcset",
+        "step",
+        "style",
+        "summary",
+        "tabindex",
+        "title",
+        "translate",
+        "type",
+        "usemap",
+        "valign",
+        "value",
+        "width",
+        "wrap",
+        "xmlns"
+      ]);
+      svg = freeze([
+        "accent-height",
+        "accumulate",
+        "additive",
+        "alignment-baseline",
+        "amplitude",
+        "ascent",
+        "attributename",
+        "attributetype",
+        "azimuth",
+        "basefrequency",
+        "baseline-shift",
+        "begin",
+        "bias",
+        "by",
+        "class",
+        "clip",
+        "clippathunits",
+        "clip-path",
+        "clip-rule",
+        "color",
+        "color-interpolation",
+        "color-interpolation-filters",
+        "color-profile",
+        "color-rendering",
+        "cx",
+        "cy",
+        "d",
+        "dx",
+        "dy",
+        "diffuseconstant",
+        "direction",
+        "display",
+        "divisor",
+        "dominant-baseline",
+        "dur",
+        "edgemode",
+        "elevation",
+        "end",
+        "exponent",
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "filter",
+        "filterunits",
+        "flood-color",
+        "flood-opacity",
+        "font-family",
+        "font-size",
+        "font-size-adjust",
+        "font-stretch",
+        "font-style",
+        "font-variant",
+        "font-weight",
+        "fx",
+        "fy",
+        "g1",
+        "g2",
+        "glyph-name",
+        "glyphref",
+        "gradientunits",
+        "gradienttransform",
+        "height",
+        "href",
+        "id",
+        "image-rendering",
+        "in",
+        "in2",
+        "intercept",
+        "k",
+        "k1",
+        "k2",
+        "k3",
+        "k4",
+        "kerning",
+        "keypoints",
+        "keysplines",
+        "keytimes",
+        "lang",
+        "lengthadjust",
+        "letter-spacing",
+        "kernelmatrix",
+        "kernelunitlength",
+        "lighting-color",
+        "local",
+        "marker-end",
+        "marker-mid",
+        "marker-start",
+        "markerheight",
+        "markerunits",
+        "markerwidth",
+        "maskcontentunits",
+        "maskunits",
+        "max",
+        "mask",
+        "mask-type",
+        "media",
+        "method",
+        "mode",
+        "min",
+        "name",
+        "numoctaves",
+        "offset",
+        "operator",
+        "opacity",
+        "order",
+        "orient",
+        "orientation",
+        "origin",
+        "overflow",
+        "paint-order",
+        "path",
+        "pathlength",
+        "patterncontentunits",
+        "patterntransform",
+        "patternunits",
+        "pointer-events",
+        "points",
+        "preservealpha",
+        "preserveaspectratio",
+        "primitiveunits",
+        "r",
+        "rx",
+        "ry",
+        "radius",
+        "refx",
+        "refy",
+        "repeatcount",
+        "repeatdur",
+        "restart",
+        "result",
+        "rotate",
+        "scale",
+        "seed",
+        "shape-rendering",
+        "slope",
+        "specularconstant",
+        "specularexponent",
+        "spreadmethod",
+        "startoffset",
+        "stddeviation",
+        "stitchtiles",
+        "stop-color",
+        "stop-opacity",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-opacity",
+        "stroke",
+        "stroke-width",
+        "style",
+        "surfacescale",
+        "systemlanguage",
+        "tabindex",
+        "tablevalues",
+        "targetx",
+        "targety",
+        "transform",
+        "transform-origin",
+        "text-anchor",
+        "text-decoration",
+        "text-orientation",
+        "text-rendering",
+        "textlength",
+        "type",
+        "u1",
+        "u2",
+        "unicode",
+        "values",
+        "vector-effect",
+        "viewbox",
+        "visibility",
+        "version",
+        "vert-adv-y",
+        "vert-origin-x",
+        "vert-origin-y",
+        "width",
+        "word-spacing",
+        "wrap",
+        "writing-mode",
+        "xchannelselector",
+        "ychannelselector",
+        "x",
+        "x1",
+        "x2",
+        "xmlns",
+        "y",
+        "y1",
+        "y2",
+        "z",
+        "zoomandpan"
+      ]);
+      mathMl = freeze([
+        "accent",
+        "accentunder",
+        "align",
+        "bevelled",
+        "close",
+        "columnalign",
+        "columnlines",
+        "columnspacing",
+        "columnspan",
+        "denomalign",
+        "depth",
+        "dir",
+        "display",
+        "displaystyle",
+        "encoding",
+        "fence",
+        "frame",
+        "height",
+        "href",
+        "id",
+        "largeop",
+        "length",
+        "linethickness",
+        "lquote",
+        "lspace",
+        "mathbackground",
+        "mathcolor",
+        "mathsize",
+        "mathvariant",
+        "maxsize",
+        "minsize",
+        "movablelimits",
+        "notation",
+        "numalign",
+        "open",
+        "rowalign",
+        "rowlines",
+        "rowspacing",
+        "rowspan",
+        "rspace",
+        "rquote",
+        "scriptlevel",
+        "scriptminsize",
+        "scriptsizemultiplier",
+        "selection",
+        "separator",
+        "separators",
+        "stretchy",
+        "subscriptshift",
+        "supscriptshift",
+        "symmetric",
+        "voffset",
+        "width",
+        "xmlns"
+      ]);
+      xml = freeze([
+        "xlink:href",
+        "xml:id",
+        "xlink:title",
+        "xml:space",
+        "xmlns:xlink"
+      ]);
+      MUSTACHE_EXPR = seal(/{{[\w\W]*|^[\w\W]*}}/g);
+      ERB_EXPR = seal(/<%[\w\W]*|^[\w\W]*%>/g);
+      TMPLIT_EXPR = seal(/\${[\w\W]*/g);
+      DATA_ATTR = seal(/^data-[\-\w.\u00B7-\uFFFF]+$/);
+      ARIA_ATTR = seal(/^aria-[\-\w]+$/);
+      IS_ALLOWED_URI = seal(/^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i);
+      IS_SCRIPT_OR_DATA = seal(/^(?:\w+script|data):/i);
+      ATTR_WHITESPACE = seal(/[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g);
+      DOCTYPE_NAME = seal(/^html$/i);
+      CUSTOM_ELEMENT = seal(/^[a-z][.\w]*(-[.\w]+)+$/i);
+      ELEMENT_MARKUP_PROBE = seal(/<[/\w!]/g);
+      COMMENT_MARKUP_PROBE = seal(/<[/\w]/g);
+      FALLBACK_TAG_CLOSE = seal(/<\/no(script|embed|frames)/i);
+      SELF_CLOSING_TAG = seal(/\/>/i);
+      NODE_TYPE = {
+        element: 1,
+        attribute: 2,
+        text: 3,
+        cdataSection: 4,
+        entityReference: 5,
+        entityNode: 6,
+        processingInstruction: 7,
+        comment: 8,
+        document: 9,
+        documentType: 10,
+        documentFragment: 11,
+        notation: 12
+      };
+      LITERAL_TEXT_ELEMENT_NAMES = [
+        "style",
+        "script",
+        "xmp",
+        "iframe",
+        "noembed",
+        "noframes",
+        "plaintext",
+        "noscript"
+      ];
+      LITERAL_TEXT_ELEMENTS = freeze(addToSet({}, LITERAL_TEXT_ELEMENT_NAMES));
+      LITERAL_TEXT_CLOSE = (function() {
+        const map = {};
+        arrayForEach(LITERAL_TEXT_ELEMENT_NAMES, (name) => {
+          map[name] = seal(new RegExp("</" + name + "(?=[\\t\\n\\f\\r />])", "i"));
+        });
+        return freeze(map);
+      })();
+      getGlobal = function getGlobal2() {
+        return typeof window === "undefined" ? null : window;
+      };
+      _createTrustedTypesPolicy = function _createTrustedTypesPolicy2(trustedTypes, purifyHostElement) {
+        if (typeof trustedTypes !== "object" || typeof trustedTypes.createPolicy !== "function") return null;
+        let suffix = null;
+        const ATTR_NAME = "data-tt-policy-suffix";
+        if (purifyHostElement && purifyHostElement.hasAttribute(ATTR_NAME)) suffix = purifyHostElement.getAttribute(ATTR_NAME);
+        const policyName = "dompurify" + (suffix ? "#" + suffix : "");
+        try {
+          return trustedTypes.createPolicy(policyName, {
+            createHTML(html2) {
+              return html2;
+            },
+            createScriptURL(scriptUrl) {
+              return scriptUrl;
+            }
+          });
+        } catch (_) {
+          console.warn("TrustedTypes policy " + policyName + " could not be created.");
+          return null;
+        }
+      };
+      _createHooksMap = function _createHooksMap2() {
+        return {
+          afterSanitizeAttributes: [],
+          afterSanitizeElements: [],
+          afterSanitizeShadowDOM: [],
+          beforeSanitizeAttributes: [],
+          beforeSanitizeElements: [],
+          beforeSanitizeShadowDOM: [],
+          uponSanitizeAttribute: [],
+          uponSanitizeElement: [],
+          uponSanitizeShadowNode: []
+        };
+      };
+      _resolveSetOption = function _resolveSetOption2(cfg, key, fallback, options) {
+        return objectHasOwnProperty(cfg, key) && arrayIsArray(cfg[key]) ? addToSet(options.base ? clone(options.base) : {}, cfg[key], options.transform) : fallback;
+      };
+      _resolveObjectOption = function _resolveObjectOption2(cfg, key, makeFallback) {
+        const value2 = objectHasOwnProperty(cfg, key) ? cfg[key] : void 0;
+        return value2 && typeof value2 === "object" ? clone(value2) : makeFallback();
+      };
+      purify_default = createDOMPurify();
+    }
+  });
+
   // src/modules/chat/utils.js
   function cleanEmail(value2) {
     return String(value2 || "").trim().toLowerCase();
@@ -390,8 +2370,8 @@
   });
 
   // src/modules/imports.js
-  function parseCsv(text) {
-    const source = String(text || "").replace(/^\uFEFF/, "");
+  function parseCsv(text2) {
+    const source = String(text2 || "").replace(/^\uFEFF/, "");
     const rows = [];
     const current = [];
     let cell = "";
@@ -421,8 +2401,8 @@
     if (current.some(Boolean)) rows.push(current.slice());
     return rows;
   }
-  function rowData(text) {
-    const rows = parseCsv(text);
+  function rowData(text2) {
+    const rows = parseCsv(text2);
     if (rows.length < 2) return [];
     const headers = rows.shift().map((header) => header.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
     return rows.map((row) => Object.fromEntries(headers.map((key, index) => [key, row[index] || ""])));
@@ -431,9 +2411,9 @@
     return keys.map((key) => row[key]).find((item) => item !== void 0 && item !== "") || "";
   }
   function cleanText(raw, max = 240) {
-    let text = String(raw || "").replace(/\s+/g, " ").trim();
-    if (/^[=@]/.test(text) || /^[+-](?!\d)/.test(text)) text = text.replace(/^[=+@-]+/, "");
-    return text.slice(0, max);
+    let text2 = String(raw || "").replace(/\s+/g, " ").trim();
+    if (/^[=@]/.test(text2) || /^[+-](?!\d)/.test(text2)) text2 = text2.replace(/^[=+@-]+/, "");
+    return text2.slice(0, max);
   }
   function moneyAmount(raw) {
     if (raw === void 0 || raw === null || String(raw).trim() === "") return null;
@@ -442,13 +2422,13 @@
     return Math.round(amount * 100) / 100;
   }
   function isoDate(raw) {
-    const text = String(raw || "").trim();
-    if (!text) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-      const parsed2 = /* @__PURE__ */ new Date(`${text}T00:00:00Z`);
-      return Number.isNaN(parsed2.valueOf()) || parsed2.toISOString().slice(0, 10) !== text ? "" : text;
+    const text2 = String(raw || "").trim();
+    if (!text2) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text2)) {
+      const parsed2 = /* @__PURE__ */ new Date(`${text2}T00:00:00Z`);
+      return Number.isNaN(parsed2.valueOf()) || parsed2.toISOString().slice(0, 10) !== text2 ? "" : text2;
     }
-    const parsed = new Date(text);
+    const parsed = new Date(text2);
     if (Number.isNaN(parsed.valueOf())) return "";
     return parsed.toISOString().slice(0, 10);
   }
@@ -492,9 +2472,9 @@
   function emptyResult(type, errors = [], skipped = 0) {
     return { type, records: [], errors, skipped };
   }
-  function prepareImportRecords(type, text, existing = {}) {
+  function prepareImportRecords(type, text2, existing = {}) {
     if (!IMPORT_TYPES[type]) return emptyResult(type, ["Choose a supported import type."]);
-    const rows = rowData(text);
+    const rows = rowData(text2);
     if (!rows.length) return emptyResult(type, ["The file needs a header row and at least one data row."]);
     const customers2 = existing.customers || [];
     const vehicles = existing.vehicles || [];
@@ -945,27 +2925,27 @@
   });
 
   // src/modules/repair-guide.js
-  function svg(label2, body) {
+  function svg2(label2, body) {
     return `<svg class="repair-diagram" viewBox="0 0 360 210" role="img" aria-label="${label2}" xmlns="http://www.w3.org/2000/svg"><rect width="360" height="210" rx="8" fill="#e7efe9"/><text x="16" y="24" fill="#1c3a32" font-family="sans-serif" font-size="13" font-weight="700">${label2}</text>${body}</svg>`;
   }
   function repairFamily(repair) {
-    const text = String(repair || "").toLowerCase();
-    if (/brake fluid|fluid flush/.test(text) && /brake|fluid/.test(text)) return "brake-flush";
-    if (/no-start|no start|won't start|wont start|crank/.test(text)) return "nostart";
-    if (/brake|rotor|pad|caliper/.test(text)) return "brakes";
-    if (/water pump|thermostat|coolant|radiator/.test(text)) return "cooling";
-    if (/transmission|atf/.test(text)) return "transmission";
-    if (/differential|gear oil/.test(text)) return "differential";
-    if (/spark plug|ignition coil|tune-up|tune up/.test(text)) return "ignition";
-    if (/serpentine|drive belt/.test(text) || /\bbelt\b/.test(text) && !/seat/.test(text)) return "belt";
-    if (/cabin|pollen/.test(text)) return "cabin-filter";
-    if (/air filter/.test(text)) return "air-filter";
-    if (/wiper/.test(text)) return "wipers";
-    if (/rotat/.test(text) && /tire|wheel/.test(text)) return "rotation";
-    if (/battery/.test(text)) return "battery";
-    if (/injector|fuel system|induction/.test(text)) return "fuel";
-    if (/oil/.test(text)) return "oil";
-    if (/call-out|call out|no-access|no access/.test(text)) return "callout";
+    const text2 = String(repair || "").toLowerCase();
+    if (/brake fluid|fluid flush/.test(text2) && /brake|fluid/.test(text2)) return "brake-flush";
+    if (/no-start|no start|won't start|wont start|crank/.test(text2)) return "nostart";
+    if (/brake|rotor|pad|caliper/.test(text2)) return "brakes";
+    if (/water pump|thermostat|coolant|radiator/.test(text2)) return "cooling";
+    if (/transmission|atf/.test(text2)) return "transmission";
+    if (/differential|gear oil/.test(text2)) return "differential";
+    if (/spark plug|ignition coil|tune-up|tune up/.test(text2)) return "ignition";
+    if (/serpentine|drive belt/.test(text2) || /\bbelt\b/.test(text2) && !/seat/.test(text2)) return "belt";
+    if (/cabin|pollen/.test(text2)) return "cabin-filter";
+    if (/air filter/.test(text2)) return "air-filter";
+    if (/wiper/.test(text2)) return "wipers";
+    if (/rotat/.test(text2) && /tire|wheel/.test(text2)) return "rotation";
+    if (/battery/.test(text2)) return "battery";
+    if (/injector|fuel system|induction/.test(text2)) return "fuel";
+    if (/oil/.test(text2)) return "oil";
+    if (/call-out|call out|no-access|no access/.test(text2)) return "callout";
     return "general";
   }
   function youtubeSearchUrl(query2) {
@@ -1282,7 +3262,7 @@
         ]
       };
       DIAGRAMS = {
-        brakes: svg("Brake corner", `
+        brakes: svg2("Brake corner", `
     <circle cx="168" cy="118" r="62" fill="#8aa0a6"/>
     <circle cx="168" cy="118" r="28" fill="#d7dee0"/>
     <circle cx="168" cy="118" r="10" fill="#1c3a32"/>
@@ -1296,7 +3276,7 @@
     <circle cx="308" cy="64" r="8" fill="#d7f56a" stroke="#1c3a32"/>
     <text x="250" y="58" fill="#1c3a32" font-family="sans-serif" font-size="11">Slide pin</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Support the caliper. Do not hang it from the hose.</text>`),
-        measure: svg("Measure before you replace", `
+        measure: svg2("Measure before you replace", `
     <rect x="70" y="78" width="150" height="16" rx="3" fill="#8aa0a6"/>
     <rect x="78" y="96" width="134" height="8" fill="#d7dee0"/>
     <path d="M40 70 h40 v70 h-40 z" fill="#1c3a32"/>
@@ -1305,7 +3285,7 @@
     <text x="232" y="150" fill="#1c3a32" font-family="sans-serif" font-size="12">Discard thickness</text>
     <text x="232" y="168" fill="#c45c26" font-family="sans-serif" font-size="12">from service info</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Measure several points. One thin spot fails the rotor.</text>`),
-        cooling: svg("Cooling loop", `
+        cooling: svg2("Cooling loop", `
     <rect x="40" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
     <text x="58" y="110" fill="#f4f7f4" font-family="sans-serif" font-size="12">Engine</text>
     <circle cx="150" cy="150" r="22" fill="#8aa0a6" stroke="#1c3a32" stroke-width="3"/>
@@ -1318,7 +3298,7 @@
     <path d="M224 84 H250" stroke="#1c3a32" stroke-width="3" fill="none"/>
     <path d="M285 170 H172" stroke="#1c3a32" stroke-width="3" fill="none"/>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Bleed until both hoses are hot, then pressure-test.</text>`),
-        oil: svg("Oil service", `
+        oil: svg2("Oil service", `
     <rect x="80" y="40" width="160" height="70" rx="10" fill="#1c3a32"/>
     <text x="130" y="80" fill="#f4f7f4" font-family="sans-serif" font-size="13">Engine</text>
     <rect x="120" y="110" width="80" height="36" rx="4" fill="#8aa0a6"/>
@@ -1327,7 +3307,7 @@
     <rect x="250" y="78" width="36" height="48" rx="6" fill="#d7f56a" stroke="#1c3a32"/>
     <text x="292" y="106" fill="#1c3a32" font-family="sans-serif" font-size="11">Filter</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Old gasket must come off with the filter.</text>`),
-        battery: svg("Battery connections", `
+        battery: svg2("Battery connections", `
     <rect x="120" y="50" width="120" height="90" rx="8" fill="#1c3a32"/>
     <rect x="145" y="34" width="16" height="20" fill="#c45c26"/>
     <rect x="198" y="34" width="16" height="20" fill="#24302c"/>
@@ -1337,7 +3317,7 @@
     <path d="M206 34 H280 V150" stroke="#24302c" stroke-width="4" fill="none"/>
     <text x="250" y="170" fill="#1c3a32" font-family="sans-serif" font-size="11">Negative first off, last on</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Register the battery when the scan tool requires it.</text>`),
-        belt: svg("Belt routing", `
+        belt: svg2("Belt routing", `
     <circle cx="180" cy="150" r="28" fill="#8aa0a6" stroke="#1c3a32" stroke-width="4"/>
     <text x="164" y="154" fill="#1c3a32" font-family="sans-serif" font-size="11">Crank</text>
     <circle cx="100" cy="70" r="22" fill="#d7dee0" stroke="#1c3a32" stroke-width="4"/>
@@ -1346,7 +3326,7 @@
     <text x="230" y="48" fill="#1c3a32" font-family="sans-serif" font-size="11">Tensioner</text>
     <path d="M112 88 Q180 40 236 86 Q250 120 196 140 Q140 150 108 90" fill="none" stroke="#1c3a32" stroke-width="5"/>
     <text x="16" y="188" fill="#3d5148" font-family="sans-serif" font-size="11">Photograph the real routing before the belt comes off.</text>`),
-        filter: svg("Filter direction", `
+        filter: svg2("Filter direction", `
     <rect x="70" y="60" width="150" height="90" rx="8" fill="#1c3a32"/>
     <rect x="88" y="78" width="114" height="54" rx="4" fill="#d7f56a"/>
     <path d="M230 105 h54" stroke="#c45c26" stroke-width="4" fill="none"/>
@@ -1354,14 +3334,14 @@
     <text x="96" y="110" fill="#1c3a32" font-family="sans-serif" font-size="13">Filter</text>
     <text x="236" y="96" fill="#c45c26" font-family="sans-serif" font-size="12">Airflow</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Match the arrow to the housing before you close the cover.</text>`),
-        wipers: svg("Wiper swap", `
+        wipers: svg2("Wiper swap", `
     <path d="M40 150 Q180 40 320 150" fill="none" stroke="#8aa0a6" stroke-width="10"/>
     <rect x="150" y="78" width="70" height="14" rx="4" transform="rotate(-28 150 78)" fill="#1c3a32"/>
     <rect x="188" y="70" width="46" height="10" rx="3" transform="rotate(-28 188 70)" fill="#d7f56a"/>
     <text x="16" y="40" fill="#1c3a32" font-family="sans-serif" font-size="12">Arm</text>
     <text x="250" y="70" fill="#1c3a32" font-family="sans-serif" font-size="12">New blade</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Do not let the arm snap onto the glass.</text>`),
-        rotation: svg("Rotation pattern", `
+        rotation: svg2("Rotation pattern", `
     <rect x="70" y="40" width="70" height="110" rx="16" fill="none" stroke="#1c3a32" stroke-width="3"/>
     <circle cx="88" cy="62" r="12" fill="#d7f56a" stroke="#1c3a32"/>
     <circle cx="122" cy="62" r="12" fill="#d7dee0" stroke="#1c3a32"/>
@@ -1371,7 +3351,7 @@
     <text x="210" y="74" fill="#1c3a32" font-family="sans-serif" font-size="12">Fronts often go straight back</text>
     <text x="210" y="98" fill="#1c3a32" font-family="sans-serif" font-size="12">Rears often cross forward</text>
     <text x="16" y="196" fill="#3d5148" font-family="sans-serif" font-size="11">Directional tires and AWD follow their own pattern.</text>`),
-        general: svg("Inspect, repair, verify", `
+        general: svg2("Inspect, repair, verify", `
     <rect x="24" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
     <rect x="134" y="70" width="90" height="70" rx="8" fill="#c45c26"/>
     <rect x="244" y="70" width="90" height="70" rx="8" fill="#1c3a32"/>
@@ -2122,8 +4102,8 @@
         recognition.lang = "en-US";
         recognition.interimResults = false;
         recognition.onresult = (event) => {
-          const text = [...event.results].map((result) => result[0]?.transcript || "").join(" ").trim();
-          if (text) field.value = `${field.value} ${text}`.trim();
+          const text2 = [...event.results].map((result) => result[0]?.transcript || "").join(" ").trim();
+          if (text2) field.value = `${field.value} ${text2}`.trim();
         };
         recognition.onerror = () => toast2("Dictation stopped. Type the note.");
         recognition.onend = () => {
@@ -2202,13 +4182,13 @@
       app.toast("That inspection is not on the menu");
       return;
     }
-    const html = catalogInspectionFormHtml(catalog, existing, {
+    const html2 = catalogInspectionFormHtml(catalog, existing, {
       vehicles: app.state.vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.customer || "Customer"} \xB7 ${app.vehicleLabel(vehicle)}` })),
       orders: (app.state.orders || []).map((order) => ({ id: order.id, label: `${order.id} \xB7 ${order.customer || ""}` })),
       techName: app.currentUser()?.techName || app.currentUser()?.name || "",
       apiUrl: app.cloudflareConfig.apiUrl
     }, app.escapeHtml);
-    app.showModal(html);
+    app.showModal(html2);
     const form = document.querySelector("#catalog-inspection-form");
     if (!form) return;
     form.elements.customer?.addEventListener("change", () => {
@@ -2393,7 +4373,7 @@
       String(technician.id || ""),
       String(technician.name || technician.techName || technician.id || "Technician unavailable")
     ]));
-    return lines.map(normalizeEstimateLine).filter((line) => line.type === "labor").flatMap((line) => {
+    return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
       const technicianIds = normalizeTechnicianIds(line);
       if (!technicianIds.length) return [{ line, technicianId: null, technicianName: "Unassigned" }];
       return technicianIds.map((technicianId) => ({
@@ -2404,7 +4384,7 @@
     });
   }
   function calculateEstimate(lines = [], taxRate = 0, fees = []) {
-    const normalizedLines = lines.map(normalizeEstimateLine);
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
     const billableLines = billableEstimateLines(normalizedLines);
     const normalizedFees = fees.map((fee) => ({
       ...fee,
@@ -2500,7 +4480,7 @@
       status: "sent",
       date: issuedAt.toISOString().slice(0, 10),
       due: due.toISOString().slice(0, 10),
-      lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
       sourceEstimateApproval: order.estimateApproval || null,
       createdAt: issuedAt.toISOString()
     };
@@ -2541,7 +4521,7 @@
       tax: estimate.tax,
       taxRate: estimate.taxRate,
       fees: estimate.fees,
-      lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
       signature: null,
       sourceEstimateApproval: null,
       revisedAt: editedAt
@@ -2567,7 +4547,7 @@
     discountReason = "",
     shopSupplies
   } = {}) {
-    const normalizedLines = lines.map(normalizeEstimateLine);
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
     const labor = normalizedLines.filter((line) => line.type === "labor" && line.approvalStatus !== "declined").reduce((sum, line) => sum + line.total, 0);
     const automaticSupplies = Math.min(
       SHOP_ESTIMATE_RULES.shopSuppliesCap,
@@ -3037,8 +5017,8 @@
   function aiPhoneForm() {
     return `${aiFormShell("AI phone intake", "Turn a customer call transcript into service recommendations, questions, and booking guidance.", `<label class="full">Call transcript<textarea name="transcript" required placeholder="Customer: My 2016 Camry has a check engine light and shakes at stop lights..."></textarea></label>`, "Analyze call")}${aiResult?.kind === "phone" ? phoneResult(aiResult) : ""}`;
   }
-  function aiKeywords(text) {
-    return String(text || "").toLowerCase();
+  function aiKeywords(text2) {
+    return String(text2 || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
     const source = aiKeywords(`${service} ${notes}`), laborRate = SHOP_ESTIMATE_RULES.laborRate, brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
@@ -3049,7 +5029,7 @@
     return buildRepairGuide(vehicle, repair);
   }
   function phoneLocal(transcript) {
-    const text = aiKeywords(transcript), vehicle = (transcript.match(/(?:19|20)\d{2}\s+[A-Za-z]+(?:\s+[A-Za-z0-9-]+){0,2}/) || ["Vehicle not confirmed"])[0], urgent = /brake|smoke|overheat|stall|no.?start/.test(text), service = /brake/.test(text) ? "Brake system inspection" : /a\/c|warm/.test(text) ? "A/C performance inspection" : /check engine|rough|shake/.test(text) ? "Check-engine diagnostic" : /oil/.test(text) ? "Oil service and inspection" : "Diagnostic inspection";
+    const text2 = aiKeywords(transcript), vehicle = (transcript.match(/(?:19|20)\d{2}\s+[A-Za-z]+(?:\s+[A-Za-z0-9-]+){0,2}/) || ["Vehicle not confirmed"])[0], urgent = /brake|smoke|overheat|stall|no.?start/.test(text2), service = /brake/.test(text2) ? "Brake system inspection" : /a\/c|warm/.test(text2) ? "A/C performance inspection" : /check engine|rough|shake/.test(text2) ? "Check-engine diagnostic" : /oil/.test(text2) ? "Oil service and inspection" : "Diagnostic inspection";
     return { kind: "phone", vehicle, symptoms: transcript.slice(0, 260), service, urgency: urgent ? "Immediate" : "Soon", response: urgent ? "For safety, please avoid driving the vehicle until we can inspect it. We can prioritize an appointment today." : "We can schedule a diagnostic appointment so a technician can verify the concern and provide an accurate estimate.", questions: ["What warning lights are currently on?", "When did the concern begin and does it happen consistently?", "What is the current mileage and have there been recent repairs?"], booking: true };
   }
   function detailedDiagnosticPlan(vehicle, symptoms, dtc) {
@@ -3068,8 +5048,8 @@
     const diagnostics = detailedDiagnosticPlan(order.vehicle, order.complaint, ""), estimate = estimateLocal(order.vehicle, order.complaint, order.notes), guide = detailedGuide(order.vehicle, estimate.lines[0].service);
     return { kind: "workflow", orderId: order.id, order: { customer: order.customer, vehicle: order.vehicle, vin: order.vin || "VIN pending", complaint: order.complaint, technician: order.tech || "Unassigned", bay: order.bay || "Unassigned", promise: order.promise || "Not scheduled", notes: order.notes || "" }, diagnostics, estimate, guide, recommended: [{ service: "Multipoint inspection", reason: "Confirm related wear items while the vehicle is in service.", cost: 0 }, { service: "Fluid and maintenance review", reason: "Check manufacturer interval items during the repair visit.", cost: 45 }] };
   }
-  function worksheetCheck(label2, text) {
-    return `<li><span class="print-check">&#9633;</span><div><b>${escapeHtml(label2)}</b><p>${escapeHtml(text)}</p></div></li>`;
+  function worksheetCheck(label2, text2) {
+    return `<li><span class="print-check">&#9633;</span><div><b>${escapeHtml(label2)}</b><p>${escapeHtml(text2)}</p></div></li>`;
   }
   function workflowResult(result) {
     const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money2(line.parts)}</td><td><b>${money2(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
@@ -3803,10 +5783,10 @@
     document.querySelector("#toast-region").append(node);
     setTimeout(() => node.remove(), 2600);
   }
-  function nav(route, iconName, text, count = "") {
+  function nav(route, iconName, text2, count = "") {
     if (!canAccess(route)) return "";
     const current = state.route === route;
-    return `<button class="nav-button ${current ? "active" : ""}" data-route="${route}"${current ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${text}</span>${count !== "" && count !== "0" ? `<span class="count">${count}</span>` : ""}</button>`;
+    return `<button class="nav-button ${current ? "active" : ""}" data-route="${route}"${current ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${text2}</span>${count !== "" && count !== "0" ? `<span class="count">${count}</span>` : ""}</button>`;
   }
   function sidebarNavigation() {
     const counts = { active: visibleOrders().filter((x) => !["completed", "invoiced"].includes(x.status)).length, orders: visibleOrders().length, overdue: state.invoices.filter((x) => x.status === "overdue").length, unread: state.conversations.reduce((sum, item) => sum + chatUnread(item), 0) };
@@ -3981,7 +5961,7 @@
       const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel3 = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate";
       return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` \xB7 current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel3}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>`;
     }).join("");
-    return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value2, text]) => `<button class="tab ${reminderFilter === value2 ? "active" : ""}" data-reminder-filter="${value2}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
+    return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value2, text2]) => `<button class="tab ${reminderFilter === value2 ? "active" : ""}" data-reminder-filter="${value2}">${text2}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>`;
   }
   function operationsDiagnostics() {
     const output = state.elmOutput || "Connect an ELM327 for generic OBD-II data. OEM programming, module coding, and bidirectional controls are in OEM diagnostics.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : "";
@@ -4120,15 +6100,15 @@
     win.document.close();
   }
   function shareInspectionReport(inspection) {
-    const counts = (inspection.items || []).reduce((t, r) => (t[r.status] = (t[r.status] || 0) + 1, t), {}), text = `Inspection ${inspection.number} \xB7 ${inspection.vehicle} \xB7 ${inspection.customer}
+    const counts = (inspection.items || []).reduce((t, r) => (t[r.status] = (t[r.status] || 0) + 1, t), {}), text2 = `Inspection ${inspection.number} \xB7 ${inspection.vehicle} \xB7 ${inspection.customer}
 Results: ${counts.pass || 0} pass, ${counts.attention || 0} attention, ${counts.fail || 0} fail
 ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
 ` : ""}Date: ${new Date(inspection.createdAt).toLocaleDateString()}`;
     if (navigator.share) {
-      navigator.share({ title: `Inspection ${inspection.number}`, text }).catch(() => {
+      navigator.share({ title: `Inspection ${inspection.number}`, text: text2 }).catch(() => {
       });
     } else {
-      navigator.clipboard.writeText(text).then(() => toast("Report copied to clipboard")).catch(() => toast("Could not copy report"));
+      navigator.clipboard.writeText(text2).then(() => toast("Report copied to clipboard")).catch(() => toast("Could not copy report"));
     }
   }
   function openInspectionApproval(inspection) {
@@ -4331,8 +6311,8 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
     return bytes;
   }
   function normalizeElmResponse(raw, command = "") {
-    const text = String(raw ?? "").trim(), upper = text.toUpperCase(), noData = /\bNO\s*DATA\b/.test(upper), adapterError = (upper.match(/\b(?:UNABLE TO CONNECT|BUS ERROR|CAN ERROR|BUFFER FULL|ERROR)\b/) || [])[0] || "", lines = text.replace(/>/g, "\n").split(/[\r\n]+/), frames = lines.map((line) => elmLineBytes(line, command)).filter((frame) => frame.length), bytes = frames.flat();
-    return { raw: text, noData, adapterError, frames, bytes };
+    const text2 = String(raw ?? "").trim(), upper = text2.toUpperCase(), noData = /\bNO\s*DATA\b/.test(upper), adapterError = (upper.match(/\b(?:UNABLE TO CONNECT|BUS ERROR|CAN ERROR|BUFFER FULL|ERROR)\b/) || [])[0] || "", lines = text2.replace(/>/g, "\n").split(/[\r\n]+/), frames = lines.map((line) => elmLineBytes(line, command)).filter((frame) => frame.length), bytes = frames.flat();
+    return { raw: text2, noData, adapterError, frames, bytes };
   }
   function findElmReply(bytes, mode, pid) {
     for (let index = 0; index < bytes.length; index++) {
@@ -5217,12 +7197,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       if (e.key === "Escape") closeModal();
     };
   }
-  function showModal(html) {
+  function showModal(html2) {
     closeModal();
     const root = document.createElement("div");
     root.id = "modal-root";
     root.className = "modal-backdrop";
-    root.innerHTML = html;
+    root.innerHTML = html2;
     root.onclick = (e) => {
       if (e.target === root) closeModal();
     };
@@ -5919,8 +7899,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const p = importPreview, rows = p.records.slice(0, 5).map((record, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(Object.values(record).slice(0, 4).join(" \xB7 "))}</td></tr>`).join("");
     return `<section class="import-preview"><div><div class="eyebrow">Ready to import</div><h2>${p.records.length} valid ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"}</h2><p>${p.skipped} duplicate or invalid row${p.skipped === 1 ? "" : "s"} will not be imported.</p></div><div class="import-preview-actions"><button class="secondary" id="cancel-import">Cancel</button><button class="primary" id="confirm-import">${icon("check", 15)} Import ${p.records.length} records</button></div><table><thead><tr><th>Row</th><th>Preview</th></tr></thead><tbody>${rows || `<tr><td colspan="2">No valid rows found.</td></tr>`}</tbody></table>${p.errors.length ? `<div class="import-errors"><strong>${p.errors.length} row issue${p.errors.length === 1 ? "" : "s"}</strong>${p.errors.slice(0, 4).map((error) => `<span>${escapeHtml(error)}</span>`).join("")}</div>` : ""}</section>`;
   }
-  function prepareImport(type, text) {
-    return prepareImportRecords(type, text, { customers: state.customers, vehicles: state.vehicles, orders: state.orders, expenses: state.expenses, invoices: state.invoices, estimates: state.estimates, taxRate: Number(state.taxSettings?.rate) || 0, today: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+  function prepareImport(type, text2) {
+    return prepareImportRecords(type, text2, { customers: state.customers, vehicles: state.vehicles, orders: state.orders, expenses: state.expenses, invoices: state.invoices, estimates: state.estimates, taxRate: Number(state.taxSettings?.rate) || 0, today: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), createdAt: (/* @__PURE__ */ new Date()).toISOString() });
   }
   function downloadTemplate(type) {
     const link = document.createElement("a"), file = importTypes[type];
@@ -6691,7 +8671,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (!estimate) return;
     const totals = normalizedEstimateSource(estimate);
     showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
-    document.querySelector("#preview-fill-work-order").onclick = () => openNew(workOrderDraftFromEstimate(totals));
+    document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals));
   }
   function addEstimateSourceControls(form) {
     const body = form.querySelector(".modal-body");
@@ -6731,6 +8711,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     refreshEstimateEditor(root);
     toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
   }
+  function openNewWithDraft(draft = null) {
+    openNewEstimateFillCore();
+    const form = document.querySelector("#new-form");
+    if (!form) return;
+    addEstimateSourceControls(form);
+    if (draft) applyWorkOrderDraftToForm(form, draft);
+  }
   function assistantMessageMarkup(item, index) {
     const actions = (item.actions || []).map((action, actionIndex) => action.kind === "estimate_work_order_draft" ? `<button type="button" class="assistant-draft-action" data-assistant-draft="${index}:${actionIndex}">${icon("clipboard-plus", 14)} Save estimate & fill work order</button>` : "").join("");
     return `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p>${actions}</article>`;
@@ -6758,7 +8745,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     await pushEstimateToApi(record);
     save();
     closeModal();
-    openNew(workOrderDraftFromEstimate({
+    openNewWithDraft(workOrderDraftFromEstimate({
       ...estimate,
       number,
       customer: estimate.customer,
@@ -6822,6 +8809,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
+      init_purify_es();
       init_config();
       init_html();
       init_detect();
@@ -7032,7 +9020,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         applyAppearance(shopProfile().themeMode);
         if (currentUser() && state.route === "shopops") {
           const root = document.querySelector("#root");
-          root.innerHTML = shopOperations();
+          root.innerHTML = purify_default.sanitize(shopOperations(), { USE_PROFILES: { html: true } });
           lucide.createIcons();
           bind();
           bindShopOperations();
@@ -7444,7 +9432,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       render = function() {
         if (currentUser() && state.route === "home") {
           const root = document.querySelector("#root");
-          root.innerHTML = homeDashboard();
+          root.innerHTML = purify_default.sanitize(homeDashboard(), { USE_PROFILES: { html: true } });
           lucide.createIcons();
           bind();
           bindExpandedFeatures();
@@ -7989,12 +9977,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         };
       };
       openNewEstimateFillCore = openNew;
-      openNew = function(draft = null) {
-        openNewEstimateFillCore();
-        const form = document.querySelector("#new-form");
-        if (!form) return;
-        addEstimateSourceControls(form);
-        if (draft) applyWorkOrderDraftToForm(form, draft);
+      openNew = function() {
+        openNewWithDraft();
       };
       savedEstimates = function() {
         const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} \xB7 ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money2(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
@@ -8089,7 +10073,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         document.querySelectorAll("[data-preview-estimate]").forEach((button) => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
         document.querySelectorAll("[data-fill-estimate]").forEach((button) => button.onclick = () => {
           const estimate = estimateSourceById(button.dataset.fillEstimate);
-          if (estimate) openNew(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+          if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
         });
       };
       if (isDesktopApp && !isOfflineDesktop()) setInterval(async () => {

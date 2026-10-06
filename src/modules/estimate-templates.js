@@ -10,7 +10,7 @@ export function calculateShopEstimate(lines = [], {
   discountReason = '',
   shopSupplies,
 } = {}) {
-  const normalizedLines = lines.map(normalizeEstimateLine);
+  const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
   const labor = normalizedLines
     .filter(line => line.type === 'labor' && line.approvalStatus !== 'declined')
     .reduce((sum, line) => sum + line.total, 0);

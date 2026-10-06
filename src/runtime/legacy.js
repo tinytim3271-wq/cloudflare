@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify';
 import { storageKeys } from '../shared/config.js';
 import { escapeAttr, escapeHtml } from '../shared/html.js';
 import { DESKTOP_ENTITLEMENT_INTERVAL, isDesktopApp } from '../modules/platform/detect.js';
@@ -501,7 +502,7 @@ function printCustomerStatement(name) { const invs = state.invoices.filter(i => 
 function openVehicleDetail(id) { const vehicle = state.vehicles.find(v => v.id === id); if (!vehicle) return; const history = linkedOrders(vehicle), photos = vehicle.photoKeys || []; showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map(key => `<img src="${cloudflareConfig.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map(o => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`); document.querySelector("#vd-edit")?.addEventListener("click", () => { closeModal(); openVehicleForm(vehicle) }) }
 const renderCore = render;
 function attachShopOperationsRoute() { const firstNav = document.querySelector(".sidebar .nav"); if (!firstNav || currentUser()?.role === "super_admin" || document.querySelector('.sidebar [data-route="shopops"]')) return; firstNav.insertAdjacentHTML("beforeend", nav("shopops", "blocks", "Shop operations")); const button = firstNav.querySelector('[data-route="shopops"]'); button.onclick = async () => { state.route = "shopops"; save(); render(); await loadShopEntities(); render() } }
-render = function () { applyAppearance(shopProfile().themeMode); if (currentUser() && state.route === "shopops") { const root = document.querySelector("#root"); root.innerHTML = shopOperations(); lucide.createIcons(); bind(); bindShopOperations(); bindExpandedFeatures(); attachShopOperationsRoute(); return } renderCore(); bindExpandedFeatures(); attachShopOperationsRoute() };
+render = function () { applyAppearance(shopProfile().themeMode); if (currentUser() && state.route === "shopops") { const root = document.querySelector("#root"); root.innerHTML = DOMPurify.sanitize(shopOperations(), { USE_PROFILES: { html: true } }); lucide.createIcons(); bind(); bindShopOperations(); bindExpandedFeatures(); attachShopOperationsRoute(); return } renderCore(); bindExpandedFeatures(); attachShopOperationsRoute() };
 
 async function resolveAuthenticatedProfile(session) { const claims = session.claims, normalized = String(claims.email || "").trim().toLowerCase(), role = sessionClaimRole(claims); sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); pendingAuthProfile = null; if (role === "super_admin") { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local) return Object.assign(local, { role: "super_admin", active: true }); const created = { id: `super-admin-${claims.sub}`, name: claims.name || "Platform Administrator", email: normalized, role: "super_admin", title: "Platform Administrator", active: true }; state.users.push(created); save(); return created } let employees = []; try { employees = await apiFetch("/entities/employees") } catch (error) { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local?.active) { state.users = sanitizeUsers(state.users); return local } if (error instanceof TypeError) throw new Error("Could not reach MechPro. Sign in from the online desktop window or check your internet connection."); throw error } const active = employees.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (active) { state.users = sanitizeUsers(employees); return active } const inactive = employees.find(user => !user.active && String(user.email || "").trim().toLowerCase() === normalized); if (inactive) { pendingAuthProfile = { email: normalized, role, reason: "deactivated", name: inactive.name || claims.name || normalized }; state.users = sanitizeUsers(employees); return null } if (role === "admin") { const profile = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify({ id: `owner-${sessionClaimShopId(claims)}`, name: claims.name || normalized.split("@")[0], email: normalized, role: "admin", title: "Owner", department: "Administration", active: true, createdAt: now() }) }); state.users = sanitizeUsers([...employees, profile]); return profile } const localSeed = state.users.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (localSeed) { state.users = sanitizeUsers([...employees.filter(item => String(item.email || "").trim().toLowerCase() !== normalized), localSeed]); return localSeed } pendingAuthProfile = { email: normalized, role, reason: "missing", name: claims.name || normalized.split("@")[0] }; state.users = sanitizeUsers(employees); return null }
 function pendingProfileScreen() { const pending = pendingAuthProfile || {}; return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Account almost ready</small></div></div><div class="eyebrow">Employee profile required</div><h1>${pending.reason === "deactivated" ? "Your shop profile is deactivated" : "Ask an admin to finish setup"}</h1><p>${pending.reason === "deactivated" ? `The Cloudflare Access identity <strong>${escapeHtml(pending.email || "")}</strong> works, but the matching employee profile is inactive.` : `You signed in as <strong>${escapeHtml(pending.email || "")}</strong> (${escapeHtml(roleLabel[pending.role] || pending.role || "team member")}), but this shop does not have an active employee profile for that email yet.`}</p><div class="service-contract"><p>Ask a shop administrator to open <b>Employees</b> and create (or reactivate) a profile using exactly this email:</p><code>${escapeHtml(pending.email || "")}</code></div><div class="modal-actions" style="justify-content:flex-start;margin-top:18px"><button class="primary" id="pending-sign-out">${icon("log-out", 14)} Sign out</button></div></section></main>` }
@@ -693,7 +694,7 @@ function homeDashboard() {
 }
 function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
-render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = homeDashboard(); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
+render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = DOMPurify.sanitize(homeDashboard(), { USE_PROFILES: { html: true } }); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
 function applyRemoteList(key, records, entityType = key) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
 loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
@@ -1599,7 +1600,7 @@ function showEstimatePreview(estimate) {
   if (!estimate) return;
   const totals = normalizedEstimateSource(estimate);
   showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${escapeHtml(estimate.number || "Draft estimate")}</span><h2>Estimate preview</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${estimatePresentation(estimate, { ...estimate, ...totals }, { standalone: true })}</div><div class="modal-actions"><button class="secondary" data-close>Close</button><button class="primary" id="preview-fill-work-order">${icon("clipboard-plus", 14)} Fill new work order</button></div></div>`);
-  document.querySelector("#preview-fill-work-order").onclick = () => openNew(workOrderDraftFromEstimate(totals));
+  document.querySelector("#preview-fill-work-order").onclick = () => openNewWithDraft(workOrderDraftFromEstimate(totals));
 }
 
 estimateEditorLine = function (line = {}, index = 0, removable = true) {
@@ -1733,13 +1734,14 @@ function applyWorkOrderDraftToForm(form, draft) {
 }
 
 const openNewEstimateFillCore = openNew;
-openNew = function (draft = null) {
+function openNewWithDraft(draft = null) {
   openNewEstimateFillCore();
   const form = document.querySelector("#new-form");
   if (!form) return;
   addEstimateSourceControls(form);
   if (draft) applyWorkOrderDraftToForm(form, draft);
-};
+}
+openNew = function () { openNewWithDraft() };
 
 savedEstimates = function () {
   const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} · ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
@@ -1780,7 +1782,7 @@ async function saveAssistantDraft(action) {
   await pushEstimateToApi(record);
   save();
   closeModal();
-  openNew(workOrderDraftFromEstimate({
+  openNewWithDraft(workOrderDraftFromEstimate({
     ...estimate,
     number,
     customer: estimate.customer,
@@ -1874,7 +1876,7 @@ bindEstimateActions = function () {
   document.querySelectorAll("[data-preview-estimate]").forEach(button => button.onclick = () => showEstimatePreview(estimateSourceById(button.dataset.previewEstimate)));
   document.querySelectorAll("[data-fill-estimate]").forEach(button => button.onclick = () => {
     const estimate = estimateSourceById(button.dataset.fillEstimate);
-    if (estimate) openNew(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
+    if (estimate) openNewWithDraft(workOrderDraftFromEstimate(normalizedEstimateSource(estimate)));
   });
 };
 

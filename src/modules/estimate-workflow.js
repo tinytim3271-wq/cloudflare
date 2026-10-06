@@ -54,7 +54,7 @@ export function laborLinePrintRows(lines = [], technicians = []) {
     String(technician.name || technician.techName || technician.id || 'Technician unavailable'),
   ]));
   return lines
-    .map(normalizeEstimateLine)
+    .map((line, index) => normalizeEstimateLine(line, index))
     .filter(line => line.type === 'labor')
     .flatMap(line => {
       const technicianIds = normalizeTechnicianIds(line);
@@ -68,7 +68,7 @@ export function laborLinePrintRows(lines = [], technicians = []) {
 }
 
 export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
-  const normalizedLines = lines.map(normalizeEstimateLine);
+  const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
   // Declined lines stay visible for audit, but must not affect money totals.
   const billableLines = billableEstimateLines(normalizedLines);
   const normalizedFees = fees.map(fee => ({
@@ -209,7 +209,7 @@ export function invoiceRecordForOrder(order, issuedAt = new Date()) {
     status: 'sent',
     date: issuedAt.toISOString().slice(0, 10),
     due: due.toISOString().slice(0, 10),
-    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+    lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
     sourceEstimateApproval: order.estimateApproval || null,
     createdAt: issuedAt.toISOString(),
   };
@@ -254,7 +254,7 @@ export function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = 
     tax: estimate.tax,
     taxRate: estimate.taxRate,
     fees: estimate.fees,
-    lines: billableEstimateLines(estimate.lines).map(normalizeEstimateLine),
+    lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
     signature: null,
     sourceEstimateApproval: null,
     revisedAt: editedAt,

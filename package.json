@@ -69,7 +69,9 @@
     "protocols": [
       {
         "name": "MechPro authentication",
-        "schemes": ["mechpro"]
+        "schemes": [
+          "mechpro"
+        ]
       }
     ],
     "artifactName": "MechPro-Setup-${version}.${ext}",
@@ -136,6 +138,7 @@
   "dependencies": {
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
+    "dompurify": "^3.4.16",
     "posthog-node": "^5.52.4"
   },
   "overrides": {
