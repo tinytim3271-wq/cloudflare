@@ -87,10 +87,152 @@ function makeEstimate() { if (aiResult?.kind !== "estimate") return; const numbe
 function estimateMessage(estimate) { const lines = estimate.lines.map(line => `${line.service}: ${money(line.total)}`).join("; "); return `Your Car Guy estimate ${estimate.number} for ${estimate.vehicle}. ${lines}. Total ${money(estimate.total)}. Please contact us to approve or sign in person.` }
 async function deliverShopMessage({ channel, to, subject, body, metadata }) { const config = state.messagingSettings; if (config.enabled && config.endpoint) { try { const response = await fetch(config.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, to, subject, body, metadata, from: channel === "email" ? config.senderEmail : config.senderPhone, shopName: config.shopName }) }); if (!response.ok) throw new Error("Delivery endpoint rejected the message"); return { mode: "service" } } catch (error) { toast("Shop delivery service was unavailable. Opening the device app instead.") } } if (channel === "email") window.location.href = `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; else window.location.href = `sms:${String(to || "").replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(body)}`; return { mode: "device" } }
 async function sendEstimate(id, channel) { const estimate = state.estimates.find(item => item.id === id); if (!estimate) return; const subject = `Estimate ${estimate.number} — ${state.messagingSettings.shopName || "Your Car Guy"}`, body = estimateMessage(estimate), result = await deliverShopMessage({ channel, to: channel === "email" ? estimate.email : estimate.phone, subject, body, metadata: { type: "estimate", estimateId: estimate.id, estimateNumber: estimate.number, workOrderId: estimate.workOrderId } }); estimate.lastSentAt = now(); estimate.lastSentChannel = channel; estimate.deliveryMode = result.mode; updateEstimateInApi(estimate); save(); toast(result.mode === "service" ? `${estimate.number} sent through the shop messaging service` : `${estimate.number} opened in your device ${channel === "email" ? "email" : "messaging"} app`) }
-function openSignature(id) { const estimate = state.estimates.find(item => item.id === id); if (!estimate) return; showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} · ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`); initSignaturePad(estimate) }
-function canvasToBlob(canvas) { return new Promise(resolve => canvas.toBlob(resolve, "image/png")) }
-async function uploadFileToR2(blob, kind, contentType) { const { uploadUrl, key } = await apiFetch("/files/presign-upload", { method: "POST", body: JSON.stringify({ kind, contentType, contentLength: blob.size }) }); const response = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: blob }); if (!response.ok) throw new Error("Upload to storage failed"); return key }
-function initSignaturePad(estimate) { const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d"), position = event => { const rect = canvas.getBoundingClientRect(); return { x: (event.clientX - rect.left) * (canvas.width / rect.width), y: (event.clientY - rect.top) * (canvas.height / rect.height) } }; let drawing = false, drawn = false; context.lineWidth = 2.4; context.lineCap = "round"; context.strokeStyle = "#14201c"; canvas.addEventListener("pointerdown", event => { drawing = true; drawn = true; canvas.setPointerCapture(event.pointerId); const point = position(event); context.beginPath(); context.moveTo(point.x, point.y) }); canvas.addEventListener("pointermove", event => { if (!drawing) return; const point = position(event); context.lineTo(point.x, point.y); context.stroke() }); canvas.addEventListener("pointerup", () => { drawing = false }); document.querySelector("#clear-signature").onclick = () => { context.clearRect(0, 0, canvas.width, canvas.height); drawn = false }; document.querySelector("#signature-form").onsubmit = async event => { event.preventDefault(); const name = new FormData(event.target).get("authorizationName").trim(), submitButton = event.target.querySelector("button[type=submit]"); if (!drawn) { toast("Capture the customer signature before approving"); return } submitButton.disabled = true; try { const blob = await canvasToBlob(canvas), key = await uploadFileToR2(blob, "signature", "image/png"); estimate.status = "approved"; estimate.authorizationName = name; estimate.signatureKey = key; estimate.signature = null; estimate.signedAt = now(); if (estimate.workOrderId) { const order = state.orders.find(item => item.id === estimate.workOrderId); if (order && order.status === "estimate") { order.status = "approved"; void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")) } } updateEstimateInApi(estimate); save(); closeModal(); toast(`${estimate.number} approved and signed`); render() } catch (error) { toast("Could not upload the signature. Please try again."); submitButton.disabled = false } } }
+function openSignature(id) { const estimate = state.estimates.find(item => item.id === id); if (!estimate) return; showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} · ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. The approval and signature are saved to your shop records.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`); initSignaturePad(estimate) }
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    const fallback = () => {
+      try {
+        const dataUrl = canvas.toDataURL("image/png");
+        const bytes = atob(dataUrl.split(",")[1] || "");
+        const buffer = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+        resolve(new Blob([buffer], { type: "image/png" }));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    if (typeof canvas.toBlob !== "function") return fallback();
+    canvas.toBlob(blob => { if (blob && blob.size) resolve(blob); else fallback() }, "image/png");
+  });
+}
+function sameOriginUploadUrl(uploadUrl) {
+  try {
+    const parsed = new URL(uploadUrl, location.origin);
+    if (parsed.pathname.startsWith("/api/")) return `${parsed.pathname}${parsed.search}`;
+    return parsed.href;
+  } catch {
+    return uploadUrl;
+  }
+}
+async function uploadFileToR2(blob, kind, contentType) {
+  if (!blob || !Number(blob.size)) throw new Error("Empty file");
+  const { uploadUrl, key } = await apiFetch("/files/presign-upload", {
+    method: "POST",
+    body: JSON.stringify({ kind, contentType, contentLength: blob.size }),
+  });
+  const response = await fetch(sameOriginUploadUrl(uploadUrl), {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": contentType },
+    body: blob,
+  });
+  if (!response.ok) throw new Error(`Upload to storage failed (${response.status})`);
+  return key;
+}
+function initSignaturePad(estimate) {
+  const canvas = document.querySelector("#signature-pad");
+  const context = canvas.getContext("2d");
+  const position = event => {
+    const rect = canvas.getBoundingClientRect();
+    const source = event.touches?.[0] || event.changedTouches?.[0] || event;
+    return {
+      x: (source.clientX - rect.left) * (canvas.width / rect.width),
+      y: (source.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+  let drawing = false, drawn = false;
+  canvas.style.touchAction = "none";
+  context.lineWidth = 2.4;
+  context.lineCap = "round";
+  context.strokeStyle = "#14201c";
+  const startStroke = event => {
+    event.preventDefault();
+    drawing = true;
+    drawn = true;
+    if (event.pointerId != null) {
+      try { canvas.setPointerCapture(event.pointerId) } catch { /* older engines */ }
+    }
+    const point = position(event);
+    context.beginPath();
+    context.moveTo(point.x, point.y);
+  };
+  const moveStroke = event => {
+    if (!drawing) return;
+    event.preventDefault();
+    const point = position(event);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+  };
+  const endStroke = () => { drawing = false };
+  canvas.addEventListener("pointerdown", startStroke);
+  canvas.addEventListener("pointermove", moveStroke);
+  canvas.addEventListener("pointerup", endStroke);
+  canvas.addEventListener("pointercancel", endStroke);
+  canvas.addEventListener("mousedown", startStroke);
+  canvas.addEventListener("mousemove", moveStroke);
+  canvas.addEventListener("mouseup", endStroke);
+  canvas.addEventListener("mouseleave", endStroke);
+  document.querySelector("#clear-signature").onclick = () => {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    drawn = false;
+  };
+  document.querySelector("#signature-form").onsubmit = async event => {
+    event.preventDefault();
+    const name = String(new FormData(event.target).get("authorizationName") || "").trim();
+    const submitButton = event.target.querySelector("button[type=submit]");
+    if (!name) { toast("Enter the authorized customer name"); return }
+    if (!drawn) { toast("Capture the customer signature before approving"); return }
+    submitButton.disabled = true;
+    const previous = {
+      status: estimate.status,
+      authorizationName: estimate.authorizationName,
+      signatureKey: estimate.signatureKey,
+      signature: estimate.signature,
+      signedAt: estimate.signedAt,
+      updatedAt: estimate.updatedAt,
+    };
+    try {
+      const dataUrl = canvas.toDataURL("image/png");
+      let signatureKey = "";
+      let uploadWarning = "";
+      try {
+        const blob = await canvasToBlob(canvas);
+        signatureKey = await uploadFileToR2(blob, "signature", "image/png");
+      } catch (uploadError) {
+        console.error("Signature image upload failed; saving estimate with embedded signature", uploadError);
+        uploadWarning = uploadError.message || "Signature image upload failed";
+      }
+      estimate.status = "approved";
+      estimate.authorizationName = name;
+      estimate.signatureKey = signatureKey || "";
+      estimate.signature = signatureKey ? null : dataUrl;
+      estimate.signedAt = now();
+      estimate.updatedAt = now();
+      estimate.signedBy = currentUser()?.id || "";
+      if (estimate.workOrderId) {
+        const order = state.orders.find(item => item.id === estimate.workOrderId);
+        if (order && ["estimate", "pending"].includes(order.status)) {
+          order.status = "approved";
+          order.updatedAt = now();
+          try { await updateOrderInApi(order) }
+          catch (orderError) { console.error("Linked work order approval sync failed", orderError) }
+        }
+      }
+      await updateEstimateInApi(estimate);
+      save();
+      closeModal();
+      toast(uploadWarning
+        ? `${estimate.number} approved (signature saved with estimate; image upload pending)`
+        : `${estimate.number} approved and signed`);
+      render();
+    } catch (error) {
+      Object.assign(estimate, previous);
+      console.error("Estimate signature save failed", error);
+      toast(error.message || "Could not save the signed estimate. Please try again.");
+      submitButton.disabled = false;
+    }
+  };
+}
 function guideResult(result) { return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Repair guide</div><h2>${escapeHtml(result.title)}</h2><p>${escapeHtml(result.difficulty)} · ${escapeHtml(result.time)}</p></div></div><div class="ai-result-grid"><section><h3>Tools required</h3><ul class="ai-checklist">${result.tools.map(tool => `<li>${icon("wrench", 13)}${escapeHtml(tool)}</li>`).join("")}</ul><h3>Parts needed</h3><ul class="ai-checklist">${result.parts.map(part => `<li>${icon("package", 13)}${escapeHtml(part)}</li>`).join("")}</ul></section><section><h3>Repair steps</h3><ol class="ai-steps">${result.steps.map((step, index) => `<li><b>${index + 1}</b><span>${escapeHtml(step)}</span></li>`).join("")}</ol><h3>Safety notes</h3><ul class="ai-checklist">${result.safety.map(note => `<li>${icon("triangle-alert", 13)}${escapeHtml(note)}</li>`).join("")}</ul></section></div></section>` }
 function phoneResult(result) { return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Call intake summary</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} · ${escapeHtml(result.service)}</p></div></div><div class="ai-result-grid"><section><h3>Customer concern</h3><p class="ai-copy">${escapeHtml(result.symptoms)}</p><h3>Suggested response</h3><p class="ai-copy">${escapeHtml(result.response)}</p></section><section><h3>Follow-up questions</h3><ul class="ai-checklist">${result.questions.map(question => `<li>${icon("circle-help", 13)}${escapeHtml(question)}</li>`).join("")}</ul><div class="ai-booking">${icon("calendar-check", 16)} Booking recommended</div></section></div></section>` }
 const STORE = storageKeys.dispatch;
@@ -215,8 +357,8 @@ async function loadPaymentsFromApi() { try { state.payments = await apiFetch("/e
 async function pushExpenseToApi(record) { try { await apiFetch("/entities/expenses", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync expense to API", error) } }
 async function loadExpensesFromApi() { try { state.expenses = await apiFetch("/entities/expenses"); save() } catch (error) { console.error("Failed to load expenses from API; using local data", error) } }
 async function pushEstimateToApi(record) { try { await apiFetch("/entities/estimates", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync estimate to API", error) } }
-async function updateEstimateInApi(record) { try { await apiFetch(`/entities/estimates/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync estimate update to API", error) } }
-async function loadEstimatesFromApi() { try { state.estimates = await apiFetch("/entities/estimates"); save() } catch (error) { console.error("Failed to load estimates from API; using local data", error) } }
+async function updateEstimateInApi(record) { try { await apiFetch(`/entities/estimates/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync estimate update to API", error); throw error } }
+async function loadEstimatesFromApi() { try { applyRemoteList("estimates", await apiFetch("/entities/estimates")) } catch (error) { console.error("Failed to load estimates from API; using local data", error) } }
 async function pushShiftEntryToApi(record) { try { await apiFetch("/entities/shiftentries", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync shift entry to API", error) } }
 async function updateShiftEntryInApi(record) { try { await apiFetch(`/entities/shiftentries/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync shift entry update to API", error) } }
 async function loadShiftEntriesFromApi() { try { state.shiftEntries = await apiFetch("/entities/shiftentries"); save() } catch (error) { console.error("Failed to load shift entries from API; using local data", error) } }
@@ -253,8 +395,10 @@ function jobTrackedHours(workOrderId) { return state.jobClockEntries.filter(entr
 function toggleShift() { const user = currentUser(), shift = openShift(user.id); if (shift) { shift.clockOut = now(); shift.hours = hoursBetween(shift.clockIn, shift.clockOut); updateShiftEntryInApi(shift); toast(`Shift clocked out: ${formatHours(shift.hours)}`) } else { const entry = { id: `shift-${Date.now()}`, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.shiftEntries.push(entry); pushShiftEntryToApi(entry); toast("Shift clocked in") }; save(); render() }
 function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || order.tech !== user.techName) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
 function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
-function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
+function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", declined: "Declined", archived: "Archived", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
+const CLOSED_ORDER_STATUSES = new Set(["completed", "invoiced", "declined", "archived"]);
+const statusLabel = { estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", declined: "Declined", archived: "Archived", paid: "Paid", sent: "Sent", overdue: "Overdue" };
 function toast(message) { const node = document.createElement("div"); node.className = "toast"; node.textContent = message; document.querySelector("#toast-region").append(node); setTimeout(() => node.remove(), 2600) }
 let attentionDismissBound = false;
 function nav(route, iconName, text, count = "") { if (!canAccess(route)) return ""; const current = state.route === route; return `<button class="nav-button ${current ? "active" : ""}" data-route="${route}"${current ? ' aria-current="page"' : ""}>${icon(iconName)}<span>${text}</span>${count !== "" && count !== "0" ? `<span class="count">${count}</span>` : ""}</button>` }
@@ -264,9 +408,16 @@ function bindAttentionPanel() { const toggle = document.querySelector("#attentio
 function syncStatusBadge() { const pending = readMutationQueue().filter(item => !item.conflict).length, conflicts = readMutationQueue().filter(item => item.conflict).length, online = navigator.onLine; if (conflicts) return `<span class="sync-pill conflict" title="Offline edits conflict with newer server data">${icon("triangle-alert", 14)} ${conflicts} conflict${conflicts === 1 ? "" : "s"}</span>`; if (!online) return `<span class="sync-pill offline" title="Working offline">${icon("wifi-off", 14)} Offline${pending ? ` · ${pending} queued` : ""}</span>`; if (pending) return `<span class="sync-pill pending" title="Waiting to sync offline changes">${icon("refresh-cw", 14)} Syncing ${pending}</span>`; return `<span class="sync-pill online" title="Connected">${icon("cloud-check", 14)} Online</span>` }
 function shell(content) { const user = currentUser(), profile = shopProfile(), shift = openShift(user.id); return `<a class="skip-link" href="#main-content">Skip to content</a><div class="app-shell"><aside class="sidebar" id="sidebar"><div class="brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Shop operating system</small></div></div>${sidebarNavigation()}<div class="sidebar-foot"><div class="shop-card"><strong>${escapeHtml(profile.shopName || "Your shop")}</strong><span>${escapeHtml(profile.phone || "Add a phone in Settings")}</span></div><div class="user-menu" id="user-menu"><button class="user-row" id="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel"><div class="avatar">${initials(user.name)}</div><div><strong>${escapeHtml(user.name)}</strong><span>${roleLabel[user.role]}</span></div>${icon("chevron-up", 14)}</button><div class="user-menu-panel" id="user-menu-panel" role="menu" hidden><button type="button" role="menuitem" id="user-menu-settings">${icon("settings", 14)} Shop settings</button><button type="button" role="menuitem" id="sign-out">${icon("log-out", 14)} Sign out</button></div></div></div></aside><main class="main"><header class="topbar"><button class="icon-button menu-button" id="menu-button" type="button" aria-label="Open navigation menu" title="Open menu">${icon("menu")}</button><label class="global-search">${icon("search", 16)}<input id="global-search" aria-label="Search work orders, customers, and VINs" value="${query}" placeholder="Search ROs, customers, VIN..."/><span class="shortcut">/</span></label><div class="top-actions">${syncStatusBadge()}<button class="shift-button ${shift ? "clocked" : ""}" id="global-clock">${icon(shift ? "square" : "play", 14)} ${shift ? `Clock out · ${formatTime(shift.clockIn)}` : "Clock in"}</button><button class="location-pill" type="button" data-route="settings" title="Open shop settings">${icon("map-pin", 15)} ${escapeHtml(profile.shopName || "Shop")}</button>${attentionMenu()}</div></header><div class="content" id="main-content">${content}</div></main></div>` }
 function heading(kicker, title, description, action = true) { return `<div class="page-head"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${description}</p></div><div class="head-actions"><button class="secondary" id="export-button">${icon("download", 15)} Export</button>${action ? `<button class="primary" id="new-ro-button">${icon("plus", 15)} New work order</button>` : ""}</div></div>` }
-function filtered() { const q = query.trim().toLowerCase(); return visibleOrders().filter(x => (filter === "all" || (filter === "active" ? !["completed", "invoiced"].includes(x.status) : ["completed", "invoiced"].includes(x.status))) && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some(v => String(v).toLowerCase().includes(q)))) }
-function stats() { const tech = currentUser()?.role === "technician", orders = visibleOrders(), openCount = orders.filter(x => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders.filter(x => x.status === "in_progress").length, waiting = orders.filter(x => x.status === "waiting_parts").length, paid = state.invoices.filter(x => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter(x => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders.filter(x => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map(x => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]]; return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map(x => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>` }
-function toolbar() { return `<div class="toolbar"><div class="tabs">${[["active", "Active"], ["completed", "Completed"], ["all", "All orders"]].map(x => `<button class="tab ${filter === x[0] ? "active" : ""}" data-filter="${x[0]}">${x[1]}</button>`).join("")}</div><label class="toolbar-search">${icon("search")}<input id="order-search" value="${query}" placeholder="Filter this view..."/></label></div>` }
+function filtered() { const q = query.trim().toLowerCase(); return visibleOrders().filter(x => {
+  const matchesFilter = filter === "all"
+    || (filter === "active" && !CLOSED_ORDER_STATUSES.has(x.status))
+    || (filter === "completed" && ["completed", "invoiced"].includes(x.status))
+    || (filter === "declined" && x.status === "declined")
+    || (filter === "archived" && x.status === "archived");
+  return matchesFilter && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some(v => String(v).toLowerCase().includes(q)));
+}) }
+function stats() { const tech = currentUser()?.role === "technician", orders = visibleOrders(), openCount = orders.filter(x => !CLOSED_ORDER_STATUSES.has(x.status)).length, inProgress = orders.filter(x => x.status === "in_progress").length, waiting = orders.filter(x => x.status === "waiting_parts").length, paid = state.invoices.filter(x => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter(x => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders.filter(x => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map(x => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]]; return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map(x => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>` }
+function toolbar() { return `<div class="toolbar"><div class="tabs">${[["active", "Active"], ["completed", "Completed"], ["declined", "Declined"], ["archived", "Archived"], ["all", "All orders"]].map(x => `<button class="tab ${filter === x[0] ? "active" : ""}" data-filter="${x[0]}">${x[1]}</button>`).join("")}</div><label class="toolbar-search">${icon("search")}<input id="order-search" value="${query}" placeholder="Filter this view..."/></label></div>` }
 function card(x) { return `<button class="job-card ${x.priority}" data-order="${x.id}"><div class="job-meta"><span>${x.id}</span><span>·</span><span>${x.bay}</span>${x.mobile ? `<span class="mobile">${icon("map-pin", 10)} Mobile</span>` : ""}</div><h4>${x.customer}</h4><div class="vehicle">${x.vehicle}</div><p class="complaint">${x.complaint}</p><div class="job-foot"><span class="tech"><span class="mini-avatar">${initials(x.tech)}</span>${x.tech}</span><span class="promise">${icon("clock-3", 11)}${x.promise}</span></div></button>` }
 function dispatch() { const statuses = ["estimate", "approved", "in_progress", "waiting_parts"], orders = filtered(), lanes = statuses.map(s => { const items = orders.filter(x => x.status === s); return `<section class="lane"><div class="lane-head"><span class="status-dot ${s}"></span><h3>${label(s)}</h3><span class="lane-count">${items.length}</span></div><div class="lane-body">${items.length ? items.map(card).join("") : `<div class="empty-lane">No work orders</div>`}</div></section>` }).join(""); return shell(`${heading(shopDayLabel(), "Dispatch board", "Live shop workload, technician assignments, and promise times.")}${stats()}${toolbar()}<div class="board">${lanes}</div>`) }
 function orders() { const rows = filtered().map(x => `<tr data-order="${x.id}"><td class="mono strong">${x.id}</td><td><b>${escapeHtml(x.customer)}</b><small>${escapeHtml(x.phone)}</small></td><td><b>${escapeHtml(x.vehicle)}</b><small class="mono">${escapeHtml(x.vin)}</small></td><td>${badge(x.status)}</td><td>${escapeHtml(x.tech)}<small>${escapeHtml(x.bay)}</small></td><td>${escapeHtml(x.promise)}</td><td><b>${money(x.total)}</b></td></tr>`).join(""); return shell(`${heading("Operations", "Work orders", "Every estimate, repair, and completed job in one searchable queue.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`) }
@@ -396,7 +547,7 @@ function vehicleOptionsForCustomer(customerName, selectedVin = "") { const vehic
 function bindNewOrderCustomerPickers() { const form = document.querySelector("#new-form"); if (!form) return; const customerSelect = form.elements.customerSelect, customerInput = form.elements.customer, phoneInput = form.elements.phone, vehicleSelect = form.elements.vehicleSelect, vehicleInput = form.elements.vehicle, vinInput = form.elements.vin, vinStatus = document.querySelector("#new-ro-vin-status"); const syncCustomer = () => { const name = customerSelect.value; if (name === "__new__") { customerInput.value = ""; customerInput.hidden = false; customerInput.required = true; customerInput.focus(); vehicleSelect.innerHTML = vehicleOptionsForCustomer(""); return } customerInput.hidden = true; customerInput.required = false; customerInput.value = name; const match = state.customers.find(item => item.name === name); if (match) phoneInput.value = match.phone || ""; vehicleSelect.innerHTML = vehicleOptionsForCustomer(name) }; const syncVehicle = () => { const option = vehicleSelect.selectedOptions[0]; if (!option || !option.value) { vehicleInput.readOnly = false; return } vehicleInput.value = option.dataset.label || ""; vinInput.value = option.dataset.vin || ""; vehicleInput.readOnly = true }; customerSelect.onchange = syncCustomer; vehicleSelect.onchange = syncVehicle; document.querySelector("#new-ro-decode-vin")?.addEventListener("click", async () => { const vin = String(vinInput.value || "").trim().toUpperCase(); if (vin.length !== 17) { vinStatus.textContent = "Enter a 17-character VIN"; return } vinStatus.textContent = "Decoding VIN…"; try { const data = await apiFetch(`/vehicles/decode/${encodeURIComponent(vin)}`); vehicleInput.value = [data.year, data.make, data.model, data.trim].filter(Boolean).join(" "); vinInput.value = vin; vehicleInput.readOnly = false; vehicleSelect.value = ""; vinStatus.textContent = data.cached ? "Cached NHTSA data loaded" : "NHTSA vehicle data loaded" } catch { vinStatus.textContent = "VIN could not be decoded" } }); syncCustomer() }
 function openNew() { const promiseDefault = relativePromiseHint(); showModal(`<form class="modal wide" id="new-form"><div class="modal-head"><h2>New work order</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customerSelect" required><option value="__new__">+ New customer</option>${customerOptions()}</select></label><label>Customer name (new)<input name="customer" hidden/></label><label>Phone<input name="phone"/></label><label class="full">Linked vehicle<select name="vehicleSelect">${vehicleOptionsForCustomer("")}</select></label><label class="full">Vehicle description *<input name="vehicle" required placeholder="Year, make, model, trim"/></label><label class="full">VIN<input name="vin" maxlength="17" pattern="[A-HJ-NPR-Z0-9]{0,17}"/></label><div class="full vin-actions"><button class="secondary" type="button" id="new-ro-decode-vin">${icon("scan-line", 14)} Decode VIN with NHTSA</button><span id="new-ro-vin-status"></span></div></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required></textarea></label><label>Status<select name="status"><option value="estimate">Estimate</option><option value="approved">Approved</option><option value="in_progress">In progress</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label><label>Technician<select name="tech">${techOptions()}</select></label><label>Assignment<select name="bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label><label>Promise time<input name="promise" value="${escapeHtml(promiseDefault)}"/></label><label>Estimate total<input id="new-estimate-total" name="total" type="number" value="0.00" readonly/></label></div><h3>AI service estimate</h3><section class="new-order-estimator"><div class="estimator-prompt"><label>Requested services, one per line<textarea name="requestedServices" placeholder="Front brake pads and rotors&#10;Synthetic oil and filter service"></textarea></label><button class="primary" id="generate-new-estimate" type="button">${icon("sparkles", 15)} Generate with AI</button></div><div class="estimator-toolbar"><p>Edit the generated prices and included-work explanations before creating the order.</p><button class="secondary" id="add-estimate-line" type="button">${icon("plus", 14)} Add service</button></div><div id="new-estimate-lines"></div><div class="new-estimate-summary" id="new-estimate-summary"></div></section>${Mileage.newOrderMileageMarkup({ rate: Mileage.normalizeMileageRate(typeof shopProfile === "function" ? shopProfile().mileageRate : 0.68), shopAddress: typeof shopProfile === "function" ? shopProfile().address : "" })}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("plus", 15)} Create work order</button></div></form>`); bindNewOrderEstimator(); bindWorkOrderMileage("#new-form"); bindNewOrderCustomerPickers(); document.querySelector("#new-form").onsubmit = async e => { e.preventDefault(); const submitButton = e.target.querySelector("button.primary"), data = Object.fromEntries(new FormData(e.target)), customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim(); if (!customerName) { toast("Select or enter a customer name"); return } const estimate = readNewOrderEstimate(), id = `RO-${Math.max(1040, ...state.orders.map(x => Number(x.id.split("-")[1]) || 0)) + 1}`; let order = { id, customer: customerName, phone: data.phone, vehicle: data.vehicle, vin: String(data.vin || "").trim().toUpperCase() || "VIN pending", complaint: data.complaint, status: data.status, priority: data.priority, tech: data.tech, bay: data.bay, mobile: data.bay === "Mobile", promise: data.promise, total: estimate.total, scheduled: "Unscheduled", notes: "New intake. Diagnosis pending.", labor: estimate.labor, laborHours: estimate.laborHours, parts: estimate.parts, tax: estimate.tax, jobAddress: String(data.jobAddress || "").trim(), tripMilesOneWay: Number(data.tripMilesOneWay) || 0, estimate: { ...estimate, generatedAt: now(), summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.` } }; order = Mileage.applyMileageToOrder(order, { oneWayMiles: order.tripMilesOneWay, jobAddress: order.jobAddress, rate: shopMileageRate(), taxRate: state.taxSettings.rate }); if (submitButton) submitButton.disabled = true; try { const saved = await pushOrderToApi(order); state.orders.unshift(saved || order); if (!state.customers.some(x => x.name.toLowerCase() === customerName.toLowerCase())) { const record = { name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 }; state.customers.unshift(record); try { await pushCustomerToApi(record) } catch (customerError) { console.error("Failed to sync customer", customerError) } } save(); closeModal(); toast(`${id} created successfully`); render() } catch (error) { toast(error.message || "Work order could not be saved"); } finally { if (submitButton) submitButton.disabled = false } } }
 async function commitLinkedInventory(order) { if (order.inventoryDeducted || order.inventoryCommittedAt) return true; const commitments = new Map(), missing = []; for (const line of order.estimate?.lines || []) { const quantity = Number(line.committedQuantity || 0); if (!Number.isFinite(quantity) || quantity <= 0) continue; const item = state.inventory.find(record => record.id === line.inventoryId || (line.inventorySku && record.sku === line.inventorySku)); if (!item) { missing.push(line.inventorySku || line.inventoryId || line.service); continue } const current = commitments.get(item.id) || { item, quantity: 0 }; current.quantity += quantity; commitments.set(item.id, current) } const shortages = [...missing.map(name => `${name} is unavailable`), ...[...commitments.values()].filter(({ item, quantity }) => Number(item.quantity || 0) < quantity).map(({ item, quantity }) => `${item.sku || item.name}: need ${quantity}, have ${Number(item.quantity || 0)}`)]; if (shortages.length) { toast(`Inventory shortage: ${shortages.join("; ")}`); return false } for (const { item, quantity } of commitments.values()) await saveShopEntity("inventory", { ...item, quantity: Math.max(0, Number(item.quantity || 0) - quantity), updatedAt: item.updatedAt || now() }); order.inventoryCommittedAt = now(); order.inventoryDeducted = true; return true }
-function openOrder(id) { const x = state.orders.find(o => o.id === id); if (!x) return; const technicians = state.users.filter(user => user.active && user.techName).map(user => user.techName), canManage = ["admin", "service_writer"].includes(currentUser().role), isAssignedTech = currentUser().role === "technician" && currentUser().techName === x.tech, activeClock = openJobClock(x.id), jobClockControl = isAssignedTech ? `<section class="job-clock-panel"><div><h3>Job time clock</h3><p>${activeClock ? `Clocked in at ${formatTime(activeClock.clockIn)}` : `${formatHours(jobTrackedHours(x.id))} tracked on this job`}</p></div><button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${x.id}">${icon(activeClock ? "square" : "play", 14)} ${activeClock ? "Clock out job" : "Clock in to job"}</button></section>` : "", inventoryLines = (x.estimate?.lines || []).filter(line => line.inventoryId || line.inventorySku), inventoryMarkup = inventoryLines.length ? `<section><h3>Linked inventory</h3>${inventoryLines.map(line => { const item = state.inventory.find(record => record.id === line.inventoryId || (line.inventorySku && record.sku === line.inventorySku)); return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> · ${escapeHtml(item?.name || line.service)} · ${Number(line.committedQuantity || 0)} committed</p>` }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map(t => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, .5, .75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map(h => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} · ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`; showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} · <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} · ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} · ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(s => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${Mileage.mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || Mileage.mileageCharge(x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`); bindWorkOrderMileage(".modal"); if (canManage) { const baySelect = document.querySelector("#detail-bay"); if (baySelect) baySelect.value = x.bay || "Unassigned"; document.querySelector("#save-order").onclick = async event => { const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt }; button.disabled = true; try { if (firstCompletion && !await commitLinkedInventory(x)) return; x.status = nextStatus; x.tech = document.querySelector("#detail-tech")?.value || x.tech; x.laborHours = Number(document.querySelector("#detail-hours")?.value || x.laborHours || 0); x.complaint = document.querySelector("#detail-complaint")?.value?.trim() || x.complaint; x.notes = document.querySelector("#detail-notes")?.value?.trim() || ""; x.promise = document.querySelector("#detail-promise")?.value?.trim() || x.promise; x.bay = document.querySelector("#detail-bay")?.value || x.bay; x.mobile = x.bay === "Mobile"; Object.assign(x, Mileage.applyMileageToOrder(x, { oneWayMiles: document.querySelector("#detail-one-way-miles")?.value, jobAddress: document.querySelector("#detail-job-address")?.value, rate: shopMileageRate(), taxRate: state.taxSettings.rate })); syncPayroll(x); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : `${x.id} updated`); render() } catch (error) { Object.assign(x, previous); toast(error.message || "Work order could not be saved") } finally { button.disabled = false } }; } document.querySelector("#delete-order")?.addEventListener("click", () => { if (confirm(`Delete ${x.id}?`)) { state.orders = state.orders.filter(o => o.id !== id); state.payrollEntries = state.payrollEntries.filter(line => line.workOrderId !== id); state.jobClockEntries = state.jobClockEntries.filter(line => line.workOrderId !== id); deleteOrderInApi(id); save(); closeModal(); toast(`${id} deleted`); render() } }) }
+function openOrder(id) { const x = state.orders.find(o => o.id === id); if (!x) return; const technicians = state.users.filter(user => user.active && user.techName).map(user => user.techName), canManage = ["admin", "service_writer"].includes(currentUser().role), isAssignedTech = currentUser().role === "technician" && currentUser().techName === x.tech, activeClock = openJobClock(x.id), jobClockControl = isAssignedTech ? `<section class="job-clock-panel"><div><h3>Job time clock</h3><p>${activeClock ? `Clocked in at ${formatTime(activeClock.clockIn)}` : `${formatHours(jobTrackedHours(x.id))} tracked on this job`}</p></div><button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${x.id}">${icon(activeClock ? "square" : "play", 14)} ${activeClock ? "Clock out job" : "Clock in to job"}</button></section>` : "", inventoryLines = (x.estimate?.lines || []).filter(line => line.inventoryId || line.inventorySku), inventoryMarkup = inventoryLines.length ? `<section><h3>Linked inventory</h3>${inventoryLines.map(line => { const item = state.inventory.find(record => record.id === line.inventoryId || (line.inventorySku && record.sku === line.inventorySku)); return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> · ${escapeHtml(item?.name || line.service)} · ${Number(line.committedQuantity || 0)} committed</p>` }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map(t => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, .5, .75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map(h => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} · ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`; showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} · <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} · ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} · ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced", "declined", "archived"].map(s => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${Mileage.mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || Mileage.mileageCharge(x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `${x.status === "archived" ? `<button class="secondary" id="restore-order">${icon("archive-restore", 14)} Restore</button>` : `<button class="secondary" id="archive-order">${icon("archive", 14)} Archive</button>`}${x.status !== "declined" && x.status !== "archived" ? `<button class="secondary danger" id="decline-order">${icon("circle-x", 14)} Decline</button>` : ""}${x.status === "declined" ? `<button class="secondary" id="restore-order">${icon("rotate-ccw", 14)} Reopen</button>` : ""}<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`); bindWorkOrderMileage(".modal"); if (canManage) { const baySelect = document.querySelector("#detail-bay"); if (baySelect) baySelect.value = x.bay || "Unassigned"; document.querySelector("#save-order").onclick = async event => { const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], closed = ["declined", "archived"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt, previousStatus: x.previousStatus, decisionNote: x.decisionNote, declinedAt: x.declinedAt, declinedBy: x.declinedBy, archivedAt: x.archivedAt, archivedBy: x.archivedBy }; button.disabled = true; try { if (firstCompletion && !await commitLinkedInventory(x)) return; if (nextStatus === "archived" && x.status !== "archived") { x.previousStatus = x.status; x.archivedAt = now(); x.archivedBy = currentUser()?.id || "" } if (nextStatus === "declined" && x.status !== "declined") { x.declinedAt = now(); x.declinedBy = currentUser()?.id || "" } if (!closed.includes(nextStatus)) { if (x.status === "archived") x.archivedAt = ""; if (x.status === "declined") { x.declinedAt = ""; x.decisionNote = x.decisionNote || "" } } x.status = nextStatus; x.tech = document.querySelector("#detail-tech")?.value || x.tech; x.laborHours = Number(document.querySelector("#detail-hours")?.value || x.laborHours || 0); x.complaint = document.querySelector("#detail-complaint")?.value?.trim() || x.complaint; x.notes = document.querySelector("#detail-notes")?.value?.trim() || ""; x.promise = document.querySelector("#detail-promise")?.value?.trim() || x.promise; x.bay = document.querySelector("#detail-bay")?.value || x.bay; x.mobile = x.bay === "Mobile"; Object.assign(x, Mileage.applyMileageToOrder(x, { oneWayMiles: document.querySelector("#detail-one-way-miles")?.value, jobAddress: document.querySelector("#detail-job-address")?.value, rate: shopMileageRate(), taxRate: state.taxSettings.rate })); syncPayroll(x); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : closed.includes(x.status) ? `${x.id} marked ${label(x.status).toLowerCase()}` : `${x.id} updated`); render() } catch (error) { Object.assign(x, previous); toast(error.message || "Work order could not be saved") } finally { button.disabled = false } }; } document.querySelector("#decline-order")?.addEventListener("click", async () => { const note = prompt("Decline reason (optional):", x.decisionNote || ""); if (note === null) return; try { x.previousStatus = x.status === "declined" ? (x.previousStatus || "estimate") : x.status; x.status = "declined"; x.decisionNote = note.trim(); x.declinedAt = now(); x.declinedBy = currentUser()?.id || ""; x.updatedAt = now(); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(`${x.id} declined`); render() } catch (error) { toast(error.message || "Could not decline work order") } }); document.querySelector("#archive-order")?.addEventListener("click", async () => { try { x.previousStatus = x.status === "archived" ? (x.previousStatus || "estimate") : x.status; x.status = "archived"; x.archivedAt = now(); x.archivedBy = currentUser()?.id || ""; x.updatedAt = now(); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(`${x.id} archived`); render() } catch (error) { toast(error.message || "Could not archive work order") } }); document.querySelector("#restore-order")?.addEventListener("click", async () => { try { const next = x.previousStatus && !["archived", "declined"].includes(x.previousStatus) ? x.previousStatus : "estimate"; x.status = next; x.archivedAt = ""; x.declinedAt = ""; x.updatedAt = now(); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(`${x.id} restored to ${label(next).toLowerCase()}`); render() } catch (error) { toast(error.message || "Could not restore work order") } }); document.querySelector("#delete-order")?.addEventListener("click", () => { if (confirm(`Delete ${x.id}?`)) { state.orders = state.orders.filter(o => o.id !== id); state.payrollEntries = state.payrollEntries.filter(line => line.workOrderId !== id); state.jobClockEntries = state.jobClockEntries.filter(line => line.workOrderId !== id); deleteOrderInApi(id); save(); closeModal(); toast(`${id} deleted`); render() } }) }
 function exportCsv() { const rows = [["RO", "Customer", "Vehicle", "Status", "Technician", "Promise", "Total"], ...state.orders.map(x => [x.id, x.customer, x.vehicle, label(x.status), x.tech, x.promise, x.total])], csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = "mechpro-work-orders.csv"; link.click(); URL.revokeObjectURL(link.href); toast("Work orders exported") }
 function exportLedger() { const rows = [["Date", "Reference", "Description", "Debit account", "Credit account", "Amount"], ...ledger().map(x => [x.date, x.reference || "JE", x.description, x.debitAccount, x.creditAccount, x.amount])], csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = "mechpro-general-ledger.csv"; link.click(); URL.revokeObjectURL(link.href); toast("General ledger exported") }
 function exportPayroll() { syncAllPayroll(); const period = weekPeriod(), rows = [["Employee ID", "Employee", "Pay period", "Work order", "Customer", "Hours", "Rate", "Gross pay"], ...state.payrollEntries.filter(line => line.periodKey === period.key).map(line => { const user = state.users.find(item => item.id === line.employeeId); return [user?.employeeId || "", user?.name || "", `${period.start} - ${period.end}`, line.roNumber, line.customer, line.hours, line.rate, line.amount] })], csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = `mechpro-payroll-${period.key}.csv`; link.click(); URL.revokeObjectURL(link.href); toast("Weekly payroll register exported") }
@@ -630,6 +781,289 @@ loadExpensesFromApi = async function () { try { applyRemoteList("expenses", awai
 loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])); const tax = state.shopSettingsRecords.find(item => item.id === "tax"); if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly" } } catch (error) { console.error("Failed to load shop operations; using local data", error) } };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
+
+/* Estimate register: edit, archive, delete */
+let estimateRegisterFilter = "active";
+
+async function deleteEstimateInApi(id) {
+  try {
+    await apiFetch(`/entities/estimates/${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch (error) {
+    console.error("Failed to delete estimate in API", error);
+    throw error;
+  }
+}
+
+function estimateLaborRate(estimate) {
+  const profileRate = Number(typeof shopProfile === "function" ? shopProfile().laborRate : 0);
+  if (Number.isFinite(profileRate) && profileRate > 0) return profileRate;
+  const lineRate = Number(estimate?.lines?.[0]?.laborRate);
+  return Number.isFinite(lineRate) && lineRate > 0 ? lineRate : 165;
+}
+
+function recomputeEstimateTotals(estimate) {
+  const laborRate = estimateLaborRate(estimate);
+  const lines = (estimate.lines || []).map(line => {
+    const hours = Math.max(0, Number(line.hours) || 0);
+    const parts = Math.max(0, Number(line.parts) || 0);
+    const labor = Math.round(hours * laborRate * 100) / 100;
+    return {
+      ...line,
+      service: String(line.service || "").trim(),
+      notes: String(line.notes || line.explanation || "").trim(),
+      hours,
+      laborRate,
+      labor,
+      parts,
+      total: Math.round((labor + parts) * 100) / 100,
+    };
+  }).filter(line => line.service);
+  const labor = Math.round(lines.reduce((sum, line) => sum + line.labor, 0) * 100) / 100;
+  const parts = Math.round(lines.reduce((sum, line) => sum + line.parts, 0) * 100) / 100;
+  const feeAmount = Array.isArray(estimate.fees)
+    ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0)
+    : 0;
+  const base = Math.round((labor + parts + feeAmount) * 100) / 100;
+  const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+  estimate.originalSubtotal = base;
+  estimate.discountPercent = discountPercent;
+  estimate.discountAmount = Math.round(base * discountPercent) / 100;
+  estimate.lines = lines;
+  estimate.subtotal = Math.round((base - estimate.discountAmount) * 100) / 100;
+  const taxRate = Number(estimate.taxRate ?? state.taxSettings.rate) || 0;
+  estimate.taxRate = taxRate;
+  estimate.tax = Math.round(estimate.subtotal * taxRate / 100 * 100) / 100;
+  estimate.total = Math.round((estimate.subtotal + estimate.tax) * 100) / 100;
+  return estimate;
+}
+
+function estimateStatusBadge(estimate) {
+  const status = String(estimate.status || "pending");
+  const tone = status === "approved" ? "paid" : status === "declined" || status === "archived" ? "overdue" : "estimate";
+  return `<span class="badge ${tone}">${escapeHtml(status)}</span>`;
+}
+
+savedEstimates = function () {
+  const active = state.estimates.filter(estimate => estimate.status !== "archived");
+  const archived = state.estimates.filter(estimate => estimate.status === "archived");
+  const list = (estimateRegisterFilter === "archived" ? archived : active).slice().reverse();
+  const rows = list.map(estimate => {
+    const canSign = estimate.status === "pending";
+    return `<tr>
+      <td class="mono"><b>${escapeHtml(estimate.number)}</b><small>${escapeHtml(estimate.createdAt ? new Date(estimate.createdAt).toLocaleDateString() : "")}</small></td>
+      <td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td>
+      <td>${estimateStatusBadge(estimate)}<small>${escapeHtml(estimate.decisionNote || estimate.summary || "")}</small></td>
+      <td><b>${money(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount` : `${(estimate.lines || []).length} line(s)`}</small></td>
+      <td><div class="estimate-actions">
+        <button class="mini-action" data-edit-estimate="${escapeHtml(estimate.id)}">${icon("pencil", 13)} Edit</button>
+        <button class="mini-action" data-estimate-discount="${escapeHtml(estimate.id)}">${icon("percent", 13)} Discount</button>
+        <button class="mini-action" data-send-estimate="${escapeHtml(estimate.id)}" data-channel="email">${icon("mail", 13)} Email</button>
+        ${canSign ? `<button class="mini-action" data-sign-estimate="${escapeHtml(estimate.id)}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${escapeHtml(estimate.id)}">${icon("circle-x", 13)} Decline</button>` : ""}
+        ${estimate.status === "archived"
+          ? `<button class="mini-action" data-restore-estimate="${escapeHtml(estimate.id)}">${icon("archive-restore", 13)} Restore</button>`
+          : `<button class="mini-action" data-archive-estimate="${escapeHtml(estimate.id)}">${icon("archive", 13)} Archive</button>`}
+        <button class="mini-action danger" data-delete-estimate="${escapeHtml(estimate.id)}">${icon("trash-2", 13)} Delete</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+  return `<section class="ai-result">
+    <div class="ai-result-head">
+      <div>
+        <div class="eyebrow">Customer estimates</div>
+        <h2>Estimate register</h2>
+        <p>Edit line items, archive finished quotes, or delete estimates that should not stay on the books.</p>
+      </div>
+    </div>
+    <div class="accounting-tabs estimate-register-tabs">
+      <button class="tab ${estimateRegisterFilter === "active" ? "active" : ""}" data-estimate-filter="active">Active (${active.length})</button>
+      <button class="tab ${estimateRegisterFilter === "archived" ? "active" : ""}" data-estimate-filter="archived">Archived (${archived.length})</button>
+    </div>
+    <div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">${estimateRegisterFilter === "archived" ? "No archived estimates." : "No active estimates. Generate one from the Estimator tab."}</td></tr>`}</tbody></table></div>
+  </section>`;
+};
+
+function openEstimateEditor(id) {
+  const estimate = state.estimates.find(item => item.id === id);
+  if (!estimate) return;
+  const laborRate = estimateLaborRate(estimate);
+  const lineRows = (estimate.lines?.length ? estimate.lines : [{ service: "", hours: 1, parts: 0, notes: "" }]).map((line, index) => `
+    <div class="new-estimate-line estimate-edit-line" data-line-index="${index}">
+      <div class="estimate-line-head"><strong>Line ${index + 1}</strong><button type="button" class="icon-button remove-estimate-edit-line" title="Remove line">${icon("trash-2", 14)}</button></div>
+      <label class="full">Service<input class="estimate-edit-service" value="${escapeHtml(line.service || "")}" required/></label>
+      <label class="full">Notes<textarea class="estimate-edit-notes">${escapeHtml(line.notes || line.explanation || "")}</textarea></label>
+      <div class="estimate-line-numbers">
+        <label>Hours<input class="estimate-edit-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label>
+        <label>Parts $<input class="estimate-edit-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0)}"/></label>
+        <div><span>Labor @ ${money(laborRate)}/hr</span><b class="estimate-edit-labor">${money((Number(line.hours) || 0) * laborRate)}</b></div>
+      </div>
+    </div>`).join("");
+  showModal(`<form class="modal wide" id="estimate-edit-form">
+    <div class="modal-head"><h2>Edit ${escapeHtml(estimate.number)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <label>Customer<input name="customer" value="${escapeHtml(estimate.customer || "")}" required/></label>
+        <label>Phone<input name="phone" value="${escapeHtml(estimate.phone || "")}"/></label>
+        <label>Email<input name="email" value="${escapeHtml(estimate.email || "")}"/></label>
+        <label>Vehicle<input name="vehicle" value="${escapeHtml(estimate.vehicle || "")}" required/></label>
+        <label class="full">Summary<textarea name="summary">${escapeHtml(estimate.summary || "")}</textarea></label>
+      </div>
+      <div class="estimator-toolbar"><p>Labor is recalculated at ${money(laborRate)}/hr from shop settings.</p><button class="secondary" type="button" id="add-estimate-edit-line">${icon("plus", 14)} Add line</button></div>
+      <div id="estimate-edit-lines">${lineRows}</div>
+      <div class="new-estimate-summary" id="estimate-edit-summary"></div>
+    </div>
+    <div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save estimate</button></div>
+  </form>`);
+  const form = document.querySelector("#estimate-edit-form");
+  const linesRoot = document.querySelector("#estimate-edit-lines");
+  const refresh = () => {
+    let labor = 0, parts = 0;
+    linesRoot.querySelectorAll(".estimate-edit-line").forEach(row => {
+      const hours = Math.max(0, Number(row.querySelector(".estimate-edit-hours").value) || 0);
+      const partAmount = Math.max(0, Number(row.querySelector(".estimate-edit-parts").value) || 0);
+      const lineLabor = Math.round(hours * laborRate * 100) / 100;
+      row.querySelector(".estimate-edit-labor").textContent = money(lineLabor);
+      labor += lineLabor;
+      parts += partAmount;
+    });
+    const feeAmount = Array.isArray(estimate.fees) ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0) : 0;
+    const base = Math.round((labor + parts + feeAmount) * 100) / 100;
+    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+    const discountAmount = Math.round(base * discountPercent) / 100;
+    const subtotal = Math.round((base - discountAmount) * 100) / 100;
+    const taxRate = Number(estimate.taxRate ?? state.taxSettings.rate) || 0;
+    const tax = Math.round(subtotal * taxRate / 100 * 100) / 100;
+    const total = Math.round((subtotal + tax) * 100) / 100;
+    document.querySelector("#estimate-edit-summary").innerHTML = `<span>Labor <b>${money(labor)}</b></span><span>Parts <b>${money(parts)}</b></span><span>Subtotal <b>${money(subtotal)}</b></span><span>Tax <b>${money(tax)}</b></span><strong>Total ${money(total)}</strong>`;
+  };
+  const bindLineControls = () => {
+    linesRoot.querySelectorAll("input,textarea").forEach(input => { input.oninput = refresh });
+    linesRoot.querySelectorAll(".remove-estimate-edit-line").forEach(button => {
+      button.onclick = () => {
+        if (linesRoot.querySelectorAll(".estimate-edit-line").length <= 1) { toast("Keep at least one service line"); return }
+        button.closest(".estimate-edit-line").remove();
+        refresh();
+      };
+    });
+  };
+  document.querySelector("#add-estimate-edit-line").onclick = () => {
+    const index = linesRoot.querySelectorAll(".estimate-edit-line").length + 1;
+    linesRoot.insertAdjacentHTML("beforeend", `
+      <div class="new-estimate-line estimate-edit-line">
+        <div class="estimate-line-head"><strong>Line ${index}</strong><button type="button" class="icon-button remove-estimate-edit-line" title="Remove line">${icon("trash-2", 14)}</button></div>
+        <label class="full">Service<input class="estimate-edit-service" value="" required/></label>
+        <label class="full">Notes<textarea class="estimate-edit-notes"></textarea></label>
+        <div class="estimate-line-numbers">
+          <label>Hours<input class="estimate-edit-hours" type="number" min="0" step=".25" value="1"/></label>
+          <label>Parts $<input class="estimate-edit-parts" type="number" min="0" step=".01" value="0"/></label>
+          <div><span>Labor @ ${money(laborRate)}/hr</span><b class="estimate-edit-labor">${money(laborRate)}</b></div>
+        </div>
+      </div>`);
+    lucide.createIcons();
+    bindLineControls();
+    refresh();
+  };
+  bindLineControls();
+  refresh();
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const lines = [...linesRoot.querySelectorAll(".estimate-edit-line")].map(row => ({
+      service: row.querySelector(".estimate-edit-service").value.trim(),
+      notes: row.querySelector(".estimate-edit-notes").value.trim(),
+      hours: Math.max(0, Number(row.querySelector(".estimate-edit-hours").value) || 0),
+      parts: Math.max(0, Number(row.querySelector(".estimate-edit-parts").value) || 0),
+    })).filter(line => line.service);
+    if (!lines.length) { toast("Add at least one service line"); return }
+    estimate.customer = data.customer.trim();
+    estimate.phone = data.phone.trim();
+    estimate.email = data.email.trim();
+    estimate.vehicle = data.vehicle.trim();
+    estimate.summary = data.summary.trim();
+    estimate.lines = lines;
+    estimate.updatedAt = now();
+    recomputeEstimateTotals(estimate);
+    try {
+      await updateEstimateInApi(estimate);
+      save();
+      closeModal();
+      toast(`${estimate.number} updated`);
+      render();
+    } catch (error) {
+      toast(error.message || "Could not save estimate");
+    }
+  };
+}
+
+async function archiveEstimate(id) {
+  const estimate = state.estimates.find(item => item.id === id);
+  if (!estimate) return;
+  estimate.previousStatus = estimate.status === "archived" ? (estimate.previousStatus || "pending") : estimate.status;
+  estimate.status = "archived";
+  estimate.archivedAt = now();
+  estimate.archivedBy = currentUser()?.id || "";
+  try {
+    await updateEstimateInApi(estimate);
+    save();
+    toast(`${estimate.number} archived`);
+    render();
+  } catch (error) {
+    toast(error.message || "Could not archive estimate");
+  }
+}
+
+async function restoreEstimate(id) {
+  const estimate = state.estimates.find(item => item.id === id);
+  if (!estimate) return;
+  estimate.status = estimate.previousStatus && estimate.previousStatus !== "archived" ? estimate.previousStatus : "pending";
+  estimate.archivedAt = "";
+  estimate.updatedAt = now();
+  try {
+    await updateEstimateInApi(estimate);
+    save();
+    toast(`${estimate.number} restored`);
+    render();
+  } catch (error) {
+    toast(error.message || "Could not restore estimate");
+  }
+}
+
+async function deleteEstimateRecord(id) {
+  const estimate = state.estimates.find(item => item.id === id);
+  if (!estimate) return;
+  if (!confirm(`Delete ${estimate.number}? This cannot be undone.`)) return;
+  try {
+    await deleteEstimateInApi(id);
+    state.estimates = state.estimates.filter(item => item.id !== id);
+    save();
+    toast(`${estimate.number} deleted`);
+    render();
+  } catch (error) {
+    toast(error.message || "Could not delete estimate");
+  }
+}
+
+const bindEstimateLifecycleCore = bindEstimateActions;
+bindEstimateActions = function () {
+  bindEstimateLifecycleCore();
+  document.querySelectorAll("[data-estimate-filter]").forEach(button => {
+    button.onclick = () => {
+      estimateRegisterFilter = button.dataset.estimateFilter === "archived" ? "archived" : "active";
+      render();
+    };
+  });
+  document.querySelectorAll("[data-edit-estimate]").forEach(button => {
+    button.onclick = () => openEstimateEditor(button.dataset.editEstimate);
+  });
+  document.querySelectorAll("[data-archive-estimate]").forEach(button => {
+    button.onclick = () => archiveEstimate(button.dataset.archiveEstimate);
+  });
+  document.querySelectorAll("[data-restore-estimate]").forEach(button => {
+    button.onclick = () => restoreEstimate(button.dataset.restoreEstimate);
+  });
+  document.querySelectorAll("[data-delete-estimate]").forEach(button => {
+    button.onclick = () => deleteEstimateRecord(button.dataset.deleteEstimate);
+  });
+};
 
 async function startApp() {
   // Always refresh /auth/session when possible so ACCESS_ADMIN_EMAILS promotions

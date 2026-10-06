@@ -1077,6 +1077,7 @@
       await apiFetch(`/entities/estimates/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
     } catch (error) {
       console.error("Failed to sync estimate update to API", error);
+      throw error;
     }
   }
   async function loadEstimatesFromApi() {
@@ -1303,7 +1304,7 @@
     render();
   }
   function label(status) {
-    return { estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", paid: "Paid", sent: "Sent", overdue: "Overdue" }[status] || status;
+    return { estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", declined: "Declined", archived: "Archived", paid: "Paid", sent: "Sent", overdue: "Overdue" }[status] || status;
   }
   function badge(status) {
     return `<span class="badge ${status}">${label(status)}</span>`;
@@ -1368,14 +1369,17 @@
   }
   function filtered() {
     const q = query.trim().toLowerCase();
-    return visibleOrders().filter((x) => (filter === "all" || (filter === "active" ? !["completed", "invoiced"].includes(x.status) : ["completed", "invoiced"].includes(x.status))) && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some((v) => String(v).toLowerCase().includes(q))));
+    return visibleOrders().filter((x) => {
+      const matchesFilter = filter === "all" || filter === "active" && !CLOSED_ORDER_STATUSES.has(x.status) || filter === "completed" && ["completed", "invoiced"].includes(x.status) || filter === "declined" && x.status === "declined" || filter === "archived" && x.status === "archived";
+      return matchesFilter && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some((v) => String(v).toLowerCase().includes(q)));
+    });
   }
   function stats() {
-    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]];
+    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !CLOSED_ORDER_STATUSES.has(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money(overdueTotal)} outstanding` : "None overdue", "warn"]];
     return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map((x) => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>`;
   }
   function toolbar() {
-    return `<div class="toolbar"><div class="tabs">${[["active", "Active"], ["completed", "Completed"], ["all", "All orders"]].map((x) => `<button class="tab ${filter === x[0] ? "active" : ""}" data-filter="${x[0]}">${x[1]}</button>`).join("")}</div><label class="toolbar-search">${icon("search")}<input id="order-search" value="${query}" placeholder="Filter this view..."/></label></div>`;
+    return `<div class="toolbar"><div class="tabs">${[["active", "Active"], ["completed", "Completed"], ["declined", "Declined"], ["archived", "Archived"], ["all", "All orders"]].map((x) => `<button class="tab ${filter === x[0] ? "active" : ""}" data-filter="${x[0]}">${x[1]}</button>`).join("")}</div><label class="toolbar-search">${icon("search")}<input id="order-search" value="${query}" placeholder="Filter this view..."/></label></div>`;
   }
   function card(x) {
     return `<button class="job-card ${x.priority}" data-order="${x.id}"><div class="job-meta"><span>${x.id}</span><span>\xB7</span><span>${x.bay}</span>${x.mobile ? `<span class="mobile">${icon("map-pin", 10)} Mobile</span>` : ""}</div><h4>${x.customer}</h4><div class="vehicle">${x.vehicle}</div><p class="complaint">${x.complaint}</p><div class="job-foot"><span class="tech"><span class="mini-avatar">${initials(x.tech)}</span>${x.tech}</span><span class="promise">${icon("clock-3", 11)}${x.promise}</span></div></button>`;
@@ -2786,16 +2790,32 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const item = state.inventory.find((record) => record.id === line.inventoryId || line.inventorySku && record.sku === line.inventorySku);
       return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> \xB7 ${escapeHtml(item?.name || line.service)} \xB7 ${Number(line.committedQuantity || 0)} committed</p>`;
     }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map((t) => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map((h) => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`;
-    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
+    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced", "declined", "archived"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `${x.status === "archived" ? `<button class="secondary" id="restore-order">${icon("archive-restore", 14)} Restore</button>` : `<button class="secondary" id="archive-order">${icon("archive", 14)} Archive</button>`}${x.status !== "declined" && x.status !== "archived" ? `<button class="secondary danger" id="decline-order">${icon("circle-x", 14)} Decline</button>` : ""}${x.status === "declined" ? `<button class="secondary" id="restore-order">${icon("rotate-ccw", 14)} Reopen</button>` : ""}<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
     bindWorkOrderMileage(".modal");
     if (canManage) {
       const baySelect = document.querySelector("#detail-bay");
       if (baySelect) baySelect.value = x.bay || "Unassigned";
       document.querySelector("#save-order").onclick = async (event) => {
-        const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt };
+        const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], closed = ["declined", "archived"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt, previousStatus: x.previousStatus, decisionNote: x.decisionNote, declinedAt: x.declinedAt, declinedBy: x.declinedBy, archivedAt: x.archivedAt, archivedBy: x.archivedBy };
         button.disabled = true;
         try {
           if (firstCompletion && !await commitLinkedInventory(x)) return;
+          if (nextStatus === "archived" && x.status !== "archived") {
+            x.previousStatus = x.status;
+            x.archivedAt = now();
+            x.archivedBy = currentUser()?.id || "";
+          }
+          if (nextStatus === "declined" && x.status !== "declined") {
+            x.declinedAt = now();
+            x.declinedBy = currentUser()?.id || "";
+          }
+          if (!closed.includes(nextStatus)) {
+            if (x.status === "archived") x.archivedAt = "";
+            if (x.status === "declined") {
+              x.declinedAt = "";
+              x.decisionNote = x.decisionNote || "";
+            }
+          }
           x.status = nextStatus;
           x.tech = document.querySelector("#detail-tech")?.value || x.tech;
           x.laborHours = Number(document.querySelector("#detail-hours")?.value || x.laborHours || 0);
@@ -2810,7 +2830,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           if (saved && typeof saved === "object") Object.assign(x, saved);
           save();
           closeModal();
-          toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : `${x.id} updated`);
+          toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : closed.includes(x.status) ? `${x.id} marked ${label(x.status).toLowerCase()}` : `${x.id} updated`);
           render();
         } catch (error) {
           Object.assign(x, previous);
@@ -2820,6 +2840,60 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         }
       };
     }
+    document.querySelector("#decline-order")?.addEventListener("click", async () => {
+      const note = prompt("Decline reason (optional):", x.decisionNote || "");
+      if (note === null) return;
+      try {
+        x.previousStatus = x.status === "declined" ? x.previousStatus || "estimate" : x.status;
+        x.status = "declined";
+        x.decisionNote = note.trim();
+        x.declinedAt = now();
+        x.declinedBy = currentUser()?.id || "";
+        x.updatedAt = now();
+        const saved = await updateOrderInApi(x);
+        if (saved && typeof saved === "object") Object.assign(x, saved);
+        save();
+        closeModal();
+        toast(`${x.id} declined`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not decline work order");
+      }
+    });
+    document.querySelector("#archive-order")?.addEventListener("click", async () => {
+      try {
+        x.previousStatus = x.status === "archived" ? x.previousStatus || "estimate" : x.status;
+        x.status = "archived";
+        x.archivedAt = now();
+        x.archivedBy = currentUser()?.id || "";
+        x.updatedAt = now();
+        const saved = await updateOrderInApi(x);
+        if (saved && typeof saved === "object") Object.assign(x, saved);
+        save();
+        closeModal();
+        toast(`${x.id} archived`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not archive work order");
+      }
+    });
+    document.querySelector("#restore-order")?.addEventListener("click", async () => {
+      try {
+        const next = x.previousStatus && !["archived", "declined"].includes(x.previousStatus) ? x.previousStatus : "estimate";
+        x.status = next;
+        x.archivedAt = "";
+        x.declinedAt = "";
+        x.updatedAt = now();
+        const saved = await updateOrderInApi(x);
+        if (saved && typeof saved === "object") Object.assign(x, saved);
+        save();
+        closeModal();
+        toast(`${x.id} restored to ${label(next).toLowerCase()}`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not restore work order");
+      }
+    });
     document.querySelector("#delete-order")?.addEventListener("click", () => {
       if (confirm(`Delete ${x.id}?`)) {
         state.orders = state.orders.filter((o) => o.id !== id);
@@ -3642,6 +3716,222 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const next = localIsoDate2(tomorrow);
     state.appointments = state.appointments.map((item) => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item);
   }
+  async function deleteEstimateInApi(id) {
+    try {
+      await apiFetch(`/entities/estimates/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch (error) {
+      console.error("Failed to delete estimate in API", error);
+      throw error;
+    }
+  }
+  function estimateLaborRate(estimate) {
+    const profileRate = Number(typeof shopProfile === "function" ? shopProfile().laborRate : 0);
+    if (Number.isFinite(profileRate) && profileRate > 0) return profileRate;
+    const lineRate = Number(estimate?.lines?.[0]?.laborRate);
+    return Number.isFinite(lineRate) && lineRate > 0 ? lineRate : 165;
+  }
+  function recomputeEstimateTotals(estimate) {
+    const laborRate = estimateLaborRate(estimate);
+    const lines = (estimate.lines || []).map((line) => {
+      const hours = Math.max(0, Number(line.hours) || 0);
+      const parts2 = Math.max(0, Number(line.parts) || 0);
+      const labor2 = Math.round(hours * laborRate * 100) / 100;
+      return {
+        ...line,
+        service: String(line.service || "").trim(),
+        notes: String(line.notes || line.explanation || "").trim(),
+        hours,
+        laborRate,
+        labor: labor2,
+        parts: parts2,
+        total: Math.round((labor2 + parts2) * 100) / 100
+      };
+    }).filter((line) => line.service);
+    const labor = Math.round(lines.reduce((sum, line) => sum + line.labor, 0) * 100) / 100;
+    const parts = Math.round(lines.reduce((sum, line) => sum + line.parts, 0) * 100) / 100;
+    const feeAmount = Array.isArray(estimate.fees) ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0) : 0;
+    const base = Math.round((labor + parts + feeAmount) * 100) / 100;
+    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+    estimate.originalSubtotal = base;
+    estimate.discountPercent = discountPercent;
+    estimate.discountAmount = Math.round(base * discountPercent) / 100;
+    estimate.lines = lines;
+    estimate.subtotal = Math.round((base - estimate.discountAmount) * 100) / 100;
+    const taxRate = Number(estimate.taxRate ?? state.taxSettings.rate) || 0;
+    estimate.taxRate = taxRate;
+    estimate.tax = Math.round(estimate.subtotal * taxRate / 100 * 100) / 100;
+    estimate.total = Math.round((estimate.subtotal + estimate.tax) * 100) / 100;
+    return estimate;
+  }
+  function estimateStatusBadge(estimate) {
+    const status = String(estimate.status || "pending");
+    const tone = status === "approved" ? "paid" : status === "declined" || status === "archived" ? "overdue" : "estimate";
+    return `<span class="badge ${tone}">${escapeHtml(status)}</span>`;
+  }
+  function openEstimateEditor(id) {
+    const estimate = state.estimates.find((item) => item.id === id);
+    if (!estimate) return;
+    const laborRate = estimateLaborRate(estimate);
+    const lineRows = (estimate.lines?.length ? estimate.lines : [{ service: "", hours: 1, parts: 0, notes: "" }]).map((line, index) => `
+    <div class="new-estimate-line estimate-edit-line" data-line-index="${index}">
+      <div class="estimate-line-head"><strong>Line ${index + 1}</strong><button type="button" class="icon-button remove-estimate-edit-line" title="Remove line">${icon("trash-2", 14)}</button></div>
+      <label class="full">Service<input class="estimate-edit-service" value="${escapeHtml(line.service || "")}" required/></label>
+      <label class="full">Notes<textarea class="estimate-edit-notes">${escapeHtml(line.notes || line.explanation || "")}</textarea></label>
+      <div class="estimate-line-numbers">
+        <label>Hours<input class="estimate-edit-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label>
+        <label>Parts $<input class="estimate-edit-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0)}"/></label>
+        <div><span>Labor @ ${money(laborRate)}/hr</span><b class="estimate-edit-labor">${money((Number(line.hours) || 0) * laborRate)}</b></div>
+      </div>
+    </div>`).join("");
+    showModal(`<form class="modal wide" id="estimate-edit-form">
+    <div class="modal-head"><h2>Edit ${escapeHtml(estimate.number)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <label>Customer<input name="customer" value="${escapeHtml(estimate.customer || "")}" required/></label>
+        <label>Phone<input name="phone" value="${escapeHtml(estimate.phone || "")}"/></label>
+        <label>Email<input name="email" value="${escapeHtml(estimate.email || "")}"/></label>
+        <label>Vehicle<input name="vehicle" value="${escapeHtml(estimate.vehicle || "")}" required/></label>
+        <label class="full">Summary<textarea name="summary">${escapeHtml(estimate.summary || "")}</textarea></label>
+      </div>
+      <div class="estimator-toolbar"><p>Labor is recalculated at ${money(laborRate)}/hr from shop settings.</p><button class="secondary" type="button" id="add-estimate-edit-line">${icon("plus", 14)} Add line</button></div>
+      <div id="estimate-edit-lines">${lineRows}</div>
+      <div class="new-estimate-summary" id="estimate-edit-summary"></div>
+    </div>
+    <div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("save", 14)} Save estimate</button></div>
+  </form>`);
+    const form = document.querySelector("#estimate-edit-form");
+    const linesRoot = document.querySelector("#estimate-edit-lines");
+    const refresh = () => {
+      let labor = 0, parts = 0;
+      linesRoot.querySelectorAll(".estimate-edit-line").forEach((row) => {
+        const hours = Math.max(0, Number(row.querySelector(".estimate-edit-hours").value) || 0);
+        const partAmount = Math.max(0, Number(row.querySelector(".estimate-edit-parts").value) || 0);
+        const lineLabor = Math.round(hours * laborRate * 100) / 100;
+        row.querySelector(".estimate-edit-labor").textContent = money(lineLabor);
+        labor += lineLabor;
+        parts += partAmount;
+      });
+      const feeAmount = Array.isArray(estimate.fees) ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0) : 0;
+      const base = Math.round((labor + parts + feeAmount) * 100) / 100;
+      const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+      const discountAmount = Math.round(base * discountPercent) / 100;
+      const subtotal = Math.round((base - discountAmount) * 100) / 100;
+      const taxRate = Number(estimate.taxRate ?? state.taxSettings.rate) || 0;
+      const tax = Math.round(subtotal * taxRate / 100 * 100) / 100;
+      const total = Math.round((subtotal + tax) * 100) / 100;
+      document.querySelector("#estimate-edit-summary").innerHTML = `<span>Labor <b>${money(labor)}</b></span><span>Parts <b>${money(parts)}</b></span><span>Subtotal <b>${money(subtotal)}</b></span><span>Tax <b>${money(tax)}</b></span><strong>Total ${money(total)}</strong>`;
+    };
+    const bindLineControls = () => {
+      linesRoot.querySelectorAll("input,textarea").forEach((input) => {
+        input.oninput = refresh;
+      });
+      linesRoot.querySelectorAll(".remove-estimate-edit-line").forEach((button) => {
+        button.onclick = () => {
+          if (linesRoot.querySelectorAll(".estimate-edit-line").length <= 1) {
+            toast("Keep at least one service line");
+            return;
+          }
+          button.closest(".estimate-edit-line").remove();
+          refresh();
+        };
+      });
+    };
+    document.querySelector("#add-estimate-edit-line").onclick = () => {
+      const index = linesRoot.querySelectorAll(".estimate-edit-line").length + 1;
+      linesRoot.insertAdjacentHTML("beforeend", `
+      <div class="new-estimate-line estimate-edit-line">
+        <div class="estimate-line-head"><strong>Line ${index}</strong><button type="button" class="icon-button remove-estimate-edit-line" title="Remove line">${icon("trash-2", 14)}</button></div>
+        <label class="full">Service<input class="estimate-edit-service" value="" required/></label>
+        <label class="full">Notes<textarea class="estimate-edit-notes"></textarea></label>
+        <div class="estimate-line-numbers">
+          <label>Hours<input class="estimate-edit-hours" type="number" min="0" step=".25" value="1"/></label>
+          <label>Parts $<input class="estimate-edit-parts" type="number" min="0" step=".01" value="0"/></label>
+          <div><span>Labor @ ${money(laborRate)}/hr</span><b class="estimate-edit-labor">${money(laborRate)}</b></div>
+        </div>
+      </div>`);
+      lucide.createIcons();
+      bindLineControls();
+      refresh();
+    };
+    bindLineControls();
+    refresh();
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      const lines = [...linesRoot.querySelectorAll(".estimate-edit-line")].map((row) => ({
+        service: row.querySelector(".estimate-edit-service").value.trim(),
+        notes: row.querySelector(".estimate-edit-notes").value.trim(),
+        hours: Math.max(0, Number(row.querySelector(".estimate-edit-hours").value) || 0),
+        parts: Math.max(0, Number(row.querySelector(".estimate-edit-parts").value) || 0)
+      })).filter((line) => line.service);
+      if (!lines.length) {
+        toast("Add at least one service line");
+        return;
+      }
+      estimate.customer = data.customer.trim();
+      estimate.phone = data.phone.trim();
+      estimate.email = data.email.trim();
+      estimate.vehicle = data.vehicle.trim();
+      estimate.summary = data.summary.trim();
+      estimate.lines = lines;
+      estimate.updatedAt = now();
+      recomputeEstimateTotals(estimate);
+      try {
+        await updateEstimateInApi(estimate);
+        save();
+        closeModal();
+        toast(`${estimate.number} updated`);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not save estimate");
+      }
+    };
+  }
+  async function archiveEstimate(id) {
+    const estimate = state.estimates.find((item) => item.id === id);
+    if (!estimate) return;
+    estimate.previousStatus = estimate.status === "archived" ? estimate.previousStatus || "pending" : estimate.status;
+    estimate.status = "archived";
+    estimate.archivedAt = now();
+    estimate.archivedBy = currentUser()?.id || "";
+    try {
+      await updateEstimateInApi(estimate);
+      save();
+      toast(`${estimate.number} archived`);
+      render();
+    } catch (error) {
+      toast(error.message || "Could not archive estimate");
+    }
+  }
+  async function restoreEstimate(id) {
+    const estimate = state.estimates.find((item) => item.id === id);
+    if (!estimate) return;
+    estimate.status = estimate.previousStatus && estimate.previousStatus !== "archived" ? estimate.previousStatus : "pending";
+    estimate.archivedAt = "";
+    estimate.updatedAt = now();
+    try {
+      await updateEstimateInApi(estimate);
+      save();
+      toast(`${estimate.number} restored`);
+      render();
+    } catch (error) {
+      toast(error.message || "Could not restore estimate");
+    }
+  }
+  async function deleteEstimateRecord(id) {
+    const estimate = state.estimates.find((item) => item.id === id);
+    if (!estimate) return;
+    if (!confirm(`Delete ${estimate.number}? This cannot be undone.`)) return;
+    try {
+      await deleteEstimateInApi(id);
+      state.estimates = state.estimates.filter((item) => item.id !== id);
+      save();
+      toast(`${estimate.number} deleted`);
+      render();
+    } catch (error) {
+      toast(error.message || "Could not delete estimate");
+    }
+  }
   async function startApp() {
     try {
       const session = await cloudflareAccessSignIn();
@@ -3665,7 +3955,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     save();
     render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, cloudflareSignIn, MUTATION_QUEUE_STORE, OFFLINE_QUEUE_BLOCKED, flushingMutationQueue, mutationQueueCache, mutationQueueRaw, shopEntityCollections, roleLabel, roleRoutes, CLOSED_ORDER_STATUSES, statusLabel, attentionDismissBound, inspectionPoints, relationshipDerivedCache, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, estimateRegisterFilter, bindEstimateLifecycleCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -3792,6 +4082,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
       roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "chat", "invoices", "ai"] };
+      CLOSED_ORDER_STATUSES = /* @__PURE__ */ new Set(["completed", "invoiced", "declined", "archived"]);
+      statusLabel = { estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", declined: "Declined", archived: "Archived", paid: "Paid", sent: "Sent", overdue: "Overdue" };
       attentionDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
@@ -4311,6 +4603,65 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         }
       };
       stampDemoAppointments();
+      estimateRegisterFilter = "active";
+      savedEstimates = function() {
+        const active = state.estimates.filter((estimate) => estimate.status !== "archived");
+        const archived = state.estimates.filter((estimate) => estimate.status === "archived");
+        const list = (estimateRegisterFilter === "archived" ? archived : active).slice().reverse();
+        const rows = list.map((estimate) => {
+          const canSign = estimate.status === "pending";
+          return `<tr>
+      <td class="mono"><b>${escapeHtml(estimate.number)}</b><small>${escapeHtml(estimate.createdAt ? new Date(estimate.createdAt).toLocaleDateString() : "")}</small></td>
+      <td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td>
+      <td>${estimateStatusBadge(estimate)}<small>${escapeHtml(estimate.decisionNote || estimate.summary || "")}</small></td>
+      <td><b>${money(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount` : `${(estimate.lines || []).length} line(s)`}</small></td>
+      <td><div class="estimate-actions">
+        <button class="mini-action" data-edit-estimate="${escapeHtml(estimate.id)}">${icon("pencil", 13)} Edit</button>
+        <button class="mini-action" data-estimate-discount="${escapeHtml(estimate.id)}">${icon("percent", 13)} Discount</button>
+        <button class="mini-action" data-send-estimate="${escapeHtml(estimate.id)}" data-channel="email">${icon("mail", 13)} Email</button>
+        ${canSign ? `<button class="mini-action" data-sign-estimate="${escapeHtml(estimate.id)}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${escapeHtml(estimate.id)}">${icon("circle-x", 13)} Decline</button>` : ""}
+        ${estimate.status === "archived" ? `<button class="mini-action" data-restore-estimate="${escapeHtml(estimate.id)}">${icon("archive-restore", 13)} Restore</button>` : `<button class="mini-action" data-archive-estimate="${escapeHtml(estimate.id)}">${icon("archive", 13)} Archive</button>`}
+        <button class="mini-action danger" data-delete-estimate="${escapeHtml(estimate.id)}">${icon("trash-2", 13)} Delete</button>
+      </div></td>
+    </tr>`;
+        }).join("");
+        return `<section class="ai-result">
+    <div class="ai-result-head">
+      <div>
+        <div class="eyebrow">Customer estimates</div>
+        <h2>Estimate register</h2>
+        <p>Edit line items, archive finished quotes, or delete estimates that should not stay on the books.</p>
+      </div>
+    </div>
+    <div class="accounting-tabs estimate-register-tabs">
+      <button class="tab ${estimateRegisterFilter === "active" ? "active" : ""}" data-estimate-filter="active">Active (${active.length})</button>
+      <button class="tab ${estimateRegisterFilter === "archived" ? "active" : ""}" data-estimate-filter="archived">Archived (${archived.length})</button>
+    </div>
+    <div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">${estimateRegisterFilter === "archived" ? "No archived estimates." : "No active estimates. Generate one from the Estimator tab."}</td></tr>`}</tbody></table></div>
+  </section>`;
+      };
+      bindEstimateLifecycleCore = bindEstimateActions;
+      bindEstimateActions = function() {
+        bindEstimateLifecycleCore();
+        document.querySelectorAll("[data-estimate-filter]").forEach((button) => {
+          button.onclick = () => {
+            estimateRegisterFilter = button.dataset.estimateFilter === "archived" ? "archived" : "active";
+            render();
+          };
+        });
+        document.querySelectorAll("[data-edit-estimate]").forEach((button) => {
+          button.onclick = () => openEstimateEditor(button.dataset.editEstimate);
+        });
+        document.querySelectorAll("[data-archive-estimate]").forEach((button) => {
+          button.onclick = () => archiveEstimate(button.dataset.archiveEstimate);
+        });
+        document.querySelectorAll("[data-restore-estimate]").forEach((button) => {
+          button.onclick = () => restoreEstimate(button.dataset.restoreEstimate);
+        });
+        document.querySelectorAll("[data-delete-estimate]").forEach((button) => {
+          button.onclick = () => deleteEstimateRecord(button.dataset.deleteEstimate);
+        });
+      };
       if (isDesktopApp) setInterval(async () => {
         if (!authSession()) return;
         try {
@@ -4400,7 +4751,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
 
   // src/runtime/home.js
   init_html();
-  var CLOSED = /* @__PURE__ */ new Set(["completed", "invoiced"]);
+  var CLOSED = /* @__PURE__ */ new Set(["completed", "invoiced", "declined", "archived"]);
   function emptyState(message) {
     return `<div class="empty-state"><h2>${escapeHtml(message)}</h2></div>`;
   }

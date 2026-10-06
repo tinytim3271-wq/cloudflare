@@ -1,21 +1,37 @@
-const CACHE_NAME = 'mechpro-shell-v18';
-const LUCIDE_URL = 'https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js';
+const CACHE_NAME = 'mechpro-shell-v28';
 const SHELL_FILES = [
   './',
   './index.html',
-  './app.js',
+  './diagnostics-ui.js',
   './styles.css',
   './theme.css',
   './manifest.webmanifest',
   './mechpro-icon.svg',
+  './assets/vendor/lucide.min.js',
+  './assets/fonts/fonts.css',
+  './assets/fonts/dm-sans-latin-400-normal.woff2',
+  './assets/fonts/dm-sans-latin-500-normal.woff2',
+  './assets/fonts/dm-sans-latin-600-normal.woff2',
+  './assets/fonts/dm-sans-latin-700-normal.woff2',
+  './assets/fonts/barlow-condensed-latin-500-normal.woff2',
+  './assets/fonts/barlow-condensed-latin-600-normal.woff2',
+  './assets/fonts/barlow-condensed-latin-700-normal.woff2',
+  './assets/fonts/jetbrains-mono-latin-500-normal.woff2',
+  './assets/fonts/jetbrains-mono-latin-600-normal.woff2',
 ];
 
+function isImmutableAsset(pathname) {
+  return /^\/assets\/.+-[A-Za-z0-9_-]{6,}\.(js|css)$/.test(pathname)
+    || pathname.endsWith('.woff2');
+}
+
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(async cache => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    // Cache shell assets except app.js so deploys are not sticky behind SW.
     await cache.addAll(SHELL_FILES);
-    await cache.add(LUCIDE_URL).catch(() => undefined);
-  }));
-  self.skipWaiting();
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', event => {
@@ -30,10 +46,15 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) {
-    if (url.href === LUCIDE_URL) {
-      event.respondWith(caches.match(request).then(cached => cached || fetch(request)));
-    }
+  if (url.origin !== self.location.origin) return;
+
+  // Always network-first for the main app bundle — never long-cache app.js.
+  if (url.pathname.endsWith('/app.js') || url.pathname.endsWith('app.js')) {
+    event.respondWith(
+      fetch(request)
+        .then(response => response)
+        .catch(() => caches.match(request).then(cached => cached || new Response('', { status: 503, statusText: 'Offline' }))),
+    );
     return;
   }
 
@@ -50,6 +71,23 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  if (isImmutableAsset(url.pathname)) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        const network = fetch(request).then(response => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+          }
+          return response;
+        }).catch(() => cached);
+        return cached || network;
+      }),
+    );
+    return;
+  }
+
+  // Scripts and styles: network-first so deploys pick up quickly; cache only as offline fallback.
   if (['script', 'style'].includes(request.destination)) {
     event.respondWith(
       fetch(request)
@@ -60,11 +98,12 @@ self.addEventListener('fetch', event => {
           }
           return response;
         })
-        .catch(() => caches.match(request)),
+        .catch(async () => (await caches.match(request)) || new Response('', { status: 503, statusText: 'Offline' })),
     );
     return;
   }
 
+  // Fonts and static assets: stale-while-revalidate (cache for offline, refresh in background).
   event.respondWith(
     caches.match(request).then(cached => {
       const network = fetch(request).then(response => {
@@ -73,7 +112,7 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
         }
         return response;
-      });
+      }).catch(() => cached);
       return cached || network;
     }),
   );
