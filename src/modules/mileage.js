@@ -64,7 +64,7 @@ export function applyMileageToEstimate(estimate = {}, tripMiles = 0, rate = DEFA
   const perMile = normalizeMileageRate(rate);
   const lines = miles > 0 ? [...baseLines, mileageLineItem(miles, perMile)] : [...baseLines];
   const labor = roundMoney(lines.reduce((sum, line) => sum + (Number(line.labor) || 0), 0));
-  const laborHours = roundMiles(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
+  const laborHours = roundMoney(lines.reduce((sum, line) => sum + (Number(line.hours) || 0), 0));
   const parts = roundMoney(lines.reduce((sum, line) => sum + (Number(line.parts) || 0), 0));
   const feeAmount = Array.isArray(estimate.fees)
     ? estimate.fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0)
@@ -76,7 +76,8 @@ export function applyMileageToEstimate(estimate = {}, tripMiles = 0, rate = DEFA
     : [];
   const taxRate = Number(taxRatePercent);
   const safeRate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 8.25;
-  const subtotal = roundMoney(labor + parts + feeAmount);
+  const discountAmount = roundMoney(estimate.discountAmount ?? baseLines.reduce((sum, line) => sum + (Number(line.discountAmount) || 0), 0));
+  const subtotal = roundMoney(labor + parts - discountAmount + feeAmount);
   const tax = roundMoney(subtotal * (safeRate / 100));
   const total = roundMoney(subtotal + tax);
   return {
@@ -117,7 +118,7 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
       lines: [],
       labor: Number(order.labor) || 0,
       laborHours: Number(order.laborHours) || 0,
-      parts: Math.max(0, (Number(order.parts) || 0) - (Number(order.mileageCharge) || 0)),
+      parts: Number(order.parts) || 0,
       fees: [],
       subtotal: Math.max(0, (Number(order.total) || 0) - (Number(order.tax) || 0) - (Number(order.mileageCharge) || 0)),
       tax: Number(order.tax) || 0,
@@ -126,11 +127,34 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
     };
 
   // If there are no service lines, preserve non-mileage money as a single labor/parts snapshot.
-  if (!stripMileageLines(baseEstimate.lines).length) {
+  if (!stripMileageLines(baseEstimate.lines).length || baseEstimate.aggregateBaseSubtotal != null) {
     const priorCharge = Number(order.mileageCharge) || 0;
     const labor = Number(baseEstimate.labor ?? order.labor) || 0;
     const laborHours = Number(baseEstimate.laborHours ?? order.laborHours) || 0;
-    const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - priorCharge);
+    const existingMileageParts = (Array.isArray(baseEstimate.lines) ? baseEstimate.lines : [])
+      .filter((line) => line?.kind === 'mileage')
+      .reduce((sum, line) => sum + (Number(line.parts) || 0), 0);
+    const partsWithoutMileage = Math.max(0, (Number(baseEstimate.parts ?? order.parts) || 0) - existingMileageParts);
+    const aggregateCharge = Math.max(
+      0,
+      Number(order.total) > 0
+        ? Number(order.total) - (Number(order.tax) || 0) - priorCharge
+        : (Number(baseEstimate.subtotal) || 0) - priorCharge,
+    );
+    const hasAggregateSnapshot = baseEstimate.aggregateBaseSubtotal != null
+      && Number.isFinite(Number(baseEstimate.aggregateBaseSubtotal));
+    const aggregateOnly = hasAggregateSnapshot || (!labor && !partsWithoutMileage && aggregateCharge > 0);
+    const aggregateBaseSubtotal = hasAggregateSnapshot
+      ? Math.max(0, Number(baseEstimate.aggregateBaseSubtotal))
+      : aggregateCharge;
+    const aggregateBaseTax = hasAggregateSnapshot
+      ? Math.max(0, Number(baseEstimate.aggregateBaseTax) || 0)
+      : Math.max(0, Number(order.tax) || 0);
+    const aggregateTaxRate = Number(taxRatePercent);
+    const safeAggregateTaxRate = Number.isFinite(aggregateTaxRate) && aggregateTaxRate >= 0
+      ? aggregateTaxRate
+      : 8.25;
+    const preservedParts = partsWithoutMileage || (aggregateOnly ? aggregateBaseSubtotal : 0);
     const synthetic = {
       ...baseEstimate,
       lines: labor || partsWithoutMileage
@@ -142,16 +166,35 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
           parts: partsWithoutMileage,
           total: roundMoney(labor + partsWithoutMileage),
         }]
+        : aggregateOnly
+        ? [{
+          service: 'Imported charges',
+          hours: 0,
+          laborRate: 0,
+          labor: 0,
+          parts: aggregateCharge,
+          total: aggregateCharge,
+        }]
         : [],
       fees: baseEstimate.fees || [],
       labor,
       laborHours,
-      parts: partsWithoutMileage,
+      parts: preservedParts,
+      ...(aggregateOnly
+        ? { aggregateBaseSubtotal, aggregateBaseTax }
+        : {}),
     };
-    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, taxRatePercent);
+    const estimate = applyMileageToEstimate(synthetic, tripMiles, perMile, aggregateOnly ? 0 : taxRatePercent);
+    if (aggregateOnly) {
+      const mileageTax = roundMoney(estimate.mileageCharge * (safeAggregateTaxRate / 100));
+      estimate.subtotal = roundMoney(aggregateBaseSubtotal + estimate.mileageCharge);
+      estimate.tax = roundMoney(aggregateBaseTax + mileageTax);
+      estimate.taxRate = safeAggregateTaxRate;
+      estimate.total = roundMoney(estimate.subtotal + estimate.tax);
+    }
     next.estimate = estimate;
     next.labor = estimate.labor;
-    next.laborHours = estimate.laborHours;
+    next.laborHours = order.laborHours ?? estimate.laborHours;
     next.parts = estimate.parts;
     next.tax = estimate.tax;
     next.total = estimate.total;
@@ -161,7 +204,7 @@ export function applyMileageToOrder(order = {}, { oneWayMiles, jobAddress, rate,
   const estimate = applyMileageToEstimate(baseEstimate, tripMiles, perMile, taxRatePercent);
   next.estimate = estimate;
   next.labor = estimate.labor;
-  next.laborHours = estimate.laborHours;
+  next.laborHours = order.laborHours ?? estimate.laborHours;
   next.parts = estimate.parts;
   next.tax = estimate.tax;
   next.total = estimate.total;

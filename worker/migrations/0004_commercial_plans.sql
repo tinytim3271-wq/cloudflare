@@ -57,7 +57,3 @@ ON CONFLICT(id) DO UPDATE SET
 UPDATE plans
 SET active = 0, name = 'Growth (legacy)'
 WHERE id = 'growth';
-
-UPDATE subscriptions
-SET plan_id = 'shop'
-WHERE plan_id = 'growth';

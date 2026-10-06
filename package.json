@@ -23,7 +23,6 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy:worker": "wrangler deploy",
     "setup:email": "node scripts/setup-email-signin.mjs",
-    "convert:ari": "node scripts/convert-ari-exports.mjs",
     "stage:pages": "node scripts/stage-pages.mjs",
     "deploy:pages": "npm run build:web && npm run stage:pages && wrangler pages deploy .pages-dist --project-name=mechpro-dispatch --branch=main --commit-dirty=true",
     "validate:worker": "npm run test:worker && wrangler deploy --dry-run",
@@ -43,7 +42,8 @@
     "test:desktop": "node --test desktop/start-url.test.js desktop/auth-deep-link.test.js desktop/diagnostics-secrets.test.js",
     "test:mutation": "node --test src/runtime/prepare-entity-mutation.test.mjs",
     "test:mileage": "node --test src/modules/mileage.test.mjs",
-    "test:modules": "npm run test:home && npm run test:mutation && npm run test:html && npm run test:chat && npm run test:storage && npm run test:mileage && npm run test:desktop"
+    "test:filing": "node --test src/modules/filing/withholding.test.mjs",
+    "test:modules": "npm run test:home && npm run test:mutation && npm run test:html && npm run test:chat && npm run test:storage && npm run test:mileage && npm run test:filing && npm run test:desktop"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

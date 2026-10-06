@@ -3,7 +3,8 @@ import { escapeAttr, escapeHtml } from '../shared/html.js';
 import { DESKTOP_ENTITLEMENT_INTERVAL, isDesktopApp } from '../modules/platform/detect.js';
 import { chatTime, cleanEmail } from '../modules/chat/utils.js';
 import * as Mileage from '../modules/mileage.js';
-const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
+import * as Filing from '../modules/filing/index.js';
+const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, pendingCreateIdsForCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
 function empty(message) { return emptyState(message) }
 function localAssistantReply(message) { const source = aiKeywords(message), order = state.orders.find(item => [item.id, item.customer, item.vehicle].some(value => source.includes(String(value || "").toLowerCase()))); if (order) return `${order.id} is ${statusLabel[order.status] || order.status} for ${order.customer}. Vehicle: ${order.vehicle}. Concern: ${order.complaint}. Technician: ${order.tech || "Unassigned"}. Promise: ${order.promise || "Not scheduled"}. Verify the record before acting.`; if (/diagnos|check engine|misfire|brake|rough idle|warning light/.test(source)) return "The cloud assistant is temporarily unavailable. Record the exact symptoms, DTCs, freeze-frame data, and vehicle VIN, then verify tests and specifications with current manufacturer service information."; if (/schedule|appointment|available|book/.test(source)) return `There are ${state.appointments.length} appointments loaded locally. Confirm the date, time, customer, and technician before booking.`; return "The cloud assistant is temporarily unavailable because the AI provider is rate-limited. Loaded work orders and local workflow guidance remain available; try again after the provider quota resets." }
@@ -90,20 +91,46 @@ async function sendEstimate(id, channel) { const estimate = state.estimates.find
 function openSignature(id) { const estimate = state.estimates.find(item => item.id === id); if (!estimate) return; showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} · ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. The approval and signature are saved to your shop records.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`); initSignaturePad(estimate) }
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
     const fallback = () => {
       try {
         const dataUrl = canvas.toDataURL("image/png");
         const bytes = atob(dataUrl.split(",")[1] || "");
         const buffer = new Uint8Array(bytes.length);
         for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
-        resolve(new Blob([buffer], { type: "image/png" }));
+        finish(resolve, new Blob([buffer], { type: "image/png" }));
       } catch (error) {
-        reject(error);
+        finish(reject, error);
       }
     };
+    const timer = setTimeout(() => fallback(), 2500);
     if (typeof canvas.toBlob !== "function") return fallback();
-    canvas.toBlob(blob => { if (blob && blob.size) resolve(blob); else fallback() }, "image/png");
+    try {
+      canvas.toBlob(blob => {
+        if (blob && blob.size) finish(resolve, blob);
+        else fallback();
+      }, "image/png");
+    } catch {
+      fallback();
+    }
   });
+}
+function compactSignatureDataUrl(canvas, maxChars = 40000) {
+  try {
+    const jpeg = canvas.toDataURL("image/jpeg", 0.55);
+    if (jpeg.startsWith("data:image/jpeg") && jpeg.length <= maxChars) return jpeg;
+    const png = canvas.toDataURL("image/png");
+    if (png.length <= maxChars) return png;
+  } catch (error) {
+    console.error("Could not compact signature image", error);
+  }
+  return null;
 }
 function sameOriginUploadUrl(uploadUrl) {
   try {
@@ -192,20 +219,25 @@ function initSignaturePad(estimate) {
       updatedAt: estimate.updatedAt,
     };
     try {
-      const dataUrl = canvas.toDataURL("image/png");
       let signatureKey = "";
       let uploadWarning = "";
+      let embeddedSignature = null;
       try {
         const blob = await canvasToBlob(canvas);
         signatureKey = await uploadFileToR2(blob, "signature", "image/png");
       } catch (uploadError) {
-        console.error("Signature image upload failed; saving estimate with embedded signature", uploadError);
+        console.error("Signature image upload failed; saving compact fallback if possible", uploadError);
         uploadWarning = uploadError.message || "Signature image upload failed";
+        embeddedSignature = compactSignatureDataUrl(canvas);
+        if (!embeddedSignature) {
+          uploadWarning = `${uploadWarning}; signature image omitted (too large for inline storage)`;
+        }
       }
       estimate.status = "approved";
       estimate.authorizationName = name;
       estimate.signatureKey = signatureKey || "";
-      estimate.signature = signatureKey ? null : dataUrl;
+      estimate.signature = signatureKey ? null : embeddedSignature;
+      estimate.signatureCapture = signatureKey || embeddedSignature ? "captured" : "name-only";
       estimate.signedAt = now();
       estimate.updatedAt = now();
       estimate.signedBy = currentUser()?.id || "";
@@ -222,7 +254,7 @@ function initSignaturePad(estimate) {
       save();
       closeModal();
       toast(uploadWarning
-        ? `${estimate.number} approved (signature saved with estimate; image upload pending)`
+        ? `${estimate.number} approved (${uploadWarning})`
         : `${estimate.number} approved and signed`);
       render();
     } catch (error) {
@@ -287,9 +319,9 @@ const seed = {
   messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
   billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
   payments: [],
-  taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" },
+  taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly", ein: "", texasTaxpayerNumber: "", webfileNumber: "", jurisdictions: null },
   chartOfAccounts: [
-    { code: "1000", name: "Operating Checking", type: "Asset" }, { code: "1010", name: "Cash on Hand", type: "Asset" }, { code: "1020", name: "Card Processor Clearing", type: "Asset" }, { code: "1100", name: "Accounts Receivable", type: "Asset" }, { code: "1200", name: "Parts Inventory", type: "Asset" }, { code: "2000", name: "Accounts Payable", type: "Liability" }, { code: "2100", name: "Sales Tax Payable", type: "Liability" }, { code: "4000", name: "Service Revenue", type: "Income" }, { code: "5000", name: "Cost of Parts", type: "Expense" }, { code: "6100", name: "Shop Supplies", type: "Expense" }, { code: "6200", name: "Utilities", type: "Expense" }, { code: "6300", name: "Tools & Equipment", type: "Expense" }
+    { code: "1000", name: "Operating Checking", type: "Asset" }, { code: "1010", name: "Cash on Hand", type: "Asset" }, { code: "1020", name: "Card Processor Clearing", type: "Asset" }, { code: "1100", name: "Accounts Receivable", type: "Asset" }, { code: "1200", name: "Parts Inventory", type: "Asset" }, { code: "2000", name: "Accounts Payable", type: "Liability" }, { code: "2100", name: "Sales Tax Payable", type: "Liability" }, { code: "2200", name: "Federal Income Tax Withheld", type: "Liability" }, { code: "2210", name: "FICA Payable (SS)", type: "Liability" }, { code: "2220", name: "Medicare Payable", type: "Liability" }, { code: "4000", name: "Service Revenue", type: "Income" }, { code: "5000", name: "Cost of Parts", type: "Expense" }, { code: "6100", name: "Shop Supplies", type: "Expense" }, { code: "6200", name: "Utilities", type: "Expense" }, { code: "6300", name: "Tools & Equipment", type: "Expense" }
   ],
   journalEntries: [],
   expenses: [
@@ -304,7 +336,7 @@ const seed = {
   ]
 };
 const LOCAL_PREFERENCES_VERSION = 2;
-let state = load(), filter = "active", query = "", importPreview = null, accountingTab = "overview", shopOpsTab = "vehicles", reminderFilter = "all", aiTab = "workflow", aiResult = null, taxReportResult = null, chatConversationId = null, chatRefreshTimer = null, platformAccounts = null, platformAccountsLoading = false, elmPort = null, pendingAuthProfile = null;
+let state = load(), filter = "active", query = "", importPreview = null, accountingTab = "overview", payrollPeriodKey = null, taxPackageRange = null, filingCenterOpen = false, shopOpsTab = "vehicles", reminderFilter = "all", aiTab = "workflow", aiResult = null, taxReportResult = null, chatConversationId = null, chatRefreshTimer = null, platformAccounts = null, platformAccountsLoading = false, elmPort = null, pendingAuthProfile = null;
 const usStates = [{ code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" }, { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" }, { code: "CT", name: "Connecticut" }, { code: "DE", name: "Delaware" }, { code: "DC", name: "District of Columbia" }, { code: "FL", name: "Florida" }, { code: "GA", name: "Georgia" }, { code: "HI", name: "Hawaii" }, { code: "ID", name: "Idaho" }, { code: "IL", name: "Illinois" }, { code: "IN", name: "Indiana" }, { code: "IA", name: "Iowa" }, { code: "KS", name: "Kansas" }, { code: "KY", name: "Kentucky" }, { code: "LA", name: "Louisiana" }, { code: "ME", name: "Maine" }, { code: "MD", name: "Maryland" }, { code: "MA", name: "Massachusetts" }, { code: "MI", name: "Michigan" }, { code: "MN", name: "Minnesota" }, { code: "MS", name: "Mississippi" }, { code: "MO", name: "Missouri" }, { code: "MT", name: "Montana" }, { code: "NE", name: "Nebraska" }, { code: "NV", name: "Nevada" }, { code: "NH", name: "New Hampshire" }, { code: "NJ", name: "New Jersey" }, { code: "NM", name: "New Mexico" }, { code: "NY", name: "New York" }, { code: "NC", name: "North Carolina" }, { code: "ND", name: "North Dakota" }, { code: "OH", name: "Ohio" }, { code: "OK", name: "Oklahoma" }, { code: "OR", name: "Oregon" }, { code: "PA", name: "Pennsylvania" }, { code: "RI", name: "Rhode Island" }, { code: "SC", name: "South Carolina" }, { code: "SD", name: "South Dakota" }, { code: "TN", name: "Tennessee" }, { code: "TX", name: "Texas" }, { code: "UT", name: "Utah" }, { code: "VT", name: "Vermont" }, { code: "VA", name: "Virginia" }, { code: "WA", name: "Washington" }, { code: "WV", name: "West Virginia" }, { code: "WI", name: "Wisconsin" }, { code: "WY", name: "Wyoming" }];
 function sanitizeUsers(users) { return users.map(({ password, ...user }) => user) }
 function load() { try { const value = JSON.parse(localStorage.getItem(STORE)); if (value?.version !== LOCAL_PREFERENCES_VERSION) { localStorage.removeItem(STORE); return structuredClone(seed) } const route = typeof value.route === "string" && /^[a-z-]+$/.test(value.route) ? value.route : seed.route; return { ...structuredClone(seed), route } } catch { localStorage.removeItem(STORE); return structuredClone(seed) } }
@@ -343,7 +375,7 @@ async function verifyDesktopEntitlement() { if (!isDesktopApp || (isLocalShell()
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} }) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
 async function apiFetch(path, options = {}) { if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareEntityMutation(path, options); try { const response = await authorizedApiRequest(path, mutation.options); if (!response.ok) { let detail = ""; try { const payload = await response.json(); if (payload?.message) detail = `: ${payload.message}` } catch { /* status is enough when the body is not JSON */ } const error = new Error(`API request failed: ${response.status}${detail}`); error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
 window.addEventListener("online", flushMutationQueue);
-async function pushCustomerToApi(record) { try { await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync customer to API", error) } }
+async function pushCustomerToApi(record) { record.id ||= mutationId(); try { await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync customer to API", error) } }
 async function loadCustomersFromApi() { try { state.customers = await apiFetch("/entities/customers"); cloudSyncStatus = "connected"; save() } catch (error) { console.error("Failed to load customers from API; using local data", error); cloudSyncStatus = authSession() ? "offline" : "local" } }
 async function pushOrderToApi(record) { try { const saved = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) }); return saved?.queued ? record : saved || record } catch (error) { console.error("Failed to sync order to API", error); throw error } }
 async function updateOrderInApi(record) { try { const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }); return saved?.queued ? record : saved || record } catch (error) { console.error("Failed to sync order update to API", error); throw error } }
@@ -394,7 +426,7 @@ function formatHours(hours) { return `${Number(hours || 0).toFixed(2)} hr` }
 function jobTrackedHours(workOrderId) { return state.jobClockEntries.filter(entry => entry.workOrderId === workOrderId && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }
 function toggleShift() { const user = currentUser(), shift = openShift(user.id); if (shift) { shift.clockOut = now(); shift.hours = hoursBetween(shift.clockIn, shift.clockOut); updateShiftEntryInApi(shift); toast(`Shift clocked out: ${formatHours(shift.hours)}`) } else { const entry = { id: `shift-${Date.now()}`, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.shiftEntries.push(entry); pushShiftEntryToApi(entry); toast("Shift clocked in") }; save(); render() }
 function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || order.tech !== user.techName) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
-function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
+function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void (async () => { try { const saved = await updateOrderInApi(order); if (saved && typeof saved === "object") Object.assign(order, saved); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() } catch (error) { toast(error.message || "Work order could not be saved") } })() }
 function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", declined: "Declined", archived: "Archived", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
 const CLOSED_ORDER_STATUSES = new Set(["completed", "invoiced", "declined", "archived"]);
@@ -485,7 +517,7 @@ function settings() { const t = state.taxSettings, stateOptions = usStates.map(s
 function loginScreen() { const googleUrl = `${cloudflareConfig.authEndpoints.google}?returnTo=%2F${isDesktopApp ? "&desktop=1" : ""}`, google = isLocalShell() ? "" : `<a class="google-login-button" href="${googleUrl}" ${isDesktopApp ? 'target="_blank" rel="noopener"' : ""}><span class="google-mark" aria-hidden="true">G</span><span>Continue with Google</span></a><div class="login-divider"><span>or use your email</span></div>`; return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Dispatch & work orders</small></div></div><div class="eyebrow">Protected workspace</div><h1>Sign in to MechPro</h1><p>Use your verified Google account, or receive a one-time link at your work email. No password required.</p>${google}<form id="login-form"><label class="login-email-label" for="login-email">Work email</label><input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required autofocus placeholder="you@yourshop.com"/><p class="login-error" id="login-error" hidden></p><button class="primary login-button" type="submit">${icon("mail", 16)} Email me a sign-in link</button></form><div class="login-security">${icon("lock-keyhole", 15)}<span>${isLocalShell() ? "Local development uses the seeded admin profile; cloud APIs remain protected." : "Google verifies the account email. Access still requires an active MechPro customer or employee profile."}</span></div></section></main>` }
 
 
-async function upgradeShopPlan() { try { const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: "starter", successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) }); toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout")); if (result.url) { if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url) } } catch (error) { toast(error.message || "Could not start upgrade") } }
+async function upgradeShopPlan() { try { const requestedPlan = new URLSearchParams(location.search).get("plan"), planId = ["starter", "shop", "pro"].includes(requestedPlan) ? requestedPlan : "starter", result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) }); toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout")); if (result.url) { if (String(result.url).startsWith("http") || String(result.url).startsWith("/")) location.assign(result.url) } } catch (error) { toast(error.message || "Could not start upgrade") } }
 async function platformApi(path, options = {}) {
   const response = await authorizedApiRequest(path, options);
   const payload = await response.json().catch(() => ({}));
@@ -534,7 +566,7 @@ function bindMessagingService() { document.querySelector("#messaging-form")?.add
 function bindPaymentService() { document.querySelector("#billing-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.billingSettings = { enabled: data.enabled === "on", provider: "stripe_connect", checkoutEndpoint: data.checkoutEndpoint.trim(), onboardingUrl: data.onboardingUrl.trim(), accountLabel: data.accountLabel.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.billingSettings.enabled && (!state.billingSettings.checkoutEndpoint || !state.billingSettings.onboardingUrl)) { toast("Stripe onboarding and checkout endpoints are required before enabling payments"); return } save(); toast("Stripe payment service saved"); render() }); document.querySelector("#open-stripe-onboarding")?.addEventListener("click", () => { const url = document.querySelector("#billing-form [name=onboardingUrl]").value; if (!url) { toast("Enter the Stripe Connect onboarding URL first"); return } window.open(url, "_blank", "noopener") }) }
 function bindLiveAssistant() { const form = document.querySelector("#assistant-form"); if (!form) return; const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), append = (role, content) => { assistantConversation.push({ role, content }); const list = document.querySelector("#assistant-messages"); list.innerHTML = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); list.scrollTop = list.scrollHeight }; form.onsubmit = async event => { event.preventDefault(); if (assistantPaused) return; const message = String(input.value || "").trim(); if (!message) return; input.value = ""; sendButton.disabled = true; append("user", message); try { const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) }); const answer = result.message || "I could not answer that right now."; append("assistant", answer); if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) } } catch (error) { append("assistant", error.message || "The live assistant is unavailable.") } finally { sendButton.disabled = assistantPaused } }; document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel()); document.querySelector("#assistant-mic")?.addEventListener("click", () => { if (assistantPaused) return; const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition; if (!Recognition) { toast("Voice input is not supported in this browser"); return } const recognition = new Recognition(); recognition.lang = "en-US"; recognition.interimResults = false; recognition.onstart = () => toast("Listening..."); recognition.onerror = () => toast("Microphone input could not be captured"); recognition.onresult = event => { input.value = event.results[0][0].transcript; form.requestSubmit() }; recognition.start() }) }
 function bindEstimateActions() { bindLiveAssistant(); document.querySelector("#save-ai-estimate")?.addEventListener("click", makeEstimate); document.querySelectorAll("[data-send-estimate]").forEach(button => button.onclick = () => sendEstimate(button.dataset.sendEstimate, button.dataset.channel)); document.querySelectorAll("[data-sign-estimate]").forEach(button => button.onclick = () => openSignature(button.dataset.signEstimate)); document.querySelectorAll("[data-message-customer]").forEach(button => button.onclick = event => { event.stopPropagation(); openCustomerMessage(decodeURIComponent(button.dataset.messageCustomer), decodeURIComponent(button.dataset.messagePhone), decodeURIComponent(button.dataset.messageEmail)) }); document.querySelectorAll("[data-open-customer]").forEach(el => { if (el.tagName === "BUTTON") el.onclick = event => { event.stopPropagation(); openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) }; else el.onclick = event => { if (event.target.closest("[data-message-customer]")) return; openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) } }); document.querySelectorAll("[data-pay-invoice]").forEach(button => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice)); document.querySelectorAll("[data-record-payment]").forEach(button => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method)); document.querySelectorAll("[data-edit-tax]").forEach(button => button.onclick = () => openInvoiceTax(button.dataset.editTax)) }
-function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops" || x.dataset.route === "settings") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } if (x.dataset.route === "employees") { try { const employees = await apiFetch("/entities/employees"); if (Array.isArray(employees)) { state.users = sanitizeUsers(employees); save() } } catch (error) { console.error("Failed to load employees", error) } render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; order.laborHours = aiResult.estimate.lines.reduce((sum, line) => sum + line.hours, 0); order.labor = aiResult.estimate.lines.reduce((sum, line) => sum + line.labor, 0); order.parts = aiResult.estimate.lines.reduce((sum, line) => sum + line.parts, 0); order.total = aiResult.estimate.total; order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); void updateOrderInApi(order).then(saved => { if (saved && typeof saved === "object") Object.assign(order, saved); save(); toast(`${order.id} updated with AI workflow`); render() }).catch(error => toast(error.message || "Work order could not be saved")); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#sign-out")?.addEventListener("click", () => { state.currentUserId = null; clearAuthSession(); save(); if (!isLocalShell()) location.assign("/cdn-cgi/access/logout"); else render() }); document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; try { await saveShopEntity("shopsettings", { ...taxSettings, id: "tax", updatedAt: now() }); state.taxSettings = taxSettings; toast("Tax settings saved"); render() } catch (error) { toast(error.message || "Could not save tax settings") } }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
+function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops" || x.dataset.route === "settings") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } if (x.dataset.route === "employees") { try { const employees = await apiFetch("/entities/employees"); if (Array.isArray(employees)) { state.users = sanitizeUsers(employees); save() } } catch (error) { console.error("Failed to load employees", error) } render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", async () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; order.laborHours = aiResult.estimate.lines.reduce((sum, line) => sum + line.hours, 0); order.labor = aiResult.estimate.lines.reduce((sum, line) => sum + line.labor, 0); order.parts = aiResult.estimate.lines.reduce((sum, line) => sum + line.parts, 0); order.total = aiResult.estimate.total; order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); try { const saved = await updateOrderInApi(order); if (saved && typeof saved === "object") Object.assign(order, saved); save(); toast(`${order.id} updated with AI workflow`); render() } catch (error) { toast(error.message || "Work order could not be saved") } }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#sign-out")?.addEventListener("click", () => { state.currentUserId = null; clearAuthSession(); save(); if (!isLocalShell()) location.assign("/cdn-cgi/access/logout"); else render() }); document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; try { await saveShopEntity("shopsettings", { ...taxSettings, id: "tax", updatedAt: now() }); state.taxSettings = taxSettings; toast("Tax settings saved"); render() } catch (error) { toast(error.message || "Could not save tax settings") } }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
 function showModal(html) { closeModal(); const root = document.createElement("div"); root.id = "modal-root"; root.className = "modal-backdrop"; root.innerHTML = html; root.onclick = e => { if (e.target === root) closeModal() }; document.body.append(root); lucide.createIcons(); root.querySelectorAll("[data-close]").forEach(x => { if (!x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close"); if (!x.getAttribute("title")) x.setAttribute("title", "Close"); x.onclick = closeModal }); root.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) }) }
 function closeModal() { document.querySelector("#modal-root")?.remove() }
 function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) { return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>` }
@@ -570,7 +602,7 @@ const scheduleCore = schedule;
 schedule = function () { return scheduleWorkspace() };
 newOrderEstimateRow = function (line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0, discount: 0 }) { const inventoryOptions = state.inventory.map(item => `<option value="${escapeHtml(item.id)}" ${line.inventoryId === item.id ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} · ${escapeHtml(item.name)} (${Number(item.quantity || 0)} on hand)</option>`).join(""); return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes || line.description || "")}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || line.laborHours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts ?? line.partsPrice ?? 0).toFixed(2)}"/></label><label>Discount %<input class="estimate-discount" type="number" min="0" max="100" step=".1" value="${Number(line.discount || 0)}"/></label><label>Inventory SKU<select class="estimate-inventory"><option value="">Not linked</option>${inventoryOptions}</select></label><label>Committed quantity<input class="estimate-committed-quantity" type="number" min=".01" step=".01" value="${Number(line.committedQuantity || 1)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money((Number(line.hours || line.laborHours || 0) * 165 + Number(line.parts ?? line.partsPrice ?? 0)) * (1 - Number(line.discount || 0) / 100))}</b></div></div></article>` };
 readNewOrderEstimate = function () { const lines = [...document.querySelectorAll(".new-estimate-line")].map(row => { const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0)), inventoryId = row.querySelector(".estimate-inventory").value, inventory = state.inventory.find(item => item.id === inventoryId), committedQuantity = inventory ? Math.max(0, Number(row.querySelector(".estimate-committed-quantity").value) || 0) : 0, labor = Math.round(hours * 165 * 100) / 100, gross = labor + parts, total = Math.round(gross * (1 - discount / 100) * 100) / 100; return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor, parts, discount, discountAmount: Math.round((gross - total) * 100) / 100, total, inventoryId: inventory?.id || null, inventorySku: inventory?.sku || null, committedQuantity } }).filter(line => line.service), labor = lines.reduce((sum, line) => sum + line.labor, 0), laborHours = lines.reduce((sum, line) => sum + line.hours, 0), parts = lines.reduce((sum, line) => sum + line.parts, 0), discountAmount = lines.reduce((sum, line) => sum + line.discountAmount, 0), shopSupplies = lines.length ? 12 : 0, subtotal = Math.round((labor + parts - discountAmount + shopSupplies) * 100) / 100, tax = Math.round(subtotal * state.taxSettings.rate) / 100, total = Math.round((subtotal + tax) * 100) / 100; return { lines, labor, laborHours, parts, discountAmount, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: state.taxSettings.rate, total } };
-refreshNewOrderEstimate = function () { const estimate = readNewOrderEstimate(); document.querySelectorAll(".new-estimate-line").forEach(row => { const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0)); row.querySelector(".estimate-line-total").textContent = money((hours * 165 + parts) * (1 - discount / 100)) }); const summary = document.querySelector("#new-estimate-summary"); if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Discount <b>-${money(estimate.discountAmount)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`; const total = document.querySelector("#new-estimate-total"); if (total) total.value = estimate.total.toFixed(2) };
+refreshNewOrderEstimate = function () { const form = document.querySelector("#new-form"), trip = Mileage.refreshMileagePreview(form, { rate: shopMileageRate() }), estimate = Mileage.applyMileageToEstimate(readNewOrderEstimate(), trip.roundTrip, shopMileageRate(), state.taxSettings.rate); document.querySelectorAll(".new-estimate-line").forEach(row => { const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0)); row.querySelector(".estimate-line-total").textContent = money((hours * 165 + parts) * (1 - discount / 100)) }); const summary = document.querySelector("#new-estimate-summary"); if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Discount <b>-${money(estimate.discountAmount)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`; const total = document.querySelector("#new-estimate-total"); if (total) total.value = estimate.total.toFixed(2) };
 const bindNewOrderEstimatorCore = bindNewOrderEstimator;
 bindNewOrderEstimator = function () { bindNewOrderEstimatorCore(); const lines = document.querySelector("#new-estimate-lines"); if (!lines || !state.services.length) return; lines.insertAdjacentHTML("beforebegin", `<div class="canned-service-picker"><span>Canned services</span>${state.services.map(service => `<button type="button" class="mini-action" data-add-canned-service="${service.id}">${escapeHtml(service.name)}</button>`).join("")}</div>`); document.querySelectorAll("[data-add-canned-service]").forEach(button => button.onclick = () => { const service = state.services.find(item => item.id === button.dataset.addCannedService); lines.insertAdjacentHTML("beforeend", newOrderEstimateRow({ service: service.name, notes: service.description, hours: service.laborHours, parts: service.partsPrice, discount: service.discount })); bindNewOrderEstimatorCore(); toast(`${service.name} added to estimate`) }) };
 function customerBalance(name) { return getFinanceDerived().balanceByCustomer.get(name) || 0 }
@@ -598,7 +630,10 @@ function bindWorkOrderMileage(rootSelector) {
   if (!root || root.dataset.mileageBound === "1") return;
   root.dataset.mileageBound = "1";
   const rate = () => shopMileageRate();
-  const refresh = () => Mileage.refreshMileagePreview(root, { rate: rate() });
+  const refresh = () => {
+    Mileage.refreshMileagePreview(root, { rate: rate() });
+    if (root.id === "new-form") refreshNewOrderEstimate();
+  };
   root.querySelectorAll("#detail-one-way-miles, #new-one-way-miles, [name=tripMilesOneWay]").forEach(input => input.addEventListener("input", refresh));
   refresh();
   const calcButton = root.querySelector("#calculate-mileage, #new-calculate-mileage");
@@ -654,7 +689,7 @@ function accountView() { const d = finance(), balance = x => x.code === "1000" ?
 function openExpense() { showModal(`<form class="modal" id="expense-form"><div class="modal-head"><h2>Record expense</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Date<input type="date" name="date" value="2026-08-14" required/></label><label>Amount *<input name="amount" type="number" step=".01" min=".01" required/></label><label>Vendor *<input name="vendor" required/></label><label>Category<select name="category"><option>Parts & supplies</option><option>Shop supplies</option><option>Utilities</option><option>Tools & equipment</option><option>Insurance</option><option>Marketing</option><option>Other</option></select></label><label class="full">Memo<textarea name="memo" placeholder="What was this business expense for?"></textarea></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("save", 14)} Record expense</button></div></form>`); document.querySelector("#expense-form").onsubmit = e => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)), record = { date: d.date, vendor: d.vendor, category: d.category, memo: d.memo, amount: Number(d.amount), account: expenseAccount(d.category) }; state.expenses.push(record); pushExpenseToApi(record); save(); closeModal(); toast("Expense recorded in the general ledger"); render() } }
 function openJournal() { const options = state.chartOfAccounts.map(x => `<option value="${x.code}">${x.code} · ${x.name}</option>`).join(""); showModal(`<form class="modal" id="journal-form"><div class="modal-head"><h2>Journal entry</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="ledger-note">${icon("scale", 15)} Post equal debit and credit amounts for an adjustment.</div><div class="form-grid" style="margin-top:14px"><label>Date<input type="date" name="date" value="2026-08-14" required/></label><label>Amount *<input name="amount" type="number" step=".01" min=".01" required/></label><label class="full">Description *<input name="description" required placeholder="e.g. Owner contribution"/></label><label>Debit account<select name="debitAccount">${options}</select></label><label>Credit account<select name="creditAccount">${options}</select></label></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("book-open-check", 14)} Post entry</button></div></form>`); document.querySelector("#journal-form").onsubmit = e => { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); if (d.debitAccount === d.creditAccount) { toast("Choose different debit and credit accounts"); return } state.journalEntries.push({ date: d.date, reference: `JE-${String(state.journalEntries.length + 1).padStart(4, "0")}`, description: d.description, debitAccount: d.debitAccount, creditAccount: d.creditAccount, amount: Number(d.amount) }); save(); closeModal(); toast("Balanced journal entry posted"); render() } }
 const importTypes = { customers: { title: "Customers", icon: "users", columns: "name, phone, email", required: "name", sample: "name,phone,email\nDemo Customer,555-0123,demo.customer@example.com" }, vehicles: { title: "Vehicles", icon: "car-front", columns: "customer, year, make, model, vin, plate", required: "customer, year, make, model", sample: "customer,year,make,model,vin,plate\nDemo Customer,2020,Ford,Escape,DEMOVIN000000010,ABC-1234" }, orders: { title: "Work orders", icon: "clipboard-list", columns: "ro_number, customer, vehicle, complaint, status, total", required: "customer, vehicle, complaint", sample: "ro_number,customer,vehicle,complaint,status,total\nRO-1053,Demo Customer,2020 Ford Escape,Oil change,approved,89.95" }, expenses: { title: "Expenses", icon: "wallet-cards", columns: "date, vendor, category, memo, amount", required: "vendor, amount", sample: "date,vendor,category,memo,amount\n2026-08-14,Demo Tool Supply,Tools,Socket set,149.99" } };
-function imports() { const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join(""); return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>ARI exports: convert with <code>npm run convert:ari</code>, then upload customers → vehicles → work orders from the generated folder. ARI column names are also accepted on these templates.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`) }
+function imports() { const cards = Object.entries(importTypes).map(([type, def]) => `<article class="import-card"><div class="import-card-icon">${icon(def.icon, 20)}</div><div><h3>${def.title}</h3><p>Required: ${def.required}</p><p class="import-columns">Columns: ${def.columns}</p></div><button class="secondary" data-import-type="${type}">${icon("upload", 14)} Choose CSV</button><button class="template-link" data-template="${type}">${icon("download", 13)} Template</button></article>`).join(""); return shell(`${heading("Data management", "Import records", "Bring historical CSV data into MechPro. Records are checked before they are added.", false)}<input id="csv-input" type="file" accept=".csv,text/csv" hidden/><div class="import-note">${icon("shield-check", 16)}<span>ARI column names are also accepted on these templates.</span></div><div class="import-grid">${cards}</div>${importPreview ? previewMarkup() : ""}`) }
 function entityName(type) { return type === "orders" ? "work order" : type.slice(0, -1) }
 function previewMarkup() { const p = importPreview, rows = p.records.slice(0, 5).map((record, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(Object.values(record).slice(0, 4).join(" · "))}</td></tr>`).join(""); return `<section class="import-preview"><div><div class="eyebrow">Ready to import</div><h2>${p.records.length} valid ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"}</h2><p>${p.skipped} duplicate or invalid row${p.skipped === 1 ? "" : "s"} will not be imported.</p></div><div class="import-preview-actions"><button class="secondary" id="cancel-import">Cancel</button><button class="primary" id="confirm-import">${icon("check", 15)} Import ${p.records.length} records</button></div><table><thead><tr><th>Row</th><th>Preview</th></tr></thead><tbody>${rows || `<tr><td colspan="2">No valid rows found.</td></tr>`}</tbody></table>${p.errors.length ? `<div class="import-errors"><strong>${p.errors.length} row issue${p.errors.length === 1 ? "" : "s"}</strong>${p.errors.slice(0, 4).map(error => `<span>${escapeHtml(error)}</span>`).join("")}</div>` : ""}</section>` }
 
@@ -693,7 +728,45 @@ printCustomerStatement = function (name) { const invoices = state.invoices.filte
 
 printInspectionReport = function (inspection) { const profile = shopProfile(), brand = printableBrand(profile), counts = (inspection.items || []).reduce((total, item) => (total[item.status] = (total[item.status] || 0) + 1, total), {}), itemRows = (inspection.items || []).map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.status === "not_checked" ? "Not checked" : item.status || "")}</td><td>${escapeHtml(item.note || "")}</td></tr>`).join(""), damage = (inspection.damageZones || []).map(escapeHtml).join(", "), approvalRows = (inspection.approvalHistory || []).map(entry => `<tr><td>${escapeHtml(entry.status)}</td><td>${escapeHtml(entry.actorName || "")}</td><td>${escapeHtml(new Date(entry.timestamp).toLocaleString())}</td><td>${escapeHtml(entry.note || "")}</td></tr>`).join(""), photos = (inspection.photoKeys || []).map(key => `<img src="${escapeHtml(`${cloudflareConfig.apiUrl}/files/${encodeURIComponent(key)}`)}" alt="Inspection photo"/>`).join(""), win = window.open("", "_blank", "noopener"); if (!win) { toast("Allow pop-ups to print the inspection"); return } win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(inspection.number)} inspection</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:900px;margin:auto;padding:22px;color:#172029}h2{color:var(--brand)}.summary{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}.summary b{padding:7px 10px;border:1px solid #d6ddd7}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:6px 8px;border:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.photos{display:flex;flex-wrap:wrap;gap:8px}.photos img{width:150px;height:110px;object-fit:cover;border:1px solid #d6ddd7}</style></head><body>${brand.header}<h2>Digital Inspection Report: ${escapeHtml(inspection.number)}</h2><p><b>Customer:</b> ${escapeHtml(inspection.customer)} · <b>Vehicle:</b> ${escapeHtml(inspection.vehicle)} · <b>Work order:</b> ${escapeHtml(inspection.workOrderId || "Unlinked")}</p><p><b>Date:</b> ${escapeHtml(new Date(inspection.createdAt).toLocaleString())}</p><div class="summary"><b>${counts.pass || 0} pass</b><b>${counts.attention || 0} attention</b><b>${counts.fail || 0} fail</b></div>${damage ? `<p><b>Damage zones:</b> ${damage}</p>` : ""}<table><thead><tr><th>Inspection point</th><th>Result</th><th>Note</th></tr></thead><tbody>${itemRows}</tbody></table>${inspection.recommendations ? `<h3>Recommendations</h3><p>${escapeHtml(inspection.recommendations)}</p>` : ""}${photos ? `<h3>Photos</h3><div class="photos">${photos}</div>` : ""}${approvalRows ? `<h3>Approval history</h3><table><thead><tr><th>Decision</th><th>By</th><th>Date</th><th>Note</th></tr></thead><tbody>${approvalRows}</tbody></table>` : ""}<p>${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print inspection</button></body></html>`); win.document.close() };
 function invoiceNumberForOrder(order) { return `INV-${String(order.id || Date.now()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}` }
-async function ensureInvoiceForOrder(order) { if (!["completed", "invoiced"].includes(order.status)) return null; const existing = state.invoices.find(invoice => invoice.ro === order.id); if (existing) return existing; Object.assign(order, Mileage.applyMileageToOrder(order, { rate: shopMileageRate(), taxRate: state.taxSettings.rate })); const number = invoiceNumberForOrder(order), estimate = order.estimate || {}, amount = Math.max(0, Number(order.total ?? estimate.total) || 0), tax = Math.max(0, Number(order.tax ?? estimate.tax) || 0), subtotal = Math.max(0, Number(estimate.subtotal) || Math.max(0, amount - tax)), issued = new Date(), due = new Date(issued); due.setDate(due.getDate() + 14); const invoice = { id: number, number, ro: order.id, customer: order.customer, vehicle: order.vehicle, amount, subtotal, tax, taxRate: Number(estimate.taxRate ?? state.taxSettings.rate) || 0, status: "sent", date: issued.toISOString().slice(0, 10), due: due.toISOString().slice(0, 10), lines: estimate.lines || [], createdAt: now() }; const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) }), record = saved?.queued ? invoice : saved; state.invoices.push(record); order.invoiceNumber = number; save(); return record }
+async function ensureInvoiceForOrder(order) {
+  if (!["completed", "invoiced"].includes(order.status)) return null;
+  const existing = state.invoices.find(invoice => invoice.ro === order.id);
+  if (existing) return existing;
+  // Snapshot pricing for the invoice. Only copy mileage fields onto the order when they change,
+  // so repeated completion paths do not keep rewriting unrelated order state.
+  const priced = Mileage.applyMileageToOrder(order, { rate: shopMileageRate(), taxRate: state.taxSettings.rate });
+  const mileageChanged = Number(priced.mileageCharge || 0) !== Number(order.mileageCharge || 0)
+    || Number(priced.tripMiles || 0) !== Number(order.tripMiles || 0)
+    || Number(priced.total || 0) !== Number(order.total || 0);
+  if (mileageChanged) {
+    order.jobAddress = priced.jobAddress;
+    order.tripMilesOneWay = priced.tripMilesOneWay;
+    order.tripMiles = priced.tripMiles;
+    order.mileageRate = priced.mileageRate;
+    order.mileageCharge = priced.mileageCharge;
+    order.estimate = priced.estimate;
+    order.labor = priced.labor;
+    order.laborHours = priced.laborHours ?? order.laborHours;
+    order.parts = priced.parts;
+    order.tax = priced.tax;
+    order.total = priced.total;
+  }
+  const number = invoiceNumberForOrder(order);
+  const estimate = (mileageChanged ? priced.estimate : order.estimate) || {};
+  const amount = Math.max(0, Number((mileageChanged ? priced.total : order.total) ?? estimate.total) || 0);
+  const tax = Math.max(0, Number((mileageChanged ? priced.tax : order.tax) ?? estimate.tax) || 0);
+  const subtotal = Math.max(0, Number(estimate.subtotal) || Math.max(0, amount - tax));
+  const issued = new Date();
+  const due = new Date(issued);
+  due.setDate(due.getDate() + 14);
+  const invoice = { id: number, number, ro: order.id, customer: order.customer, vehicle: order.vehicle, amount, subtotal, tax, taxRate: Number(estimate.taxRate ?? state.taxSettings.rate) || 0, status: "sent", date: issued.toISOString().slice(0, 10), due: due.toISOString().slice(0, 10), lines: estimate.lines || [], createdAt: now() };
+  const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) });
+  const record = saved?.queued ? invoice : saved;
+  state.invoices.push(record);
+  order.invoiceNumber = number;
+  save();
+  return record;
+}
 const updateOrderWithInvoiceCore = updateOrderInApi;
 updateOrderInApi = async function (record) { if (["completed", "invoiced"].includes(record.status)) { try { await ensureInvoiceForOrder(record) } catch (error) { console.error("Failed to create invoice for completed order", error); toast("Invoice creation failed; the work order was not completed"); throw error } } return updateOrderWithInvoiceCore(record) };
 
@@ -773,12 +846,12 @@ function homeDashboard() {
 function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
 render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = homeDashboard(); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
-function applyRemoteList(key, records) { if (key === "shopSettingsRecords" && Array.isArray(records) && !records.length && (state.shopSettingsRecords || []).some(item => item?.updatedAt)) return; state[key] = mergeRemoteCollection(key, records, state[key], localSampleRecord); save() }
+function applyRemoteList(key, records) { if (key === "shopSettingsRecords" && Array.isArray(records) && !records.length && (state.shopSettingsRecords || []).some(item => item?.updatedAt)) return; state[key] = mergeRemoteCollection(key, records, state[key], localSampleRecord, pendingCreateIdsForCollection(key, readMutationQueue(), shopEntityCollections)); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
 loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
 loadExpensesFromApi = async function () { try { applyRemoteList("expenses", await apiFetch("/entities/expenses")) } catch (error) { console.error("Failed to load expenses from API; using local data", error) } };
-loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])); const tax = state.shopSettingsRecords.find(item => item.id === "tax"); if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly" } } catch (error) { console.error("Failed to load shop operations; using local data", error) } };
+loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index])); const tax = state.shopSettingsRecords.find(item => item.id === "tax"); if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly", ein: String(tax.ein || ""), texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""), webfileNumber: String(tax.webfileNumber || ""), jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null } } catch (error) { console.error("Failed to load shop operations; using local data", error) } };
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
 
@@ -1087,4 +1160,759 @@ async function startApp() {
   render();
 }
 if (isDesktopApp) setInterval(async () => { if (!authSession()) return; try { await verifyDesktopEntitlement() } catch (error) { desktopLoginMessage = error.message; desktopEntitlementVerified = false; clearAuthSession(); render() } }, DESKTOP_ENTITLEMENT_INTERVAL);
+/* === MECHPRO_FILING_OVERRIDES_START === */
+
+function filingIsoDate(d = new Date()) {
+  const x = new Date(d);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+
+function filingPeriodPresets() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const q = Math.floor(m / 3);
+  const monthStart = new Date(y, m, 1);
+  const quarterStart = new Date(y, q * 3, 1);
+  const yearStart = new Date(y, 0, 1);
+  const today = filingIsoDate(now);
+  return {
+    month: { from: filingIsoDate(monthStart), to: today, label: 'This month' },
+    quarter: { from: filingIsoDate(quarterStart), to: today, label: 'This quarter' },
+    ytd: { from: filingIsoDate(yearStart), to: today, label: 'YTD' },
+  };
+}
+
+function filingParseDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function filingInRange(dateValue, from, to) {
+  const d = filingParseDate(dateValue);
+  if (!d) return false;
+  const start = filingParseDate(from);
+  const end = filingParseDate(to);
+  if (!start || !end) return false;
+  end.setHours(23, 59, 59, 999);
+  return d >= start && d <= end;
+}
+
+function shopFilingProfile() {
+  const profile = shopProfile();
+  const t = state.taxSettings || {};
+  const jurisdictions = Filing.normalizeJurisdictions(t.jurisdictions, Number(t.rate) || 8.25);
+  return {
+    shopName: profile.shopName || 'Your Car Guy',
+    address: profile.address || '',
+    phone: profile.phone || '',
+    ein: t.ein || '',
+    taxId: t.taxId || '',
+    texasTaxpayerNumber: t.texasTaxpayerNumber || '',
+    webfileNumber: t.webfileNumber || '',
+    state: t.state || 'TX',
+    rate: Number(t.rate) || Filing.combinedSalesTaxRate(jurisdictions),
+    filingFrequency: t.filingFrequency || 'Monthly',
+    jurisdictions,
+  };
+}
+
+taxReport = function (fromDate, toDate) {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  const invoices = getFinanceDerived().invoiceByNumber;
+  to.setHours(23, 59, 59, 999);
+  const rate = Number(state.taxSettings.rate) || 0;
+  const rows = paymentRecords().filter(payment => {
+    const d = new Date(payment.receivedAt);
+    return d >= from && d <= to;
+  }).map(payment => {
+    const invoice = invoices.get(payment.invoiceNumber);
+    const bd = invoiceTaxBreakdown(invoice);
+    const ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0;
+    const gross = Number(payment.amount);
+    const taxable = Math.round(bd.subtotal * ratio * 100) / 100;
+    const tax = Math.round(bd.tax * ratio * 100) / 100;
+    const nontaxable = Math.max(0, Math.round((gross - taxable - tax) * 100) / 100);
+    return {
+      date: payment.receivedAt,
+      invoiceNumber: payment.invoiceNumber,
+      customer: payment.customer,
+      gross,
+      taxable,
+      nontaxable,
+      tax,
+      taxRate: bd.taxRate ?? rate,
+    };
+  }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const totals = rows.reduce((acc, row) => ({
+    gross: Math.round((acc.gross + row.gross) * 100) / 100,
+    taxable: Math.round((acc.taxable + row.taxable) * 100) / 100,
+    nontaxable: Math.round((acc.nontaxable + row.nontaxable) * 100) / 100,
+    tax: Math.round((acc.tax + row.tax) * 100) / 100,
+  }), { gross: 0, taxable: 0, nontaxable: 0, tax: 0 });
+  return { from: fromDate, to: toDate, rows, totals };
+};
+
+taxReportView = function (result, stateName, settings) {
+  const shop = shopFilingProfile();
+  const supplement = Filing.buildJurisdictionSupplement(result.totals.taxable, shop.jurisdictions);
+  const rows = result.rows.map(row => `<tr><td>${escapeHtml(row.date)}</td><td class="mono">${escapeHtml(row.invoiceNumber)}</td><td>${escapeHtml(row.customer)}</td><td>${money(row.gross)}</td><td>${money(row.taxable)}</td><td>${money(row.nontaxable ?? 0)}</td><td><b>${money(row.tax)}</b></td></tr>`).join('');
+  const jurisRows = supplement.rows.map(r => `<tr><td class="mono">${escapeHtml(r.code)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.kind)}</td><td>${r.rate}%</td><td>${money(r.amountSubjectToLocalTax)}</td><td><b>${money(r.taxDue)}</b></td></tr>`).join('');
+  return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${escapeHtml(stateName)} sales tax filing</div><h2>Period ${escapeHtml(result.from)} to ${escapeHtml(result.to)}</h2><small>${escapeHtml(shop.shopName)} · Tax ID: ${escapeHtml(settings.taxId || 'Not set')} · EIN: ${escapeHtml(shop.ein || 'Not set')} · Filing: ${escapeHtml(settings.filingFrequency)} · Rate ${shop.rate}%</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money(result.totals.taxable)}</strong></article><article><span>Nontaxable</span><strong>${money(result.totals.nontaxable || 0)}</strong></article><article><span>Tax collected</span><strong>${money(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross</th><th>Taxable</th><th>Nontaxable</th><th>Tax</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No payments were recorded in this period.</td></tr>`}</tbody></table></div><div class="statement" style="margin-top:14px"><div class="statement-head"><div><div class="eyebrow">Local jurisdictions</div><h2>Texas list supplement</h2></div></div><div class="data-panel"><table><thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Rate</th><th>Subject to tax</th><th>Tax due</th></tr></thead><tbody>${jurisRows}</tbody></table></div><small>State ${money(supplement.stateTax)} · Local ${money(supplement.localTax)} · Total ${money(supplement.totalTax)}</small></div></div>`;
+};
+
+reports = function () {
+  const t = state.taxSettings;
+  const stateName = usStates.find(s => s.code === t.state)?.name || t.state;
+  const result = taxReportResult;
+  const presets = filingPeriodPresets();
+  const fromVal = result?.from || presets.month.from;
+  const toVal = result?.to || presets.month.to;
+  return shell(`${heading('Performance', 'Reports', 'Sales tax filing report, jurisdiction matrix, and e-file packages for your CPA or state portal.', false)}${stats()}
+<section class="messaging-panel"><div class="messaging-status ready">${icon('landmark', 17)}<div><strong>Tax filing report — ${escapeHtml(stateName)}</strong><span>Cash-basis sales tax for ${escapeHtml(stateName)} ${escapeHtml(String(t.filingFrequency || '').toLowerCase())} filing. Includes nontaxable and local jurisdiction split.</span></div></div>
+<div class="payroll-period-controls no-print" style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px">
+<button type="button" class="secondary" data-tax-preset="month">${presets.month.label}</button>
+<button type="button" class="secondary" data-tax-preset="quarter">${presets.quarter.label}</button>
+<button type="button" class="secondary" data-tax-preset="ytd">${presets.ytd.label}</button>
+</div>
+<form class="form-grid" id="tax-report-form"><label>From date *<input type="date" name="from" value="${fromVal}" required/></label><label>To date *<input type="date" name="to" value="${toVal}" required/></label>
+<div class="full messaging-actions">
+<button class="primary" type="submit">${icon('file-text', 14)} Generate report</button>
+${result ? `<button class="secondary" type="button" id="print-tax-report">${icon('printer', 14)} Print</button>
+<button class="secondary" type="button" id="export-tax-csv">${icon('download', 14)} Export CSV</button>
+<button class="secondary" type="button" id="export-tx-webfile">${icon('upload', 14)} TX WebFile package</button>
+<button class="secondary" type="button" id="open-filing-center">${icon('landmark', 14)} Filing center</button>` : ''}
+</div></form>
+${result ? taxReportView(result, stateName, t) : ''}
+</section>
+${filingCenterMarkup()}`);
+};
+
+function filingCenterMarkup() {
+  if (!filingCenterOpen) return '';
+  const shop = shopFilingProfile();
+  return `<section class="messaging-panel no-print" style="margin-top:16px"><div class="statement-head"><div><div class="eyebrow">E-file center</div><h2>IRS · Texas Comptroller · SSA</h2><p>MechPro builds portal-ready packages. Transmit via the linked government portals (or your CPA). Configure transmitter credentials in Shop settings when you enroll as an e-file provider.</p></div><button type="button" class="secondary" id="close-filing-center">Close</button></div>
+<div class="accounting-grid" style="margin-top:12px">
+<section class="statement"><div class="eyebrow">Sales tax</div><h3>Texas WebFile / EDI</h3><p>List-supplement CSV with 7-digit jurisdiction codes for WebFile or Texas EDI software.</p><a class="secondary" href="https://comptroller.texas.gov/taxes/file-pay/about-webfile.php" target="_blank" rel="noopener">Open WebFile</a></section>
+<section class="statement"><div class="eyebrow">Employment tax</div><h3>IRS Form 941 + EFTPS</h3><p>Quarterly 941 worksheet from payroll withholdings. Pay deposits via EFTPS.</p><a class="secondary" href="https://www.irs.gov/businesses/small-businesses-self-employed/e-file-employment-tax-forms" target="_blank" rel="noopener">IRS employment e-file</a></section>
+<section class="statement"><div class="eyebrow">Annual wages</div><h3>SSA W-2 / 1099</h3><p>Printable W-2 &amp; 1099-NEC plus EFW2 text for Business Services Online.</p><a class="secondary" href="https://www.ssa.gov/employer/" target="_blank" rel="noopener">SSA BSO</a></section>
+</div>
+<small>EIN on file: ${escapeHtml(shop.ein || 'Not set')} · TX taxpayer #: ${escapeHtml(shop.texasTaxpayerNumber || 'Not set')} · WebFile #: ${escapeHtml(shop.webfileNumber || 'Not set')}</small>
+</section>`;
+}
+
+async function generateTaxReportFromForm(from, to) {
+  try {
+    if (navigator.onLine && !isLocalShell()) {
+      const remote = await apiFetch(`/tax-report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      if (remote?.rows) {
+        taxReportResult = {
+          from: remote.from || from,
+          to: remote.to || to,
+          rows: remote.rows.map(row => ({
+            ...row,
+            nontaxable: row.nontaxable ?? Math.max(0, Math.round((Number(row.gross) - Number(row.taxable) - Number(row.tax)) * 100) / 100),
+          })),
+          totals: remote.totals,
+        };
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('tax-report API unavailable, using local', error);
+  }
+  taxReportResult = taxReport(from, to);
+}
+
+function exportSalesTaxCsv() {
+  if (!taxReportResult) return;
+  const shop = shopFilingProfile();
+  const rows = [
+    ['Sales tax filing export'],
+    ['Shop', shop.shopName],
+    ['State', shop.state],
+    ['Tax ID', shop.taxId],
+    ['EIN', shop.ein],
+    ['Period from', taxReportResult.from],
+    ['Period to', taxReportResult.to],
+    ['Filing frequency', shop.filingFrequency],
+    [],
+    ['Date', 'Invoice', 'Customer', 'Gross', 'Taxable', 'Nontaxable', 'Tax', 'Tax rate', 'Tax ID', 'State'],
+    ...taxReportResult.rows.map(row => [
+      row.date, row.invoiceNumber, row.customer, row.gross, row.taxable, row.nontaxable ?? 0, row.tax, row.taxRate ?? shop.rate, shop.taxId, shop.state,
+    ]),
+    [],
+    ['Totals', '', '', taxReportResult.totals.gross, taxReportResult.totals.taxable, taxReportResult.totals.nontaxable || 0, taxReportResult.totals.tax, '', '', ''],
+  ];
+  Filing.downloadTextFile(`mechpro-sales-tax-${taxReportResult.from}-${taxReportResult.to}.csv`, Filing.csvFromRows(rows));
+  toast('Sales tax CSV exported');
+}
+
+function exportTexasWebfilePackage() {
+  if (!taxReportResult) return;
+  const shop = shopFilingProfile();
+  const supplement = Filing.buildJurisdictionSupplement(taxReportResult.totals.taxable, shop.jurisdictions);
+  const csv = Filing.texasListSupplementCsv(supplement, {
+    taxpayerNumber: shop.texasTaxpayerNumber,
+    taxId: shop.taxId,
+    from: taxReportResult.from,
+    to: taxReportResult.to,
+    outlet: 'Primary',
+  });
+  Filing.downloadTextFile(`mechpro-tx-webfile-${taxReportResult.from}-${taxReportResult.to}.csv`, csv);
+  toast('Texas WebFile package downloaded');
+}
+
+function buildTaxPackage(from, to) {
+  const payments = paymentRecords().filter(p => filingInRange(p.receivedAt, from, to));
+  const expenses = state.expenses.filter(x => filingInRange(x.date, from, to));
+  const journals = state.journalEntries.filter(x => filingInRange(x.date, from, to));
+  let revenue = 0;
+  let salesTax = 0;
+  for (const payment of payments) {
+    const invoice = state.invoices.find(item => item.number === payment.invoiceNumber);
+    const bd = invoiceTaxBreakdown(invoice);
+    const ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0;
+    salesTax += bd.tax * ratio;
+    revenue += payment.amount - bd.tax * ratio;
+  }
+  const manualIncome = journals.filter(x => x.creditAccount === '4000').reduce((s, x) => s + Number(x.amount || 0), 0);
+  const manualExpense = journals.filter(x => /^5|^6/.test(x.debitAccount)).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const expenseTotal = expenses.reduce((s, x) => s + Number(x.amount || 0), 0) + manualExpense;
+  const byCategory = {};
+  for (const x of expenses) {
+    byCategory[x.category || 'Other'] = (byCategory[x.category || 'Other'] || 0) + Number(x.amount || 0);
+  }
+  revenue = Math.round((revenue + manualIncome) * 100) / 100;
+  salesTax = Math.round(salesTax * 100) / 100;
+  const net = Math.round((revenue - expenseTotal) * 100) / 100;
+  return { from, to, revenue, salesTax, expenseTotal, net, byCategory, expenses, payments: payments.length };
+}
+
+function taxPackageView() {
+  const presets = filingPeriodPresets();
+  const range = taxPackageRange || presets.ytd;
+  const pack = buildTaxPackage(range.from, range.to);
+  const catRows = Object.entries(pack.byCategory).map(([cat, amt]) => `<div class="statement-line"><span>${escapeHtml(cat)}</span><b>${money(amt)}</b></div>`).join('') || '<div class="statement-line"><span>No expenses in range</span><b>$0.00</b></div>';
+  return `<div class="tax-package-print" id="tax-package-printable">
+<div class="payroll-period-controls no-print" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+<button type="button" class="secondary" data-taxpkg-preset="month">MTD</button>
+<button type="button" class="secondary" data-taxpkg-preset="quarter">QTD</button>
+<button type="button" class="secondary" data-taxpkg-preset="ytd">YTD</button>
+<label>From<input type="date" id="taxpkg-from" value="${pack.from}"/></label>
+<label>To<input type="date" id="taxpkg-to" value="${pack.to}"/></label>
+<button type="button" class="primary" id="taxpkg-apply">Apply</button>
+<button type="button" class="secondary" id="taxpkg-export-pl">${icon('download', 14)} Export P&amp;L</button>
+<button type="button" class="secondary" id="taxpkg-export-exp">${icon('download', 14)} Export expenses</button>
+<button type="button" class="secondary" id="taxpkg-print">${icon('printer', 14)} Print</button>
+</div>
+<div class="finance-kpis"><article><span>Service revenue (ex-tax)</span><strong>${money(pack.revenue)}</strong></article><article><span>Operating expenses</span><strong>${money(pack.expenseTotal)}</strong></article><article class="${pack.net >= 0 ? 'positive' : 'negative'}"><span>Net income</span><strong>${money(pack.net)}</strong></article><article><span>Sales tax collected</span><strong>${money(pack.salesTax)}</strong><small>Liability — not income</small></article></div>
+<div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Cash-basis P&amp;L</div><h2>${escapeHtml(pack.from)} → ${escapeHtml(pack.to)}</h2></div><span class="badge paid">Schedule C prep</span></div>
+<div class="statement-line"><span>Service revenue</span><b>${money(pack.revenue)}</b></div>
+${catRows}
+<div class="statement-line total"><span>Net income</span><b>${money(pack.net)}</b></div>
+<small>${pack.payments} payments · Sales tax ${money(pack.salesTax)} held in 2100</small>
+</section>
+<section class="statement"><div class="statement-head"><div><div class="eyebrow">Filing note</div><h2>Income tax package</h2></div></div>
+<p>Export these CSVs for your CPA or Schedule C. Revenue excludes sales tax collected. MechPro does not e-file Form 1040/1120 — use the package with your preparer or tax software.</p>
+</section></div></div>`;
+}
+
+function exportTaxPackagePl() {
+  const presets = filingPeriodPresets();
+  const range = taxPackageRange || presets.ytd;
+  const pack = buildTaxPackage(range.from, range.to);
+  const rows = [
+    ['Cash-basis profit and loss'],
+    ['From', pack.from], ['To', pack.to], ['Shop', shopFilingProfile().shopName],
+    [],
+    ['Line', 'Amount'],
+    ['Service revenue (excluding sales tax)', pack.revenue],
+    ...Object.entries(pack.byCategory).map(([cat, amt]) => [`Expense — ${cat}`, amt]),
+    ['Total expenses', pack.expenseTotal],
+    ['Net income', pack.net],
+    ['Sales tax collected (liability 2100)', pack.salesTax],
+  ];
+  Filing.downloadTextFile(`mechpro-pl-${pack.from}-${pack.to}.csv`, Filing.csvFromRows(rows));
+  toast('P&L tax package exported');
+}
+
+function exportTaxPackageExpenses() {
+  const presets = filingPeriodPresets();
+  const range = taxPackageRange || presets.ytd;
+  const pack = buildTaxPackage(range.from, range.to);
+  const rows = [
+    ['Date', 'Vendor', 'Category', 'Account', 'Amount', 'Memo'],
+    ...pack.expenses.map(x => [x.date, x.vendor, x.category, x.account || expenseAccount(x.category), x.amount, x.memo || '']),
+  ];
+  Filing.downloadTextFile(`mechpro-expenses-${pack.from}-${pack.to}.csv`, Filing.csvFromRows(rows));
+  toast('Expense detail exported');
+}
+
+accounting = function () {
+  const data = finance();
+  const tabs = [['overview', 'Overview'], ['taxpackage', 'Tax package'], ['receivables', 'Receivables'], ['expenses', 'Expenses'], ['ledger', 'General ledger'], ['accounts', 'Chart of accounts']];
+  const views = {
+    overview: profitLoss(data),
+    taxpackage: taxPackageView(),
+    receivables: arView(data),
+    expenses: expenseView(),
+    ledger: ledgerView(),
+    accounts: accountView(),
+  };
+  return shell(`${heading('Financial operations', 'Accounting', 'Income, expenses, receivables, and filing packages for Your Car Guy.', false)}<div class="accounting-actions"><button class="secondary" id="accounting-export">${icon('download', 14)} Export ledger</button><button class="secondary" id="journal-entry">${icon('book-open-check', 14)} Journal entry</button><button class="primary" id="record-expense">${icon('plus', 14)} Record expense</button></div><div class="accounting-tabs">${tabs.map(x => `<button class="tab ${accountingTab === x[0] ? 'active' : ''}" data-accounting-tab="${x[0]}">${x[1]}</button>`).join('')}</div>${views[accountingTab] || views.overview}`);
+};
+
+function activePayrollPeriod(date = new Date()) {
+  if (payrollPeriodKey) {
+    const d = new Date(`${payrollPeriodKey}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) return weekPeriod(d);
+  }
+  return weekPeriod(date);
+}
+
+function ytdPayForUser(user, throughPeriodKey) {
+  const year = String(throughPeriodKey || filingIsoDate()).slice(0, 4);
+  const periods = new Set(state.payrollEntries.filter(e => e.employeeId === user.id && String(e.periodKey || '').startsWith(year)).map(e => e.periodKey));
+  if (user.employmentType === 'Salary') {
+    const start = new Date(`${year}-01-01T12:00:00`);
+    const end = new Date(`${throughPeriodKey}T12:00:00`);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 7)) periods.add(weekPeriod(d).key);
+  }
+  let gross = 0; let federal = 0; let socialSecurity = 0; let medicare = 0; let state = 0; let ssWages = 0;
+  const sorted = [...periods].sort();
+  for (const key of sorted) {
+    const stub = payStub(user, weekPeriod(new Date(`${key}T12:00:00`)), { ytdSocialSecurityWages: ssWages });
+    gross += stub.gross;
+    federal += stub.federal;
+    socialSecurity += stub.socialSecurity;
+    medicare += stub.medicare;
+    state += stub.state;
+    ssWages += stub.socialSecurityWages || 0;
+  }
+  return {
+    gross: Math.round(gross * 100) / 100,
+    federal: Math.round(federal * 100) / 100,
+    socialSecurity: Math.round(socialSecurity * 100) / 100,
+    medicare: Math.round(medicare * 100) / 100,
+    state: Math.round(state * 100) / 100,
+    socialSecurityWages: Math.round(ssWages * 100) / 100,
+    net: Math.round((gross - federal - socialSecurity - medicare - state) * 100) / 100,
+  };
+}
+
+payStub = function (user, period, opts = {}) {
+  const lines = state.payrollEntries.filter(entry => entry.employeeId === user.id && entry.periodKey === period.key);
+  const hours = lines.reduce((sum, line) => sum + Number(line.hours || 0), 0);
+  const shiftHours = state.shiftEntries.filter(entry => entry.userId === user.id && entry.clockOut && String(entry.clockIn).slice(0, 10) >= period.key && String(entry.clockIn).slice(0, 10) <= period.key).reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+  const jobPay = lines.reduce((sum, line) => sum + Number(line.amount || line.grossPay || 0), 0);
+  const salaryPay = user.employmentType === 'Salary' ? Number(user.payRate || 0) / 52 : 0;
+  const gross = Math.round((jobPay + salaryPay) * 100) / 100;
+  const taxes = Filing.computePayPeriodTaxes(user, gross, { socialSecurityWages: opts.ytdSocialSecurityWages || 0 });
+  if (shopFilingProfile().state === 'TX' && !Number(user.stateWithholdingRate)) taxes.state = 0;
+  return {
+    user, period, lines, hours, shiftHours, gross, salaryPay,
+    federal: taxes.federal,
+    socialSecurity: taxes.socialSecurity,
+    medicare: taxes.medicare,
+    state: taxes.state,
+    employerSocialSecurity: taxes.employerSocialSecurity,
+    employerMedicare: taxes.employerMedicare,
+    socialSecurityWages: taxes.socialSecurityWages || 0,
+    pretax: taxes.pretax || 0,
+    method: taxes.method,
+    is1099: taxes.is1099,
+    fica: Math.round((taxes.socialSecurity + taxes.medicare) * 100) / 100,
+    other: taxes.state,
+    net: taxes.net,
+  };
+};
+
+payStubMarkup = function (stub) {
+  const user = stub.user;
+  const ytd = ytdPayForUser(user, stub.period.key);
+  const lines = stub.lines.map(line => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.rate)}</td><td><b>${money(line.amount || line.grossPay)}</b></td></tr>`).join('');
+  return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || 'Employee')} · ${escapeHtml(user.department || 'Department')}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} · ${escapeHtml(user.employmentType || '')} · ${escapeHtml(stub.method || '')}</p></div><div class="net-pay"><span>Net pay</span><strong>${money(stub.net)}</strong></div></div>
+<div class="pay-stub-totals">
+<div><span>Job hours</span><b>${stub.hours.toFixed(2)}</b></div>
+<div><span>Gross</span><b>${money(stub.gross)}</b></div>
+<div><span>Federal FIT</span><b>(${money(stub.federal)})</b></div>
+<div><span>SS / Medicare</span><b>(${money(stub.socialSecurity)} / ${money(stub.medicare)})</b></div>
+<div><span>State</span><b>(${money(stub.state)})</b></div>
+<div><span>Employer FICA</span><b>${money(stub.employerSocialSecurity + stub.employerMedicare)}</b></div>
+</div>
+${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money(stub.salaryPay)}</b></div>` : ''}
+<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table>
+<div class="pay-stub-foot"><span>YTD gross ${money(ytd.gross)} · FIT ${money(ytd.federal)} · SS ${money(ytd.socialSecurity)} · Med ${money(ytd.medicare)}</span><span>Tax status: ${escapeHtml(user.taxStatus || 'Not set')} · W-4 ${escapeHtml(user.w4FilingStatus || 'single')}</span></div>
+${currentUser().role === 'admin' ? `<div class="payroll-actions" style="margin-top:10px;justify-content:flex-start"><button type="button" class="mini-action" data-print-w2="${escapeHtml(user.id)}">${icon('file-text', 13)} W-2 / 1099</button></div>` : ''}
+</section>`;
+};
+
+payroll = function () {
+  syncAllPayroll();
+  const period = activePayrollPeriod();
+  payrollPeriodKey = period.key;
+  const admin = currentUser().role === 'admin';
+  const people = admin ? state.users.filter(user => user.active) : [currentUser()];
+  const stubs = people.map(user => payStub(user, period));
+  const liabilities = stubs.reduce((acc, s) => ({
+    federal: acc.federal + s.federal,
+    ss: acc.ss + s.socialSecurity + s.employerSocialSecurity,
+    med: acc.med + s.medicare + s.employerMedicare,
+    net: acc.net + s.net,
+    hours: acc.hours + s.hours,
+  }), { federal: 0, ss: 0, med: 0, net: 0, hours: 0 });
+  return shell(`${heading('Compensation', 'Payroll', admin ? `Weekly payroll for ${period.start} – ${period.end}. Pub 15-T (2026) withholding · fileable register & 941/W-2 packages.` : `Your weekly pay stub for ${period.start} – ${period.end}.`, false)}
+<div class="ai-notice">${icon('landmark', 16)}<span>Withholding uses IRS Pub 15-T (2026) percentage method, employee W-4 fields, and FICA. MechPro prepares e-file packages for IRS / SSA portals; it does not transmit until you upload via those portals or configure transmitter credentials.</span></div>
+${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon('download', 14)} Export register</button><button class="secondary" id="payroll-export-detail">${icon('download', 14)} Export detail</button><button class="secondary" id="payroll-export-941">${icon('file-text', 14)} 941 worksheet</button><button class="secondary" id="payroll-export-efw2">${icon('upload', 14)} SSA EFW2</button><button class="primary" id="sync-payroll">${icon('refresh-cw', 14)} Sync jobs</button></div>` : ''}
+<div class="payroll-period-controls" style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+<button type="button" class="secondary" id="payroll-prev">${icon('chevron-left', 14)} Prev</button>
+<strong>${period.start} – ${period.end}</strong>
+<button type="button" class="secondary" id="payroll-next">Next ${icon('chevron-right', 14)}</button>
+<label>Jump to week<input type="date" id="payroll-jump" value="${period.key}"/></label>
+</div>
+<div class="payroll-summary"><span>Pay period</span><strong>${period.start} – ${period.end}</strong><span>${liabilities.hours.toFixed(2)} labor hours</span><strong>${money(liabilities.net)} net</strong></div>
+${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT withheld (2200)</span><strong>${money(liabilities.federal)}</strong></article><article><span>FICA payable (2210)</span><strong>${money(liabilities.ss)}</strong></article><article><span>Medicare payable (2220)</span><strong>${money(liabilities.med)}</strong></article><article><span>Suggested liabilities</span><strong>${money(liabilities.federal + liabilities.ss + liabilities.med)}</strong><small>Do not auto-journal</small></article></div>` : ''}
+<div class="payroll-grid">${stubs.map(payStubMarkup).join('') || empty('No active payroll employees')}</div>`);
+};
+
+exportPayroll = function () {
+  syncAllPayroll();
+  const period = activePayrollPeriod();
+  const adminPeople = state.users.filter(user => user.active);
+  const stubs = adminPeople.map(user => payStub(user, period));
+  const rows = [
+    ['Employee ID', 'Employee', 'Pay period', 'Tax status', 'Hours', 'Gross', 'Pretax', 'Federal FIT', 'Social Security', 'Medicare', 'State', 'Net', 'Employer SS', 'Employer Medicare', 'Method'],
+    ...stubs.map(stub => [
+      stub.user.employeeId || '', stub.user.name, `${period.start} - ${period.end}`, stub.user.taxStatus || '',
+      stub.hours.toFixed(2), stub.gross, stub.pretax || 0, stub.federal, stub.socialSecurity, stub.medicare, stub.state, stub.net,
+      stub.employerSocialSecurity, stub.employerMedicare, stub.method || '',
+    ]),
+  ];
+  Filing.downloadTextFile(`mechpro-payroll-register-${period.key}.csv`, Filing.csvFromRows(rows));
+  toast('Payroll register exported');
+};
+
+function exportPayrollDetail() {
+  syncAllPayroll();
+  const period = activePayrollPeriod();
+  const rows = [
+    ['Employee ID', 'Employee', 'Pay period', 'Work order', 'Customer', 'Hours', 'Rate', 'Gross pay'],
+    ...state.payrollEntries.filter(line => line.periodKey === period.key).map(line => {
+      const user = state.users.find(item => item.id === line.employeeId);
+      return [user?.employeeId || '', user?.name || '', `${period.start} - ${period.end}`, line.roNumber, line.customer, line.hours, line.rate, line.amount || line.grossPay];
+    }),
+  ];
+  Filing.downloadTextFile(`mechpro-payroll-detail-${period.key}.csv`, Filing.csvFromRows(rows));
+  toast('Payroll detail exported');
+}
+
+function quarterBounds(periodKey) {
+  const d = new Date(`${periodKey}T12:00:00`);
+  const q = Math.floor(d.getMonth() / 3);
+  const from = new Date(d.getFullYear(), q * 3, 1);
+  const to = new Date(d.getFullYear(), q * 3 + 3, 0);
+  return { from: filingIsoDate(from), to: filingIsoDate(to), quarter: q + 1, taxYear: d.getFullYear() };
+}
+
+function export941Worksheet() {
+  const period = activePayrollPeriod();
+  const bounds = quarterBounds(period.key);
+  const people = state.users.filter(u => u.active && !String(u.taxStatus || '').includes('1099'));
+  let wages = 0; let federal = 0; let socialSecurityWages = 0; let socialSecurity = 0; let medicare = 0;
+  for (const user of people) {
+    const keys = new Set(state.payrollEntries.filter(e => e.employeeId === user.id && e.periodKey >= bounds.from && e.periodKey <= bounds.to).map(e => e.periodKey));
+    if (user.employmentType === 'Salary') {
+      for (let d = new Date(`${bounds.from}T12:00:00`); d <= new Date(`${bounds.to}T12:00:00`); d.setDate(d.getDate() + 7)) {
+        const key = weekPeriod(d).key;
+        if (key >= bounds.from && key <= bounds.to) keys.add(key);
+      }
+    }
+    let ssYtd = 0;
+    for (const key of [...keys].sort()) {
+      const stub = payStub(user, weekPeriod(new Date(`${key}T12:00:00`)), { ytdSocialSecurityWages: ssYtd });
+      wages += stub.gross;
+      federal += stub.federal;
+      socialSecurityWages += stub.socialSecurityWages || 0;
+      socialSecurity += stub.socialSecurity;
+      medicare += stub.medicare;
+      ssYtd += stub.socialSecurityWages || 0;
+    }
+  }
+  const summary = {
+    employeeCount: people.length,
+    wages: Math.round(wages * 100) / 100,
+    federal: Math.round(federal * 100) / 100,
+    socialSecurityWages: Math.round(socialSecurityWages * 100) / 100,
+    socialSecurityTotal: Math.round(socialSecurity * 2 * 100) / 100,
+    medicareWages: Math.round(wages * 100) / 100,
+    medicareTotal: Math.round(medicare * 2 * 100) / 100,
+    totalTax: Math.round((federal + socialSecurity * 2 + medicare * 2) * 100) / 100,
+  };
+  const shop = shopFilingProfile();
+  Filing.downloadTextFile(
+    `mechpro-941-Q${bounds.quarter}-${bounds.taxYear}.csv`,
+    Filing.form941WorksheetCsv(summary, { taxYear: bounds.taxYear, quarter: bounds.quarter, ein: shop.ein, employerName: shop.shopName }),
+  );
+  toast('Form 941 worksheet exported');
+}
+
+function exportEfw2Package() {
+  const year = new Date().getFullYear();
+  const shop = shopFilingProfile();
+  const people = state.users.filter(u => u.active);
+  const employees = people.map(user => {
+    const ytd = ytdPayForUser(user, `${year}-12-31`);
+    const parts = String(user.name || '').trim().split(/\s+/);
+    const lastName = parts.length > 1 ? parts[parts.length - 1] : parts[0] || '';
+    const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
+    return {
+      name: user.name,
+      firstName,
+      lastName,
+      ssn: user.ssn || '',
+      wages: ytd.gross,
+      federal: ytd.federal,
+      socialSecurityWages: ytd.socialSecurityWages,
+      socialSecurity: ytd.socialSecurity,
+      medicareWages: ytd.gross,
+      medicare: ytd.medicare,
+      taxStatus: user.taxStatus,
+    };
+  });
+  const w2Employees = employees.filter(e => !String(e.taxStatus || '').includes('1099'));
+  const text = Filing.buildEfw2Text({ ein: shop.ein, name: shop.shopName, address: shop.address }, w2Employees, year);
+  Filing.downloadTextFile(`mechpro-efw2-${year}.txt`, text, 'text/plain;charset=utf-8');
+  toast('SSA EFW2 package downloaded');
+}
+
+function printEmployeeAnnualForm(userId) {
+  const user = state.users.find(u => u.id === userId);
+  if (!user) return;
+  const year = new Date().getFullYear();
+  const ytd = ytdPayForUser(user, `${year}-12-31`);
+  const shop = shopFilingProfile();
+  if (String(user.taxStatus || '').includes('1099')) {
+    Filing.open1099NecForm({
+      taxYear: year,
+      payer: { name: shop.shopName, address: shop.address, tin: shop.ein },
+      recipient: { name: user.name, address: user.address || '', tinLast4: String(user.ssn || '').slice(-4) },
+      nonemployeeCompensation: ytd.gross,
+      federalTaxWithheld: ytd.federal,
+    });
+  } else {
+    Filing.openW2Form({
+      taxYear: year,
+      employer: { name: shop.shopName, address: shop.address, ein: shop.ein },
+      employee: { name: user.name, address: user.address || '', ssnLast4: String(user.ssn || '').slice(-4), employeeId: user.employeeId },
+      wages: ytd.gross,
+      federal: ytd.federal,
+      socialSecurityWages: ytd.socialSecurityWages,
+      socialSecurity: ytd.socialSecurity,
+      medicareWages: ytd.gross,
+      medicare: ytd.medicare,
+      state: shop.state === 'TX' ? '' : shop.state,
+      stateWages: shop.state === 'TX' ? 0 : ytd.gross,
+      stateTax: ytd.state,
+    });
+  }
+}
+
+const openEmployeeFilingCore = openEmployee;
+openEmployee = function () {
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon('x')}</button></div><div class="modal-body">
+<h3>Identity & access</h3><div class="form-grid">
+<label>Employee name *<input name="name" required/></label>
+<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label>
+<label>Job title<input name="title"/></label>
+<label>Department<input name="department"/></label>
+<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required/></label>
+<label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label>
+<label class="full">Technician dispatch name <input name="techName"/></label>
+</div>
+<h3>Employment & pay</h3><div class="form-grid">
+<label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label>
+<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label>
+<label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label>
+<label>Start date<input name="startDate" type="date" value="${filingIsoDate()}"/></label>
+<label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label>
+<label>Phone<input name="phone" type="tel"/></label>
+<label class="full">Home address<input name="address"/></label>
+<label class="full">Emergency contact<input name="emergencyContact"/></label>
+</div>
+<h3>Form W-4 / withholding (Pub 15-T 2026)</h3><div class="form-grid">
+<label>Filing status<select name="w4FilingStatus"><option value="single">Single / Married filing separately</option><option value="married_joint">Married filing jointly</option><option value="head_of_household">Head of household</option></select></label>
+<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false">No</option><option value="true">Yes — multiple jobs</option></select></label>
+<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="0"/></label>
+<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="0"/></label>
+<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="0"/></label>
+<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="0"/></label>
+<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="0"/></label>
+<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="0"/><small>TX = 0</small></label>
+<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX"/></label>
+</div>
+<div class="ledger-note">${icon('info', 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
+</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon('user-plus', 14)} Create profile</button></div></form>`);
+  document.querySelector('#employee-email')?.focus({ preventScroll: true });
+  document.querySelector('#employee-form').onsubmit = async event => {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const email = String(data.workEmail || '').trim().toLowerCase();
+    const button = form.querySelector('button.primary');
+    if (!email || !email.includes('@')) { toast('Enter a valid work email address'); return; }
+    if (state.users.some(user => String(user.email || '').toLowerCase() === email)) { toast('An employee profile already uses that email'); return; }
+    if (state.users.some(user => user.employeeId === data.employeeId.trim())) { toast('An employee already uses that employee ID'); return; }
+    if (data.role === 'technician' && !String(data.techName || '').trim()) { toast('Add the technician dispatch name'); return; }
+    const record = {
+      id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(),
+      active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate,
+      employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(),
+      emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus,
+      w4FilingStatus: data.w4FilingStatus, w4Step2Checkbox: data.w4Step2Checkbox === 'true',
+      w4DependentCredits: Number(data.w4DependentCredits) || 0, w4OtherIncome: Number(data.w4OtherIncome) || 0,
+      w4Deductions: Number(data.w4Deductions) || 0, w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
+      pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
+      stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
+      federalWithholdingRate: 0,
+      ssn: String(data.ssn || '').replace(/\D/g, '').slice(-4),
+    };
+    if (button) button.disabled = true;
+    try {
+      const saved = await apiFetch('/entities/employees', { method: 'POST', body: JSON.stringify(record) });
+      const value = saved?.queued ? record : saved || record;
+      state.users.push(value);
+      save();
+      closeModal();
+      toast(`${value.name || data.name} profile created`);
+      render();
+    } catch (error) {
+      toast(error.message || 'Employee could not be saved');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+  void openEmployeeFilingCore;
+};
+
+const bindFilingCore = bindExpandedFeatures;
+bindExpandedFeatures = function () {
+  bindFilingCore();
+  document.querySelectorAll('[data-tax-preset]').forEach(button => {
+    button.onclick = () => {
+      const presets = filingPeriodPresets();
+      const p = presets[button.dataset.taxPreset];
+      if (!p) return;
+      const form = document.querySelector('#tax-report-form');
+      if (form) {
+        form.elements.from.value = p.from;
+        form.elements.to.value = p.to;
+      }
+    };
+  });
+  const taxForm = document.querySelector('#tax-report-form');
+  if (taxForm && !taxForm.dataset.filingBound) {
+    taxForm.dataset.filingBound = '1';
+    taxForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const data = Object.fromEntries(new FormData(event.target));
+      await generateTaxReportFromForm(data.from, data.to);
+      render();
+    }, { capture: true });
+  }
+  document.querySelector('#export-tax-csv')?.addEventListener('click', exportSalesTaxCsv);
+  document.querySelector('#export-tx-webfile')?.addEventListener('click', exportTexasWebfilePackage);
+  document.querySelector('#open-filing-center')?.addEventListener('click', () => { filingCenterOpen = true; render(); });
+  document.querySelector('#close-filing-center')?.addEventListener('click', () => { filingCenterOpen = false; render(); });
+  document.querySelectorAll('[data-taxpkg-preset]').forEach(button => {
+    button.onclick = () => {
+      const presets = filingPeriodPresets();
+      taxPackageRange = presets[button.dataset.taxpkgPreset];
+      render();
+    };
+  });
+  document.querySelector('#taxpkg-apply')?.addEventListener('click', () => {
+    taxPackageRange = {
+      from: document.querySelector('#taxpkg-from')?.value,
+      to: document.querySelector('#taxpkg-to')?.value,
+    };
+    render();
+  });
+  document.querySelector('#taxpkg-export-pl')?.addEventListener('click', exportTaxPackagePl);
+  document.querySelector('#taxpkg-export-exp')?.addEventListener('click', exportTaxPackageExpenses);
+  document.querySelector('#taxpkg-print')?.addEventListener('click', () => window.print());
+  document.querySelector('#payroll-prev')?.addEventListener('click', () => {
+    const period = activePayrollPeriod();
+    const d = new Date(`${period.key}T12:00:00`);
+    d.setDate(d.getDate() - 7);
+    payrollPeriodKey = weekPeriod(d).key;
+    render();
+  });
+  document.querySelector('#payroll-next')?.addEventListener('click', () => {
+    const period = activePayrollPeriod();
+    const d = new Date(`${period.key}T12:00:00`);
+    d.setDate(d.getDate() + 7);
+    payrollPeriodKey = weekPeriod(d).key;
+    render();
+  });
+  document.querySelector('#payroll-jump')?.addEventListener('change', event => {
+    payrollPeriodKey = weekPeriod(new Date(`${event.target.value}T12:00:00`)).key;
+    render();
+  });
+  document.querySelector('#payroll-export-detail')?.addEventListener('click', exportPayrollDetail);
+  document.querySelector('#payroll-export-941')?.addEventListener('click', export941Worksheet);
+  document.querySelector('#payroll-export-efw2')?.addEventListener('click', exportEfw2Package);
+  document.querySelectorAll('[data-print-w2]').forEach(button => {
+    button.onclick = () => printEmployeeAnnualForm(button.dataset.printW2);
+  });
+};
+
+/* Patch tax settings form fields when settings page renders — extend save handler */
+const bindFilingTaxSettingsCore = bindExpandedFeatures;
+bindExpandedFeatures = function () {
+  bindFilingTaxSettingsCore();
+  const taxForm = document.querySelector('#tax-settings-form');
+  if (taxForm && !taxForm.dataset.filingEnhanced) {
+    taxForm.dataset.filingEnhanced = '1';
+    const grid = taxForm.querySelector('.form-grid') || taxForm;
+    if (!taxForm.querySelector('[name=ein]')) {
+      grid.insertAdjacentHTML('beforeend', `
+<label>Federal EIN<input name="ein" value="${escapeHtml(state.taxSettings.ein || '')}" placeholder="XX-XXXXXXX"/></label>
+<label>TX taxpayer number<input name="texasTaxpayerNumber" value="${escapeHtml(state.taxSettings.texasTaxpayerNumber || '')}" placeholder="1-xxxxxxxxxx-x"/></label>
+<label>WebFile number<input name="webfileNumber" value="${escapeHtml(state.taxSettings.webfileNumber || '')}" placeholder="RTxxxxxx"/></label>
+<label class="full">Local jurisdictions JSON<small>Array of {code,name,kind,rate,required} — city/transit/county/SPD</small>
+<textarea name="jurisdictionsJson" rows="4">${escapeHtml(JSON.stringify(state.taxSettings.jurisdictions || Filing.DEFAULT_TX_JURISDICTIONS, null, 0))}</textarea></label>`);
+    }
+    taxForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const data = Object.fromEntries(new FormData(event.target));
+      let jurisdictions = null;
+      try { jurisdictions = JSON.parse(data.jurisdictionsJson || 'null'); } catch { toast('Jurisdiction JSON is invalid'); return; }
+      const rate = jurisdictions ? Filing.combinedSalesTaxRate(jurisdictions) : (Number(data.rate) || 0);
+      const taxSettings = {
+        state: data.state,
+        taxId: String(data.taxId || '').trim(),
+        rate,
+        filingFrequency: data.filingFrequency,
+        ein: String(data.ein || '').trim(),
+        texasTaxpayerNumber: String(data.texasTaxpayerNumber || '').trim(),
+        webfileNumber: String(data.webfileNumber || '').trim(),
+        jurisdictions,
+      };
+      try {
+        await saveShopEntity('shopsettings', { ...taxSettings, id: 'tax', updatedAt: now() });
+        state.taxSettings = taxSettings;
+        toast('Tax & e-file settings saved');
+        render();
+      } catch (error) {
+        toast(error.message || 'Could not save tax settings');
+      }
+    }, { capture: true });
+  }
+};
+
+/* === MECHPRO_FILING_OVERRIDES_END === */
 void startApp();

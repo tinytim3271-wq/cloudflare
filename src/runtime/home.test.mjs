@@ -7,6 +7,7 @@ import {
   greetingForNow,
   localIsoDate,
   mergeRemoteCollection,
+  pendingCreateIdsForCollection,
   sidebarCatalog,
   visibleSidebar,
 } from './home.js';
@@ -91,11 +92,33 @@ test('mergeRemoteCollection keeps local demo rows when the API is empty', () => 
   assert.deepEqual(mergeRemoteCollection('orders', [], [], isSample), []);
 });
 
-test('mergeRemoteCollection keeps local-only non-demo rows while remote data loads', () => {
-  const local = [{ id: 'RO-1048' }, { id: 'RO-3001', customer: 'Pending sync' }];
+test('mergeRemoteCollection keeps only queued creates missing from remote data', () => {
+  const local = [
+    { id: 'RO-1048' },
+    { id: 'RO-3001', customer: 'Pending sync' },
+    { id: 'RO-3002', customer: 'Deleted remotely' },
+  ];
   const isSample = (type, record) => type === 'orders' && record.id === 'RO-1048';
   assert.deepEqual(
-    mergeRemoteCollection('orders', [{ id: 'RO-2000' }], local, isSample),
+    mergeRemoteCollection('orders', [{ id: 'RO-2000' }], local, isSample, ['RO-3001']),
     [{ id: 'RO-3001', customer: 'Pending sync' }, { id: 'RO-2000' }],
+  );
+  assert.deepEqual(
+    mergeRemoteCollection('orders', [], local, isSample, ['RO-3001']),
+    [{ id: 'RO-3001', customer: 'Pending sync' }],
+  );
+});
+
+test('pendingCreateIdsForCollection reads only matching queued POST records', () => {
+  const queue = [
+    { method: 'POST', path: '/entities/orders', body: '{"id":"RO-3001"}' },
+    { method: 'PUT', path: '/entities/orders/RO-3002', body: '{"id":"RO-3002"}' },
+    { method: 'POST', path: '/entities/inspectiontemplates', body: '{"id":"template-1"}' },
+    { method: 'POST', path: '/entities/orders', body: '{' },
+  ];
+  assert.deepEqual(pendingCreateIdsForCollection('orders', queue), ['RO-3001']);
+  assert.deepEqual(
+    pendingCreateIdsForCollection('inspectionTemplates', queue, { inspectiontemplates: 'inspectionTemplates' }),
+    ['template-1'],
   );
 });

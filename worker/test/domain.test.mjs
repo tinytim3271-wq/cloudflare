@@ -65,6 +65,7 @@ test('invoice balance and tax report account for completed payments', () => {
   assert.deepEqual(buildTaxReport(payments, [{ number: 'INV-1', amount: 108.25 }], 8.25, '2026-09-01', '2026-09-30').totals, {
     gross: 54.13,
     taxable: 50,
+    nontaxable: 0,
     tax: 4.13,
   });
 });

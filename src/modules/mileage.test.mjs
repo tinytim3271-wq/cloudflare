@@ -51,6 +51,14 @@ test('applyMileageToEstimate replaces prior mileage line and updates totals', ()
   assert.equal(estimate.total, 160.32);
 });
 
+test('mileage-only estimate preview includes mileage and tax', () => {
+  const estimate = applyMileageToEstimate({ lines: [], fees: [] }, 20, 0.68, 8.25);
+
+  assert.equal(estimate.mileageCharge, 13.6);
+  assert.equal(estimate.tax, 1.12);
+  assert.equal(estimate.total, 14.72);
+});
+
 test('applyMileageToOrder stores trip fields and invoice-ready estimate', () => {
   const order = applyMileageToOrder({
     labor: 165,
@@ -77,4 +85,80 @@ test('applyMileageToOrder stores trip fields and invoice-ready estimate', () => 
   assert.equal(order.jobAddress, '500 Main St');
   assert.equal(order.estimate.lines.at(-1).kind, 'mileage');
   assert.equal(order.total, order.estimate.total);
+});
+
+test('applyMileageToOrder preserves parts when recalculating mileage without an estimate', () => {
+  const order = applyMileageToOrder({
+    labor: 0,
+    laborHours: 0,
+    parts: 50,
+    tax: 0,
+    total: 63.6,
+    mileageCharge: 13.6,
+  }, { oneWayMiles: 10, rate: 0.68, taxRate: 0 });
+
+  assert.equal(order.estimate.parts, 63.6);
+  assert.equal(order.total, 63.6);
+});
+
+test('applyMileageToOrder preserves stored work-order hours over estimate hours', () => {
+  const withLines = applyMileageToOrder({
+    laborHours: 3,
+    estimate: {
+      lines: [{ service: 'Diag', hours: 1, labor: 165, parts: 0, total: 165 }],
+      labor: 165,
+      laborHours: 1,
+      parts: 0,
+      fees: [],
+    },
+  }, { oneWayMiles: 0 });
+  const snapshot = applyMileageToOrder({
+    laborHours: 3,
+    estimate: {
+      lines: [],
+      labor: 165,
+      laborHours: 1,
+      parts: 0,
+      subtotal: 165,
+      tax: 0,
+      total: 165,
+    },
+  }, { oneWayMiles: 0 });
+
+  assert.equal(withLines.laborHours, 3);
+  assert.equal(snapshot.laborHours, 3);
+});
+
+test('applyMileageToOrder preserves aggregate-only imported charges', () => {
+  const order = applyMileageToOrder({
+    total: 89.95,
+    labor: 0,
+    laborHours: 0,
+    parts: 0,
+    tax: 0,
+  }, { oneWayMiles: 0, taxRate: 8.25 });
+
+  assert.equal(order.estimate.subtotal, 89.95);
+  assert.equal(order.total, 89.95);
+  assert.equal(order.tax, 0);
+
+  const withMileage = applyMileageToOrder(order, { oneWayMiles: 10, taxRate: 8.25 });
+  assert.equal(withMileage.estimate.subtotal, 103.55);
+  assert.equal(withMileage.tax, 1.12);
+  assert.equal(withMileage.total, 104.67);
+
+  const savedAgain = applyMileageToOrder(withMileage, { oneWayMiles: 10, taxRate: 8.25 });
+  assert.equal(savedAgain.total, withMileage.total);
+  assert.equal(savedAgain.tax, withMileage.tax);
+
+  const importedTax = applyMileageToOrder({
+    total: 97.37,
+    labor: 0,
+    laborHours: 0,
+    parts: 0,
+    tax: 7.42,
+  }, { oneWayMiles: 10, taxRate: 8.25 });
+  assert.equal(importedTax.estimate.subtotal, 103.55);
+  assert.equal(importedTax.tax, 8.54);
+  assert.equal(importedTax.total, 112.09);
 });

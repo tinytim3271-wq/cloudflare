@@ -98,7 +98,7 @@ export function canWriteEntity(type, role) {
 export function redactEmployee(record, role) {
   if (['admin', 'office'].includes(role)) return record;
   const copy = { ...record };
-  ['payRate', 'payFrequency', 'employmentType', 'address', 'emergencyContact', 'taxStatus', 'phone']
+  ['payRate', 'payFrequency', 'employmentType', 'address', 'emergencyContact', 'taxStatus', 'phone', 'federalWithholdingRate', 'stateWithholdingRate']
     .forEach(field => delete copy[field]);
   return copy;
 }
@@ -136,19 +136,26 @@ export function buildTaxReport(payments, invoices, fallbackRate, from, to) {
       const invoice = invoices.find(item => item.number === payment.invoiceNumber);
       const breakdown = invoiceTaxBreakdown(invoice, fallbackRate);
       const ratio = invoice ? Number(payment.amount) / (Number(invoice.amount) || Number(payment.amount)) : 0;
+      const gross = Number(payment.amount);
+      const taxable = Math.round(breakdown.subtotal * ratio * 100) / 100;
+      const tax = Math.round(breakdown.tax * ratio * 100) / 100;
+      const nontaxable = Math.max(0, Math.round((gross - taxable - tax) * 100) / 100);
       return {
         date: payment.receivedAt,
         invoiceNumber: payment.invoiceNumber,
         customer: payment.customer,
-        gross: Number(payment.amount),
-        taxable: Math.round(breakdown.subtotal * ratio * 100) / 100,
-        tax: Math.round(breakdown.tax * ratio * 100) / 100,
+        gross,
+        taxable,
+        nontaxable,
+        tax,
+        taxRate: breakdown.taxRate ?? fallbackRate,
       };
     }).sort((left, right) => String(left.date).localeCompare(String(right.date)));
   const totals = rows.reduce((sum, row) => ({
     gross: Math.round((sum.gross + row.gross) * 100) / 100,
     taxable: Math.round((sum.taxable + row.taxable) * 100) / 100,
+    nontaxable: Math.round((sum.nontaxable + row.nontaxable) * 100) / 100,
     tax: Math.round((sum.tax + row.tax) * 100) / 100,
-  }), { gross: 0, taxable: 0, tax: 0 });
+  }), { gross: 0, taxable: 0, nontaxable: 0, tax: 0 });
   return { rows, totals };
 }

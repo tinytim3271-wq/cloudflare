@@ -680,13 +680,15 @@ async function geocodeAddress(address) {
   return { lat: Number(hit.lat), lon: Number(hit.lon), label: hit.display_name || query };
 }
 
-async function drivingMiles(from, to) {
+export async function drivingMiles(from, to) {
   const url = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
   const response = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!response.ok) throw new HttpError(502, 'Route calculation is unavailable');
   const payload = await response.json();
-  const meters = Number(payload?.routes?.[0]?.distance);
-  if (!Number.isFinite(meters) || meters <= 0) throw new HttpError(422, 'No driving route found between those addresses');
+  const meters = payload?.routes?.[0]?.distance;
+  if (typeof meters !== 'number' || !Number.isFinite(meters) || meters < 0) {
+    throw new HttpError(422, 'No driving route found between those addresses');
+  }
   return Math.round((meters / 1609.344) * 10) / 10;
 }
 
