@@ -47,14 +47,29 @@ test('reference work-order fill is explicit data and preserves sensitive shop no
   const draft = workOrderDraftFromEstimate();
   assert.equal(draft.customer, 'Jordan Example');
   assert.equal(draft.vehicle, '2016 Mercedes-Benz GLA250');
-  assert.equal(draft.vin, 'DEMO-VEHICLE-VIN');
+  assert.match(draft.vin, /^[A-HJ-NPR-Z0-9]{17}$/);
   assert.equal(draft.estimate.total, 2072.02);
   assert.match(draft.complaint, /Open Labor Project/);
-  assert.match(draft.complaint, /Obtain written authorization/);
+  assert.doesNotMatch(draft.complaint, /Obtain written authorization/);
+  assert.match(draft.shopNotes.join('\n'), /Obtain written authorization/);
   assert.equal(REFERENCE_ESTIMATE.customer.email, 'customer@example.test');
   assert.equal(REFERENCE_ESTIMATE.insurance.policy, 'TEST-POLICY-001');
   assert.equal('dob' in REFERENCE_ESTIMATE.customer, false);
   assert.equal('driverLicense' in REFERENCE_ESTIMATE.customer, false);
+});
+
+test('assistant estimate conversion uses shop-specific labor and tax pricing', () => {
+  const estimate = estimateFromAssistantDraft({
+    draft: {
+      parts: [{ description: 'Part', quantity: 1, unitPrice: 100 }],
+      labor: [{ description: 'Inspection', hours: 1 }],
+    },
+  }, { laborRate: 175, taxRate: 6.5 });
+
+  assert.equal(estimate.labor, 175);
+  assert.equal(estimate.taxRate, 6.5);
+  assert.equal(estimate.tax, 18.22);
+  assert.equal(estimate.total, 298.47);
 });
 
 test('assistant draft totals are recomputed with shop rules instead of trusting model totals', () => {

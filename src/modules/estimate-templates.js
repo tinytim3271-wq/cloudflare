@@ -5,11 +5,15 @@ const REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 }
 
 export function calculateShopEstimate(lines = [], {
   taxRate = 0,
+  laborRate = 0,
   discountPercent = 0,
   discountReason = '',
   shopSupplies,
 } = {}) {
-  const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
+  const normalizedLines = lines.map((line, index) => normalizeEstimateLine(
+    line.type === 'labor' && line.laborRate == null ? { ...line, laborRate } : line,
+    index,
+  ));
   const labor = normalizedLines
     .filter(line => line.type === 'labor' && line.approvalStatus !== 'declined')
     .reduce((sum, line) => sum + line.total, 0);
@@ -136,7 +140,7 @@ export const REFERENCE_ESTIMATE = Object.freeze({
   },
   vehicle: {
     description: '2016 Mercedes-Benz GLA250',
-    vin: 'DEMO-VEHICLE-VIN',
+    vin: '1M8GDM9AXKP042788',
     plate: 'DEMO-01',
   },
   insurance: {
@@ -181,10 +185,9 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
     `Claimant: ${customer.name || 'Not provided'}.`,
     estimate.complaint,
     insurance.company || insurance.policy
-      ? `Insurance: ${insurance.company || 'Carrier not provided'}; policy ${insurance.policy || 'not provided'}; claim number not yet assigned.`
+      ? `Insurance: ${insurance.company || 'Carrier not provided'}; policy ${insurance.policy || 'not provided'}; claim number ${insurance.claimNumber || 'not yet assigned'}.`
       : '',
     laborSource ? `Labor source: ${laborSource}` : '',
-    ...(estimate.shopNotes || []).map(note => `Shop note: ${note}`),
   ].filter(Boolean);
   return {
     sourceEstimateNumber: estimate.number || '',
@@ -198,18 +201,21 @@ export function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
     requestedServices: (estimate.requestedServices || (estimate.lines || []).map(line => line.description)).join('\n'),
     estimate: calculateShopEstimate(estimate.lines || [], {
       taxRate: estimate.taxRate,
+      laborRate: estimate.laborRate,
       discountPercent: estimate.discountPercent,
       discountReason: estimate.discountReason,
       shopSupplies: estimate.fees?.find(fee => fee.description === 'Shop supplies')?.amount,
     }),
     exclusions: estimate.exclusions || [],
     insurance,
+    shopNotes: (estimate.shopNotes || []).map(String),
     plate: vehicle.plate || '',
   };
 }
 
-export function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0 } = {}) {
+export function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate = 0, shopSupplies } = {}) {
   const draft = action.draft || action;
+  const resolvedLaborRate = Math.max(0, Number(laborRate) || 0);
   const partLines = (draft.parts || []).map((part, index) => ({
     id: `assistant-part-${index + 1}`,
     type: 'part',
@@ -226,13 +232,15 @@ export function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate
     description: String(labor.description || 'Labor'),
     notes: String(labor.notes || labor.source || ''),
     hours: Math.max(0, Number(labor.hours) || 0),
-    laborRate: Math.max(0, Number(laborRate) || 0),
+    laborRate: resolvedLaborRate,
     laborSource: String(labor.source || 'Customer conversation; verify before authorization'),
   }));
   const totals = calculateShopEstimate([...partLines, ...laborLines], {
+    laborRate: resolvedLaborRate,
     taxRate,
     discountPercent: draft.discountPercent,
     discountReason: draft.discountReason,
+    shopSupplies,
   });
   return {
     id: `assistant-estimate-${Date.now()}`,

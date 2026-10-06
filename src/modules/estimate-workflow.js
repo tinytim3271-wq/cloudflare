@@ -20,6 +20,14 @@ export function normalizeTechnicianIds(line = {}) {
   return [...new Set(source.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
+export function orderHasTechnician(order = {}, technician = {}) {
+  if (technician.name && order.tech === technician.name) return true;
+  const id = String(technician.id || '');
+  return Boolean(id && (order.estimate?.lines || []).some(line => (
+    line.type === 'labor' && normalizeTechnicianIds(line).includes(id)
+  )));
+}
+
 export function normalizeEstimateLine(line = {}, index = 0) {
   const type = line.type === 'part' ? 'part' : 'labor';
   const quantity = Math.max(0, Number(line.quantity ?? (type === 'part' ? 1 : line.hours)) || 0);
@@ -56,11 +64,12 @@ export function laborLinePrintRows(lines = [], technicians = []) {
     .filter(line => line.type === 'labor')
     .flatMap(line => {
       const technicianIds = normalizeTechnicianIds(line);
-      if (!technicianIds.length) return [{ line, technicianId: null, technicianName: 'Unassigned' }];
-      return technicianIds.map(technicianId => ({
+      const assignments = !technicianIds.length ? [null] : technicianIds;
+      return assignments.map((technicianId, index) => ({
         line,
         technicianId,
-        technicianName: names.get(technicianId) || 'Technician unavailable',
+        technicianName: technicianId ? names.get(technicianId) || 'Technician unavailable' : 'Unassigned',
+        lineTotal: index === 0 ? line.total : null,
       }));
     });
 }
