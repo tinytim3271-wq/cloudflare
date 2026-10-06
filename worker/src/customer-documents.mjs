@@ -309,9 +309,11 @@ async function recordResponse(request, env, link, row, document) {
     document.laborHours = nextEstimate.laborHours;
     document.parts = nextEstimate.parts;
     document.tax = nextEstimate.tax;
-    document.status = 'approved';
+    document.status = document.estimateRevisionPreviousStatus || 'approved';
     document.linesLockedAt = timestamp;
     document.estimateApproval = { status: 'approved', ...signature, decisions };
+    document.estimateRevisionPending = false;
+    delete document.estimateRevisionPreviousStatus;
   } else {
     document.signature = signature;
   }

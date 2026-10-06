@@ -6,7 +6,9 @@ import {
   calculateEstimate,
   declinedEstimate,
   invoiceRecordForOrder,
+  invoiceWithEditedWorkOrder,
   normalizeEstimateLine,
+  workOrderWithEditedEstimate,
 } from './estimate-workflow.js';
 
 test('estimate keeps labor and typed or inventory parts on one card', () => {
@@ -132,7 +134,57 @@ test('full-card decline marks every line declined and zeros money including fees
 });
 
 test('line normalization uses quantity pricing for parts', () => {
-  const line = normalizeEstimateLine({ type: 'part', description: 'Battery', quantity: 2, unitPrice: 123.45 });
+  const line = normalizeEstimateLine({ type: 'part', description: 'Battery', partNumber: 'BAT-48', quantity: 2, unitPrice: 123.45 });
   assert.equal(line.total, 246.9);
   assert.equal(line.hours, 0);
+  assert.equal(line.partNumber, 'BAT-48');
+});
+
+test('editing approved work order lines recalculates totals and requires renewed approval', () => {
+  const revisedAt = '2026-10-06T04:00:00.000Z';
+  const revised = workOrderWithEditedEstimate({
+    id: 'RO-1056',
+    status: 'in_progress',
+    linesLockedAt: '2026-10-05T12:00:00.000Z',
+    estimateApproval: { status: 'approved', signedAt: '2026-10-05T12:00:00.000Z' },
+  }, {
+    taxRate: 8.25,
+    fees: [{ description: 'Shop supplies', amount: 12 }],
+    lines: [
+      { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 2, laborRate: 140 },
+      { id: 'maf', type: 'part', description: 'MAF sensor', partNumber: 'MAF-1056', quantity: 1, unitPrice: 175 },
+    ],
+  }, revisedAt);
+
+  assert.equal(revised.labor, 280);
+  assert.equal(revised.parts, 175);
+  assert.equal(revised.total, 505.53);
+  assert.equal(revised.estimate.lines[1].partNumber, 'MAF-1056');
+  assert.equal(revised.estimateApproval, null);
+  assert.equal(revised.linesLockedAt, null);
+  assert.equal(revised.estimateRevisionPending, true);
+  assert.equal(revised.status, 'in_progress');
+});
+
+test('editing an invoiced work order synchronizes unpaid invoice lines and totals', () => {
+  const order = workOrderWithEditedEstimate({ id: 'RO-1056', status: 'invoiced' }, {
+    taxRate: 8.25,
+    fees: [],
+    lines: [
+      { id: 'labor', type: 'labor', description: 'MAF diagnosis', hours: 1, laborRate: 140 },
+      { id: 'maf', type: 'part', description: 'MAF sensor', partNumber: 'MAF-1056', quantity: 1, unitPrice: 175 },
+    ],
+  });
+  const invoice = invoiceWithEditedWorkOrder({
+    number: 'INV-1056',
+    signature: { signedAt: '2026-10-05T12:00:00.000Z' },
+  }, order, '2026-10-06T04:00:00.000Z');
+
+  assert.equal(invoice.lines.length, 2);
+  assert.equal(invoice.lines[1].partNumber, 'MAF-1056');
+  assert.equal(invoice.subtotal, 315);
+  assert.equal(invoice.tax, 25.99);
+  assert.equal(invoice.amount, 340.99);
+  assert.equal(invoice.signature, null);
+  assert.equal(invoice.revisedAt, '2026-10-06T04:00:00.000Z');
 });

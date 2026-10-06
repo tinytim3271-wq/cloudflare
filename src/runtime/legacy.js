@@ -19,7 +19,9 @@ import {
   billableEstimateLines,
   calculateEstimate,
   invoiceRecordForOrder,
+  invoiceWithEditedWorkOrder,
   normalizeEstimateLine,
+  workOrderWithEditedEstimate,
 } from '../modules/estimate-workflow.js';
 const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
@@ -227,11 +229,11 @@ window.addEventListener("online", flushMutationQueue);
 async function pushCustomerToApi(record) { record.id ||= mutationId(); try { await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync customer to API", error) } }
 async function loadCustomersFromApi() { try { state.customers = await apiFetch("/entities/customers"); cloudSyncStatus = "connected"; save() } catch (error) { console.error("Failed to load customers from API; using local data", error); cloudSyncStatus = authSession() ? "offline" : "local" } }
 async function pushOrderToApi(record) { try { const saved = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) }); return saved?.queued ? record : saved || record } catch (error) { console.error("Failed to sync order to API", error); throw error } }
-async function updateOrderInApi(record) { try { const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }); return saved?.queued ? record : saved || record } catch (error) { console.error("Failed to sync order update to API", error); throw error } }
+async function updateOrderInApi(record, { throwOnError = true } = {}) { try { const saved = await apiFetch(`/entities/orders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) }); return saved?.queued ? record : saved || record } catch (error) { console.error("Failed to sync order update to API", error); if (throwOnError) throw error; return null } }
 async function deleteOrderInApi(id) { try { await apiFetch(`/entities/orders/${encodeURIComponent(id)}`, { method: "DELETE" }) } catch (error) { console.error("Failed to delete order in API", error) } }
 async function loadOrdersFromApi() { try { state.orders = await apiFetch("/entities/orders"); cloudSyncStatus = "connected"; save() } catch (error) { console.error("Failed to load orders from API; using local data", error); cloudSyncStatus = authSession() ? "offline" : "local" } }
 async function pushInvoiceToApi(record) { try { await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync invoice to API", error) } }
-async function updateInvoiceInApi(record) { try { await apiFetch(`/entities/invoices/${encodeURIComponent(record.number)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync invoice update to API", error) } }
+async function updateInvoiceInApi(record, { throwOnError = false } = {}) { try { return await apiFetch(`/entities/invoices/${encodeURIComponent(record.number)}`, { method: "PUT", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync invoice update to API", error); if (throwOnError) throw error; return null } }
 async function loadInvoicesFromApi() { try { state.invoices = await apiFetch("/entities/invoices"); save() } catch (error) { console.error("Failed to load invoices from API; using local data", error) } }
 async function pushPaymentToApi(record) { try { await apiFetch("/entities/payments", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync payment to API", error) } }
 async function loadPaymentsFromApi() { try { state.payments = await apiFetch("/entities/payments"); save() } catch (error) { console.error("Failed to load payments from API; using local data", error) } }
@@ -605,7 +607,7 @@ printInspectionReport = function (inspection) { if (inspection?.catalogId) { pri
 function invoiceNumberForOrder(order) { return `INV-${String(order.id || Date.now()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}` }
 async function ensureInvoiceForOrder(order) { if (!["completed", "invoiced"].includes(order.status)) return null; const existing = state.invoices.find(invoice => invoice.ro === order.id); if (existing) return existing; Object.assign(order, Mileage.applyMileageToOrder(order, { rate: shopMileageRate(), taxRate: state.taxSettings.rate })); const number = invoiceNumberForOrder(order), estimate = order.estimate || {}, amount = Math.max(0, Number(order.total ?? estimate.total) || 0), tax = Math.max(0, Number(order.tax ?? estimate.tax) || 0), subtotal = Math.max(0, Number(estimate.subtotal) || Math.max(0, amount - tax)), issued = new Date(), due = new Date(issued); due.setDate(due.getDate() + 14); const invoice = { id: number, number, ro: order.id, customer: order.customer, vehicle: order.vehicle, amount, subtotal, tax, taxRate: Number(estimate.taxRate ?? state.taxSettings.rate) || 0, status: "sent", date: issued.toISOString().slice(0, 10), due: due.toISOString().slice(0, 10), lines: estimate.lines || [], createdAt: now() }; const saved = await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(invoice) }), record = saved?.queued ? invoice : saved; state.invoices.push(record); order.invoiceNumber = number; save(); return record }
 const updateOrderWithInvoiceCore = updateOrderInApi;
-updateOrderInApi = async function (record) { if (["completed", "invoiced"].includes(record.status)) { try { await ensureInvoiceForOrder(record) } catch (error) { console.error("Failed to create invoice for completed order", error); toast("Invoice creation failed; the work order was not completed"); throw error } } return updateOrderWithInvoiceCore(record) };
+updateOrderInApi = async function (record, options) { if (["completed", "invoiced"].includes(record.status)) { try { await ensureInvoiceForOrder(record) } catch (error) { console.error("Failed to create invoice for completed order", error); toast("Invoice creation failed; the work order was not completed"); throw error } } return updateOrderWithInvoiceCore(record, options) };
 
 const sampleOrderIds = new Set(["RO-1044", "RO-1046", "RO-1048", "RO-1049", "RO-1050", "RO-1051", "RO-1052"]), sampleInvoiceIds = new Set(["INV-2032", "INV-2036", "INV-2040", "INV-2041"]), sampleCustomerNames = new Set(["Demo Customer A", "Demo Fleet Co", "Demo Customer B", "Demo Customer C", "Demo Customer D", "Demo Retail Co"]);
 let onboardingCheckComplete = false;
@@ -1052,6 +1054,7 @@ function estimateEditorLine(line = {}, index = 0, removable = true) {
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
     </div>
@@ -1059,7 +1062,7 @@ function estimateEditorLine(line = {}, index = 0, removable = true) {
   </article>`;
 }
 
-function estimateFromEditor(root) {
+function estimateFromEditor(root, options = root?._estimateOptions || {}) {
   const lines = [...root.querySelectorAll(".job-estimate-line")].map((row, index) => {
     const type = row.querySelector(".job-line-type").value;
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
@@ -1070,6 +1073,7 @@ function estimateFromEditor(root) {
       type,
       description: row.querySelector(".job-line-description").value.trim(),
       notes: row.querySelector(".job-line-notes").value.trim(),
+      partNumber: type === "part" ? row.querySelector(".job-line-part-number").value.trim() : "",
       quantity,
       unitPrice,
       hours: type === "labor" ? quantity : 0,
@@ -1079,7 +1083,8 @@ function estimateFromEditor(root) {
       committedQuantity: type === "part" && inventory ? quantity : 0,
     }, index);
   }).filter(line => line.description && line.quantity > 0);
-  return calculateEstimate(lines, state.taxSettings.rate, lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
+  const fees = options.fees ?? (lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
+  return calculateEstimate(lines, options.taxRate ?? state.taxSettings.rate, fees);
 }
 
 function refreshEstimateEditor(root) {
@@ -1088,19 +1093,21 @@ function refreshEstimateEditor(root) {
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     row.querySelector(".job-inventory-field").hidden = type !== "part";
+    row.querySelector(".job-part-number-field").hidden = type !== "part";
     row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
     row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
     row.querySelector(".job-line-total b").textContent = money(quantity * rate);
   });
   const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
-  if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
+  if (summary) summary.innerHTML = `<span>Labor <b>${money(estimate.labor)}</b></span><span>Parts <b>${money(estimate.parts)}</b></span><span>Subtotal <b>${money(estimate.subtotal)}</b></span><span>Tax <b>${money(estimate.tax)}</b></span><strong>Total ${money(estimate.total)}</strong>`;
   const total = document.querySelector("#new-estimate-total");
   if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
 }
 
-function bindEstimateEditor(root) {
+function bindEstimateEditor(root, options) {
   if (!root) return;
+  if (options) root._estimateOptions = options;
   const bindRows = () => {
     root.querySelectorAll("input,textarea,select").forEach(control => control.oninput = () => refreshEstimateEditor(root));
     root.querySelectorAll(".job-line-type").forEach(control => control.onchange = () => refreshEstimateEditor(root));
@@ -1109,6 +1116,7 @@ function bindEstimateEditor(root) {
       if (item) {
         row.querySelector(".job-line-description").value = item.name;
         row.querySelector(".job-line-rate").value = Number(item.price || 0).toFixed(2);
+        row.querySelector(".job-line-part-number").value = item.sku || "";
       }
       refreshEstimateEditor(root);
     });
@@ -1122,7 +1130,7 @@ function bindEstimateEditor(root) {
   refreshEstimateEditor(root);
 }
 
-newOrderEstimateRow = function (line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: 165 }) {
+newOrderEstimateRow = function (line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 165) }) {
   return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
 };
 
@@ -1150,7 +1158,7 @@ bindNewOrderEstimator = function () {
     const services = (requested || complaint).split(/\n|,|;/).map(value => value.trim()).filter(Boolean);
     const generated = services.flatMap((service, index) => {
       const source = estimateLocal(vehicle, service).lines[0];
-      const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : 165 }, index);
+      const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 165) }, index);
       const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
       return [labor, ...parts];
     });
@@ -1158,7 +1166,7 @@ bindNewOrderEstimator = function () {
     bindEstimateEditor(root);
     toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
   };
-  document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 });
+  document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate || 165) });
   document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
   bindEstimateEditor(root);
 };
@@ -1227,9 +1235,11 @@ function onsiteSignatureModal(kind, record) {
         record.laborHours = approved.laborHours;
         record.parts = approved.parts;
         record.tax = approved.tax;
-        record.status = "approved";
+        record.status = record.estimateRevisionPreviousStatus || "approved";
         record.linesLockedAt = signature.signedAt;
         record.estimateApproval = { status: "approved", ...signature, decisions };
+        record.estimateRevisionPending = false;
+        delete record.estimateRevisionPreviousStatus;
         await updateOrderInApi(record);
       } else {
         record.signature = signature;
@@ -1247,16 +1257,16 @@ function onsiteSignatureModal(kind, record) {
 }
 
 function jobCardLineTable(estimate) {
-  return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.inventorySku ? ` · ${escapeHtml(line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
+  return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.partNumber || line.inventorySku ? ` · #${escapeHtml(line.partNumber || line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
 }
 
 function jobWorkflowSteps(order, invoice) {
-  const approval = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status);
-  return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+  const approval = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+  return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
 }
 
 async function completeJobCard(order) {
-  const explicitlyApproved = order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status);
+  const explicitlyApproved = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status));
   if (!explicitlyApproved) return toast("Approve the estimate before completing this job");
   if (!await commitLinkedInventory(order)) return;
   order.status = "completed";
@@ -1290,25 +1300,50 @@ openOrder = function (id) {
   if (!order) return;
   order.estimate = coherentOrderEstimate(order);
   const estimate = order.estimate, invoice = state.invoices.find(item => item.ro === order.id);
-  const canManage = ["admin", "service_writer"].includes(currentUser().role);
-  const locked = Boolean(order.linesLockedAt || ["approved", "declined"].includes(order.estimateApproval?.status) || ["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-  const editor = canManage && !locked ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit estimate lines</h3><p>Use typed parts or select current inventory. Stock is deducted only when the invoice is generated.</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="secondary" id="save-job-lines" type="button">${icon("save", 14)} Save estimate lines</button></section>` : "";
-  const approvalActions = order.status === "estimate" && canManage && order.estimateApproval?.status !== "declined" ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
+  const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
+  const paidInvoice = invoice && invoicePaid(invoice) > 0;
+  const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+  const defaultLaborRate = estimate.lines.find(line => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
+  const editNotice = paidInvoice
+    ? "Line items are locked because this invoice has a recorded payment."
+    : invoice
+      ? "Saving also updates the unpaid invoice and clears its signature."
+      : wasApproved
+        ? "Saving creates a revision and clears the prior customer approval."
+        : "Changes recalculate labor, parts, tax, and total before saving.";
+  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+  const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
-  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} · <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} · ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate · parts + labor</h3><p>${locked ? "Lines locked after approval." : "Review and edit before approval."}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}<div class="detail-hero"><div>${badge(order.status)}<h2>${escapeHtml(order.customer)}</h2><p>${escapeHtml(order.vehicle)} · <span class="mono">${escapeHtml(order.vin)}</span></p></div><div class="amount">${money(order.total)}</div></div><section class="job-summary"><div><span>Concern</span><p>${escapeHtml(order.complaint)}</p></div><div><span>Assignment</span><p>${escapeHtml(order.tech || "Unassigned")} · ${escapeHtml(order.bay || "Unassigned")}</p></div></section><section><div class="job-section-head"><div><h3>Estimate · parts + labor</h3><p>${editNotice}</p></div></div>${jobCardLineTable(estimate)}<div class="job-card-totals"><span>Labor ${money(estimate.labor)}</span><span>Parts ${money(estimate.parts)}</span><span>Subtotal ${money(estimate.subtotal)}</span><span>Tax ${money(estimate.tax)}</span><strong>${money(estimate.total)}</strong></div></section>${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" data-close>Close</button></div></div>`);
   const editorRoot = document.querySelector("#job-estimate-editor");
   if (editorRoot) {
-    bindEstimateEditor(editorRoot);
-    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: 165 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
+    bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
+    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
     document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
     document.querySelector("#save-job-lines").onclick = async event => {
       const next = estimateFromEditor(editorRoot);
       if (!next.lines.length) return toast("Add at least one labor or part line");
+      if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
       event.currentTarget.disabled = true;
-      order.estimate = { ...next, generatedAt: order.estimate.generatedAt || now(), summary: order.estimate.summary };
-      Object.assign(order, { labor: next.labor, laborHours: next.laborHours, parts: next.parts, tax: next.tax, total: next.total });
-      try { await updateOrderInApi(order); save(); closeModal(); toast(`${order.id} estimate updated`); openOrder(order.id) } catch (error) { event.currentTarget.disabled = false; toast(error.message || "Estimate could not be saved") }
+      const editedAt = now();
+      const revisedOrder = workOrderWithEditedEstimate(order, { ...next, generatedAt: order.estimate.generatedAt, summary: order.estimate.summary }, editedAt);
+      const revisedInvoice = invoice ? invoiceWithEditedWorkOrder(invoice, revisedOrder, editedAt) : null;
+      try {
+        const savedOrder = await updateOrderInApi(revisedOrder, { throwOnError: true });
+        Object.assign(order, savedOrder?.queued ? revisedOrder : savedOrder);
+        if (revisedInvoice) {
+          const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
+          Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
+        }
+        save();
+        closeModal();
+        toast(`${order.id} line items updated${revisedInvoice ? ` · ${invoice.number} synchronized` : ""}`);
+        openOrder(order.id);
+      } catch (error) {
+        event.currentTarget.disabled = false;
+        toast(error.message || "Line items could not be saved");
+      }
     };
   }
   document.querySelectorAll("[data-send-job-estimate]").forEach(button => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));

@@ -1,3 +1,5 @@
+import { billableEstimateLines, calculateEstimate, normalizeEstimateLine } from '../../src/modules/estimate-workflow.js';
+
 export const ENTITY_TYPES = new Set([
   'customers', 'vehicles', 'orders', 'invoices', 'expenses', 'estimates', 'payments',
   'employees', 'shiftentries', 'jobclockentries', 'payrollentries', 'conversations',
@@ -28,6 +30,21 @@ export function normalizeEntityType(value) {
 
 export function normalizeEntityPayload(sourceType, payload) {
   const type = String(sourceType || '').trim().toLowerCase();
+  if (type === 'orders' && Array.isArray(payload.estimate?.lines)) {
+    const estimate = calculateEstimate(payload.estimate.lines, payload.estimate.taxRate, payload.estimate.fees || []);
+    return {
+      ...payload,
+      estimate: {
+        ...payload.estimate,
+        ...estimate,
+      },
+      labor: estimate.labor,
+      laborHours: estimate.laborHours,
+      parts: estimate.parts,
+      tax: estimate.tax,
+      total: estimate.total,
+    };
+  }
   if (type === 'customers' && ('address' in payload || 'created_at' in payload)) {
     return {
       ...payload,
@@ -64,11 +81,19 @@ export function normalizeEntityPayload(sourceType, payload) {
     };
   }
   if (type === 'invoices') {
+    const estimate = Array.isArray(payload.lines) && payload.lines.length
+      ? calculateEstimate(payload.lines, payload.taxRate, payload.fees || [])
+      : null;
     return {
       ...payload,
       customerId: payload.customerId ?? payload.customer_id,
       bookingId: payload.bookingId ?? payload.booking_id,
-      amount: payload.amount ?? payload.total_amount,
+      amount: estimate?.total ?? payload.amount ?? payload.total_amount,
+      subtotal: estimate?.subtotal ?? payload.subtotal,
+      tax: estimate?.tax ?? payload.tax,
+      taxRate: estimate?.taxRate ?? payload.taxRate,
+      fees: estimate?.fees ?? payload.fees,
+      lines: estimate ? billableEstimateLines(estimate.lines).map(normalizeEstimateLine) : payload.lines,
       paymentMethod: payload.paymentMethod ?? payload.payment_method,
       createdAt: payload.createdAt ?? payload.created_at,
       updatedAt: payload.updatedAt ?? payload.updated_at,
