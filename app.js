@@ -653,77 +653,165 @@
   function openSignature(id) {
     const estimate = state.estimates.find((item) => item.id === id);
     if (!estimate) return;
-    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
+    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. The approval and signature are saved to your shop records.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
     initSignaturePad(estimate);
   }
   function canvasToBlob(canvas) {
-    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    return new Promise((resolve, reject) => {
+      const fallback = () => {
+        try {
+          const dataUrl = canvas.toDataURL("image/png");
+          const bytes = atob(dataUrl.split(",")[1] || "");
+          const buffer = new Uint8Array(bytes.length);
+          for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+          resolve(new Blob([buffer], { type: "image/png" }));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      if (typeof canvas.toBlob !== "function") return fallback();
+      canvas.toBlob((blob) => {
+        if (blob && blob.size) resolve(blob);
+        else fallback();
+      }, "image/png");
+    });
+  }
+  function sameOriginUploadUrl(uploadUrl) {
+    try {
+      const parsed = new URL(uploadUrl, location.origin);
+      if (parsed.pathname.startsWith("/api/")) return `${parsed.pathname}${parsed.search}`;
+      return parsed.href;
+    } catch {
+      return uploadUrl;
+    }
   }
   async function uploadFileToR2(blob, kind, contentType) {
-    const { uploadUrl, key } = await apiFetch("/files/presign-upload", { method: "POST", body: JSON.stringify({ kind, contentType, contentLength: blob.size }) });
-    const response = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: blob });
-    if (!response.ok) throw new Error("Upload to storage failed");
+    if (!blob || !Number(blob.size)) throw new Error("Empty file");
+    const { uploadUrl, key } = await apiFetch("/files/presign-upload", {
+      method: "POST",
+      body: JSON.stringify({ kind, contentType, contentLength: blob.size })
+    });
+    const response = await fetch(sameOriginUploadUrl(uploadUrl), {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": contentType },
+      body: blob
+    });
+    if (!response.ok) throw new Error(`Upload to storage failed (${response.status})`);
     return key;
   }
   function initSignaturePad(estimate) {
-    const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d"), position = (event) => {
+    const canvas = document.querySelector("#signature-pad");
+    const context = canvas.getContext("2d");
+    const position = (event) => {
       const rect = canvas.getBoundingClientRect();
-      return { x: (event.clientX - rect.left) * (canvas.width / rect.width), y: (event.clientY - rect.top) * (canvas.height / rect.height) };
+      const source = event.touches?.[0] || event.changedTouches?.[0] || event;
+      return {
+        x: (source.clientX - rect.left) * (canvas.width / rect.width),
+        y: (source.clientY - rect.top) * (canvas.height / rect.height)
+      };
     };
     let drawing = false, drawn = false;
+    canvas.style.touchAction = "none";
     context.lineWidth = 2.4;
     context.lineCap = "round";
     context.strokeStyle = "#14201c";
-    canvas.addEventListener("pointerdown", (event) => {
+    const startStroke = (event) => {
+      event.preventDefault();
       drawing = true;
       drawn = true;
-      canvas.setPointerCapture(event.pointerId);
+      if (event.pointerId != null) {
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+        }
+      }
       const point = position(event);
       context.beginPath();
       context.moveTo(point.x, point.y);
-    });
-    canvas.addEventListener("pointermove", (event) => {
+    };
+    const moveStroke = (event) => {
       if (!drawing) return;
+      event.preventDefault();
       const point = position(event);
       context.lineTo(point.x, point.y);
       context.stroke();
-    });
-    canvas.addEventListener("pointerup", () => {
+    };
+    const endStroke = () => {
       drawing = false;
-    });
+    };
+    canvas.addEventListener("pointerdown", startStroke);
+    canvas.addEventListener("pointermove", moveStroke);
+    canvas.addEventListener("pointerup", endStroke);
+    canvas.addEventListener("pointercancel", endStroke);
+    canvas.addEventListener("mousedown", startStroke);
+    canvas.addEventListener("mousemove", moveStroke);
+    canvas.addEventListener("mouseup", endStroke);
+    canvas.addEventListener("mouseleave", endStroke);
     document.querySelector("#clear-signature").onclick = () => {
       context.clearRect(0, 0, canvas.width, canvas.height);
       drawn = false;
     };
     document.querySelector("#signature-form").onsubmit = async (event) => {
       event.preventDefault();
-      const name = new FormData(event.target).get("authorizationName").trim(), submitButton = event.target.querySelector("button[type=submit]");
+      const name = String(new FormData(event.target).get("authorizationName") || "").trim();
+      const submitButton = event.target.querySelector("button[type=submit]");
+      if (!name) {
+        toast("Enter the authorized customer name");
+        return;
+      }
       if (!drawn) {
         toast("Capture the customer signature before approving");
         return;
       }
       submitButton.disabled = true;
+      const previous = {
+        status: estimate.status,
+        authorizationName: estimate.authorizationName,
+        signatureKey: estimate.signatureKey,
+        signature: estimate.signature,
+        signedAt: estimate.signedAt,
+        updatedAt: estimate.updatedAt
+      };
       try {
-        const blob = await canvasToBlob(canvas), key = await uploadFileToR2(blob, "signature", "image/png");
+        const dataUrl = canvas.toDataURL("image/png");
+        let signatureKey = "";
+        let uploadWarning = "";
+        try {
+          const blob = await canvasToBlob(canvas);
+          signatureKey = await uploadFileToR2(blob, "signature", "image/png");
+        } catch (uploadError) {
+          console.error("Signature image upload failed; saving estimate with embedded signature", uploadError);
+          uploadWarning = uploadError.message || "Signature image upload failed";
+        }
         estimate.status = "approved";
         estimate.authorizationName = name;
-        estimate.signatureKey = key;
-        estimate.signature = null;
+        estimate.signatureKey = signatureKey || "";
+        estimate.signature = signatureKey ? null : dataUrl;
         estimate.signedAt = now();
+        estimate.updatedAt = now();
+        estimate.signedBy = currentUser()?.id || "";
         if (estimate.workOrderId) {
           const order = state.orders.find((item) => item.id === estimate.workOrderId);
-          if (order && order.status === "estimate") {
+          if (order && ["estimate", "pending"].includes(order.status)) {
             order.status = "approved";
-            void updateOrderInApi(order).catch((error) => toast(error.message || "Work order could not be saved"));
+            order.updatedAt = now();
+            try {
+              await updateOrderInApi(order);
+            } catch (orderError) {
+              console.error("Linked work order approval sync failed", orderError);
+            }
           }
         }
-        updateEstimateInApi(estimate);
+        await updateEstimateInApi(estimate);
         save();
         closeModal();
-        toast(`${estimate.number} approved and signed`);
+        toast(uploadWarning ? `${estimate.number} approved (signature saved with estimate; image upload pending)` : `${estimate.number} approved and signed`);
         render();
       } catch (error) {
-        toast("Could not upload the signature. Please try again.");
+        Object.assign(estimate, previous);
+        console.error("Estimate signature save failed", error);
+        toast(error.message || "Could not save the signed estimate. Please try again.");
         submitButton.disabled = false;
       }
     };
@@ -1082,8 +1170,7 @@
   }
   async function loadEstimatesFromApi() {
     try {
-      state.estimates = await apiFetch("/entities/estimates");
-      save();
+      applyRemoteList("estimates", await apiFetch("/entities/estimates"));
     } catch (error) {
       console.error("Failed to load estimates from API; using local data", error);
     }
