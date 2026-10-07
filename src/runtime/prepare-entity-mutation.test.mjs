@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareEntityMutation } from './prepare-entity-mutation.js';
+import { prepareEntityMutation, withOptimisticConcurrencyHeaders } from './prepare-entity-mutation.js';
 let seq = 0;
 function mutationId() {
   seq += 1;
@@ -37,4 +37,27 @@ test('blocked payroll entities are never queued', () => {
     body: JSON.stringify({ hours: 1 }),
   }, mutationId);
   assert.equal(result.queueable, false);
+});
+
+test('PUT captures updatedAt as expectedUpdatedAt for If-Match', () => {
+  const updatedAt = '2026-10-06T12:00:00.000Z';
+  const result = prepareEntityMutation('/entities/orders/RO-1', {
+    method: 'PUT',
+    body: JSON.stringify({ id: 'RO-1', updatedAt, status: 'estimate' }),
+  }, mutationId);
+  assert.equal(result.expectedUpdatedAt, updatedAt);
+  assert.equal(result.queueable, true);
+});
+
+test('withOptimisticConcurrencyHeaders attaches If-Match for online and offline PUTs', () => {
+  const stamped = withOptimisticConcurrencyHeaders(
+    { method: 'PUT', body: '{"id":"RO-1"}', headers: { 'X-Extra': '1' } },
+    '2026-10-06T12:00:00.000Z',
+  );
+  assert.equal(stamped.headers['If-Match'], '2026-10-06T12:00:00.000Z');
+  assert.equal(stamped.headers['X-Extra'], '1');
+  assert.deepEqual(
+    withOptimisticConcurrencyHeaders({ method: 'PUT' }, null),
+    { method: 'PUT' },
+  );
 });

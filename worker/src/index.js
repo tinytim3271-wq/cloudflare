@@ -413,7 +413,7 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
     'SELECT created_at, created_by, updated_at FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
   ).bind(context.shopId, type, id).first();
   if (expectedUpdatedAt && existing && existing.updated_at !== expectedUpdatedAt) {
-    throw new HttpError(409, 'Record changed while this device was offline');
+    throw new HttpError(409, 'Record was updated elsewhere. Reload before saving again.');
   }
   const record = {
     ...body,

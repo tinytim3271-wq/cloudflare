@@ -356,6 +356,16 @@
   function defaultMutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
+  function withOptimisticConcurrencyHeaders(options = {}, expectedUpdatedAt = null) {
+    if (!expectedUpdatedAt) return options;
+    return {
+      ...options,
+      headers: {
+        ...options.headers || {},
+        "If-Match": expectedUpdatedAt
+      }
+    };
+  }
   function prepareEntityMutation(path, options, createMutationId = defaultMutationId) {
     const method = String(options.method || "GET").toUpperCase();
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
@@ -3971,7 +3981,7 @@ button{margin-top:12px;padding:8px 14px}
         if (item.conflict) continue;
         let response;
         try {
-          response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} });
+          response = await authorizedApiRequest(item.path, withOptimisticConcurrencyHeaders({ method: item.method, body: item.body }, item.expectedUpdatedAt));
         } catch {
           break;
         }
@@ -4009,9 +4019,10 @@ button{margin-top:12px;padding:8px 14px}
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareMutation(path, options);
     try {
-      const response = await authorizedApiRequest(path, mutation.options);
+      const response = await authorizedApiRequest(path, withOptimisticConcurrencyHeaders(mutation.options, mutation.expectedUpdatedAt));
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`);
+        error.status = response.status;
         error.retryable = response.status >= 500;
         throw error;
       }
