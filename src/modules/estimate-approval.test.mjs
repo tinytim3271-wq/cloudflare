@@ -35,8 +35,16 @@ test('signature approvals require evidence, signer name, and a signed timestamp'
     () => validateEstimateApproval({ ...base, signatureKey: '' }),
     /stored signature is required/i,
   );
-  const pngHeader = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]).toString('base64')}`;
-  assert.equal(validateEstimateApproval({ ...base, signatureKey: '', signatureDataUrl: pngHeader }).type, 'signature');
+  const validPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  assert.equal(validateEstimateApproval({ ...base, signatureKey: '', signatureDataUrl: validPng }).type, 'signature');
+  assert.throws(
+    () => validateEstimateApproval({
+      ...base,
+      signatureKey: '',
+      signatureDataUrl: `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]).toString('base64')}`,
+    }),
+    /stored signature is required/i,
+  );
   assert.throws(
     () => validateEstimateApproval({
       ...base,

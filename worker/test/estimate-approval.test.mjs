@@ -282,6 +282,12 @@ test('Worker verifies a referenced signature exists in R2 and is a PNG', async (
     }, context, signature),
     error => error.status === 400 && /PNG/.test(error.message),
   );
+  await assert.rejects(
+    () => verifyOrderApprovalSignature({
+      FILES: { async head() { return {}; } },
+    }, context, signature),
+    error => error.status === 400 && /PNG/.test(error.message),
+  );
 });
 
 test('the D1 approval write guard allows only one concurrent approval to commit', async () => {

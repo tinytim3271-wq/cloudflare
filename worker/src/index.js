@@ -582,7 +582,7 @@ export async function verifyOrderApprovalSignature(env, context, approval) {
   const object = await env.FILES.head(normalized.signatureKey);
   if (!object) throw new HttpError(400, 'Stored signature was not found');
   const contentType = String(object.httpMetadata?.contentType || object.contentType || '').toLowerCase();
-  if (contentType && contentType !== 'image/png') {
+  if (contentType !== 'image/png') {
     throw new HttpError(400, 'Stored signature must be a PNG image');
   }
 }

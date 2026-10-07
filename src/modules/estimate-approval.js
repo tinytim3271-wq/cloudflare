@@ -20,9 +20,28 @@ function validPngDataUrl(value) {
   if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
   try {
     const binary = globalThis.atob(match[1]);
-    if (!binary.length || binary.length > SIGNATURE_DATA_LIMIT) return false;
-    return [137, 80, 78, 71, 13, 10, 26, 10]
-      .every((byte, index) => binary.charCodeAt(index) === byte);
+    if (binary.length < 45 || binary.length > SIGNATURE_DATA_LIMIT) return false;
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    if (![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)) return false;
+    const view = new DataView(bytes.buffer);
+    let offset = 8;
+    let sawHeader = false;
+    while (offset + 12 <= bytes.length) {
+      const length = view.getUint32(offset);
+      const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+      const nextOffset = offset + 12 + length;
+      if (nextOffset > bytes.length) return false;
+      if (!sawHeader) {
+        if (type !== 'IHDR' || length !== 13) return false;
+        const width = view.getUint32(offset + 8);
+        const height = view.getUint32(offset + 12);
+        if (!width || !height) return false;
+        sawHeader = true;
+      }
+      if (type === 'IEND') return length === 0 && sawHeader && nextOffset === bytes.length;
+      offset = nextOffset;
+    }
+    return false;
   } catch {
     return false;
   }
