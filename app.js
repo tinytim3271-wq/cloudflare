@@ -2404,6 +2404,17 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/customer-metrics.js
+  function customerLifetimeSpend(customer, invoices2 = []) {
+    const linked = invoices2.filter((invoice) => invoice.customer === customer?.name);
+    if (!linked.length) return Number(customer?.spend || 0);
+    return Math.round(linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0) * 100) / 100;
+  }
+  var init_customer_metrics = __esm({
+    "src/modules/customer-metrics.js"() {
+    }
+  });
+
   // src/modules/offline-desktop.js
   function escapeText(value2) {
     return String(value2 || "").replace(/[&<>"']/g, (char) => ({
@@ -7987,6 +7998,7 @@ ${catRows}
       init_ai_workflow();
       init_mileage();
       init_filing();
+      init_customer_metrics();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
@@ -8716,8 +8728,8 @@ ${catRows}
           const key = encodeURIComponent(customerRecordKey(item));
           const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
           const visitCount = state.orders.filter((order) => order.customer === item.name).length;
-          const invoiceSpend = state.invoices.filter((invoice) => invoice.customer === item.name).reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(Math.max(Number(item.spend || 0), invoiceSpend))}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
