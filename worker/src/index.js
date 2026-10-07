@@ -48,6 +48,7 @@ import {
   normalizeEstimateApproval,
   validateEstimateApproval,
 } from '../../src/modules/estimate-approval.js';
+import { approvedEstimate, normalizeEstimateLine } from '../../src/modules/estimate-workflow.js';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -438,27 +439,94 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
   return record;
 }
 
-export function validatedOrderApproval(body, context, existingApproval = null) {
-  const approval = body?.estimateApproval;
-  if (!approval || approval.status !== 'approved') return body;
-  const inferred = normalizeEstimateApproval(approval);
-  const existing = normalizeEstimateApproval(existingApproval);
-  const unchangedApproval = existing?.status === 'approved'
-    && existing.type === inferred.type
-    && existing.approvedAt === inferred.approvedAt;
-  const recordedBy = unchangedApproval && existing.recordedBy
-    ? existing.recordedBy
-    : inferred.type === 'signature' && inferred.recordedBy
-      ? inferred.recordedBy
-      : approvalRecorder(context);
+const ESTIMATE_APPROVAL_WRITE_ROLES = new Set(['owner', 'admin', 'service_writer']);
+
+function preserveRecordedApproval(body, existingOrder) {
+  return {
+    ...body,
+    estimate: existingOrder.estimate,
+    labor: existingOrder.labor,
+    laborHours: existingOrder.laborHours,
+    parts: existingOrder.parts,
+    tax: existingOrder.tax,
+    total: existingOrder.total,
+    linesLockedAt: existingOrder.linesLockedAt,
+    estimateApproval: existingOrder.estimateApproval,
+  };
+}
+
+export function validatedOrderApproval(body, context, existingOrder = null, timestamp = new Date().toISOString()) {
+  const requestedApproval = body?.estimateApproval;
+  const existingApproval = normalizeEstimateApproval(existingOrder?.estimateApproval);
+  if (existingApproval?.status === 'approved') {
+    const explicitRevision = requestedApproval == null
+      && body.estimateRevisionPending === true
+      && !body.linesLockedAt;
+    return explicitRevision ? body : preserveRecordedApproval(body, existingOrder);
+  }
+  if (!requestedApproval || requestedApproval.status !== 'approved') return body;
+  if (!existingOrder) throw new HttpError(409, 'Create the work order before recording approval');
+  if (existingOrder.linesLockedAt || existingOrder.estimateApproval?.status === 'declined') {
+    throw new HttpError(409, 'Revise the locked estimate before recording a new approval');
+  }
+  if (!ESTIMATE_APPROVAL_WRITE_ROLES.has(context.role)) {
+    throw new HttpError(403, 'This role cannot record estimate approvals');
+  }
+
+  const sourceLines = existingOrder.estimate?.lines || [];
+  if (!sourceLines.length) throw new HttpError(409, 'Add estimate lines before recording approval');
+  const decisions = requestedApproval.decisions && typeof requestedApproval.decisions === 'object'
+    ? requestedApproval.decisions
+    : {};
+  const lineIds = sourceLines.map((line, index) => normalizeEstimateLine(line, index).id);
+  if (lineIds.some(id => !['approved', 'declined'].includes(decisions[id]))) {
+    throw new HttpError(400, 'Approve or decline every estimate line');
+  }
+  if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+    throw new HttpError(400, 'Approval decisions do not match this estimate');
+  }
+
+  const estimate = approvedEstimate(existingOrder.estimate, decisions);
+  if (!estimate.approvedLineCount) {
+    throw new HttpError(400, 'Approve at least one line or decline the estimate');
+  }
+  const recordedBy = approvalRecorder(context);
+  let approval;
   try {
-    return {
-      ...body,
-      estimateApproval: validateEstimateApproval({ ...approval, recordedBy }),
-    };
+    approval = validateEstimateApproval({
+      ...requestedApproval,
+      approvedAt: timestamp,
+      recordedBy,
+      decisions,
+    });
   } catch (error) {
     throw new HttpError(400, error.message || 'Estimate approval is invalid');
   }
+  if (approval.type === 'signature' && approval.signatureKey && context.shopId
+    && !String(approval.signatureKey).startsWith(`shops/${context.shopId}/`)) {
+    throw new HttpError(400, 'Signature does not belong to this shop');
+  }
+  if (approval.type !== 'signature') {
+    delete approval.signatureKey;
+    delete approval.signatureDataUrl;
+    delete approval.signedAt;
+  }
+
+  const result = {
+    ...body,
+    estimate,
+    labor: estimate.labor,
+    laborHours: estimate.laborHours,
+    parts: estimate.parts,
+    tax: estimate.tax,
+    total: estimate.total,
+    status: existingOrder.estimateRevisionPreviousStatus || 'approved',
+    linesLockedAt: timestamp,
+    estimateApproval: approval,
+    estimateRevisionPending: false,
+  };
+  delete result.estimateRevisionPreviousStatus;
+  return result;
 }
 
 function members(record) {
@@ -636,7 +704,7 @@ async function handleEntities(request, env, context, segments, analytics) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
     if (type === 'orders') {
       const existingOrder = await getEntity(env, context.shopId, type, id);
-      body = validatedOrderApproval(body, context, existingOrder?.estimateApproval);
+      body = validatedOrderApproval(body, context, existingOrder);
     }
     if (type === 'chatmessages') throw new HttpError(405, 'Chat messages cannot be edited');
     if (type === 'conversations') {

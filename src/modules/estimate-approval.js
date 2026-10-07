@@ -45,8 +45,18 @@ export function validateEstimateApproval(approval) {
   if (!APPROVAL_TYPE_VALUES.has(normalized.type)) {
     throw new Error('Choose a valid estimate approval type');
   }
-  if (normalized.type !== 'signature' && !normalized.authorizationName) {
+  if (!normalized.authorizationName) {
     throw new Error('Approver name is required');
+  }
+  if (normalized.type === 'signature') {
+    const signatureKey = String(normalized.signatureKey || '').trim();
+    const signatureDataUrl = String(normalized.signatureDataUrl || '');
+    if (!signatureKey && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(signatureDataUrl)) {
+      throw new Error('A stored signature is required for signature approval');
+    }
+    if (!normalized.signedAt || !Number.isFinite(Date.parse(normalized.signedAt))) {
+      throw new Error('Signature timestamp is required');
+    }
   }
   if (normalized.type === 'other' && !normalized.customLabel) {
     throw new Error('Custom approval type is required when Other is selected');

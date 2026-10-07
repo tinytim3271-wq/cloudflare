@@ -1238,7 +1238,7 @@ function estimateApprovalMarkup(approval) {
 function onsiteSignatureModal(kind, record) {
   const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
   const number = kind === "estimate" ? record.id : record.number;
-  const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map(line => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+  const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map(line => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}` : line.type === "fee" ? `Flat fee · ${money(line.total)}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small></span><strong>${money(line.total)}</strong></label>`).join("")}</fieldset>` : "";
   const typeOptions = ESTIMATE_APPROVAL_TYPES.map(option => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join("");
   const approvalFields = kind === "estimate" ? `<div class="form-grid approval-method-fields"><label>Approval type *<select name="approvalType" id="approval-type">${typeOptions}</select></label><label id="custom-approval-label" hidden>Custom approval type *<input name="customLabel" maxlength="${APPROVAL_CUSTOM_LABEL_MAX}" placeholder="e.g. Approved via fleet manager email"/></label><label class="full">Approval note (optional)<textarea name="approvalNote" maxlength="${APPROVAL_NOTE_MAX}" placeholder="Who approved, callback number, or other audit detail"></textarea></label></div>` : "";
   showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Authorize estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} · ${escapeHtml(record.vehicle || "")}</span><strong>${money(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}${approvalFields}<label>Approver name *<input name="authorizationName" maxlength="100" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label" id="signature-capture">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer" id="approval-disclaimer">${kind === "estimate" ? "A signature authorizes the selected work. For phone, in-person, email, text, or other approval, MechPro records the current staff user and time instead." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary" id="save-document-approval">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
@@ -1309,7 +1309,7 @@ function onsiteSignatureModal(kind, record) {
         record.estimateApproval = approval;
         record.estimateRevisionPending = false;
         delete record.estimateRevisionPreviousStatus;
-        await updateOrderInApi(record);
+        Object.assign(record, await updateOrderInApi(record));
       } else {
         record.signature = signature;
         await updateInvoiceInApi(record);
@@ -1326,7 +1326,7 @@ function onsiteSignatureModal(kind, record) {
 }
 
 function jobCardLineTable(estimate) {
-  return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.partNumber || line.inventorySku ? ` · #${escapeHtml(line.partNumber || line.inventorySku)}` : ""}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
+  return `<div class="job-card-lines">${estimate.lines.map(line => `<article class="job-card-line ${line.approvalStatus === "declined" ? "declined" : ""}"><span class="line-kind">${line.type === "part" ? "Part" : line.type === "fee" ? "Fee" : "Labor"}</span><div><strong>${escapeHtml(line.description)}</strong><small>${line.type === "part" ? `${line.quantity} × ${money(line.unitPrice)}${line.partNumber || line.inventorySku ? ` · #${escapeHtml(line.partNumber || line.inventorySku)}` : ""}` : line.type === "fee" ? `Flat fee · ${money(line.total)}` : `${line.hours.toFixed(2)} hr × ${money(line.laborRate)}`}</small>${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${money(line.total)}</b>${line.approvalStatus !== "pending" ? `<span class="line-decision ${line.approvalStatus}">${escapeHtml(line.approvalStatus)}</span>` : ""}</article>`).join("")}</div>`;
 }
 
 function laborTechnicians() {
@@ -1363,7 +1363,7 @@ function printJobCard(order) {
   const billableLines = billableEstimateLines(estimate.lines);
   const technicianRows = laborLinePrintRows(billableLines, state.users.map(user => ({ id: user.id, name: user.techName || user.name })));
   const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money(line.laborRate)}</td><td>${money(line.total)}</td></tr>`).join("");
-  const partRows = billableLines.filter(line => line.type === "part").map(line => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
+  const partRows = billableLines.filter(line => ["part", "fee"].includes(line.type)).map(line => `<tr><td><b>${line.type === "fee" ? "Fee · " : ""}${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${line.type === "fee" ? "Flat fee" : Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money(line.total)}</td></tr>`).join("");
   const supplies = estimate.fees.find(fee => /shop supplies/i.test(fee.description))?.amount || 0;
   const approvalMarkup = estimateApprovalMarkup(order.estimateApproval);
   const win = window.open("", "_blank");
@@ -1414,6 +1414,7 @@ openOrder = function (id) {
   order.estimate = coherentOrderEstimate(order);
   const estimate = order.estimate, invoice = state.invoices.find(item => item.ro === order.id);
   const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
+  const canApprove = ["owner", "admin", "service_writer"].includes(currentUser().role);
   const paidInvoice = invoice && invoicePaid(invoice) > 0;
   const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
   const defaultLaborRate = estimate.lines.find(line => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
@@ -1425,7 +1426,7 @@ openOrder = function (id) {
         ? "Saving creates a revision and clears the prior customer approval."
         : "Changes recalculate labor, parts, tax, and total before saving.";
   const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
-  const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button></div>` : "";
+  const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
   const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
@@ -1598,7 +1599,7 @@ function estimateLinePresentation(line) {
   const pending = line.priceStatus === "pending";
   const meta = line.type === "part"
     ? `${Number(line.quantity || 0)} × ${money(line.unitPrice)}${line.partNumber ? ` · ${escapeHtml(line.partNumber)}` : ""}`
-    : `${Number(line.hours || 0).toFixed(2)} hr × ${money(line.laborRate)}`;
+    : line.type === "fee" ? `Flat fee · ${money(line.total)}` : `${Number(line.hours || 0).toFixed(2)} hr × ${money(line.laborRate)}`;
   const assigned = line.type === "labor"
     ? normalizeTechnicianIds(line).map(technicianName)
     : [];
@@ -1609,6 +1610,7 @@ function estimatePresentation(record, estimate, { locked = false, standalone = f
   const { customer, vehicle } = estimateParty(estimate, record);
   const parts = (estimate.lines || []).filter(line => line.type === "part");
   const labor = (estimate.lines || []).filter(line => line.type === "labor");
+  const feeLines = (estimate.lines || []).filter(line => line.type === "fee");
   const supply = (estimate.fees || []).find(fee => /shop supplies/i.test(fee.description));
   const exclusions = estimate.exclusions || record.exclusions || [];
   const insurance = estimate.insurance || record.insurance || {};
@@ -1623,8 +1625,10 @@ function estimatePresentation(record, estimate, { locked = false, standalone = f
     <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money(estimate.parts)}</b></div></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
+    ${feeLines.length ? `<section class="reference-estimate-section"><div class="reference-section-title"><span>03</span><h3>Fees</h3></div>${feeLines.map(estimateLinePresentation).join("")}</section>` : ""}
     <section class="reference-totals">
       <div><span>Labor</span><b>${money(estimate.labor)}</b></div>
+      ${feeLines.length ? `<div><span>Fees</span><b>${money(estimate.lineFees || 0)}</b></div>` : ""}
       <div><span>Shop supplies</span><b>${money(supply?.amount || 0)}</b></div>
       <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` · ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money(estimate.discountAmount)}` : money(0)}</b></div>
       <div><span>Tax · ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money(estimate.tax)}</b></div>

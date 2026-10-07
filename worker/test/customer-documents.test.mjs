@@ -189,6 +189,41 @@ test('customer link becomes read-only and displays a staff-recorded non-signatur
   assert.doesNotMatch(html, /id="submit-signature"/);
 });
 
+test('customer estimate link renders and approves flat fee lines as fees', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  order.estimate.lines.push({
+    id: 'after-midnight',
+    type: 'fee',
+    description: 'After-midnight service',
+    amount: 200,
+  });
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  const page = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  const html = await page.text();
+  assert.match(html, /After-midnight service/);
+  assert.match(html, />Fee</);
+  assert.match(html, /Flat fee/);
+
+  const response = await handleCustomerDocument(new Request(link.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'sign',
+      authorizationName: 'Pat Customer',
+      signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+      decisions: { labor: 'declined', part: 'declined', 'after-midnight': 'approved' },
+    }),
+  }), fixture.env, token);
+  assert.equal(response.status, 200);
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.equal(saved.estimate.lines.find(line => line.id === 'after-midnight').type, 'fee');
+  assert.equal(saved.estimate.lineFees, 200);
+  assert.equal(saved.total, 200);
+});
+
 test('remote estimate signature approves selected lines, locks them, and stores PNG in R2', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());

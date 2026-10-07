@@ -20,6 +20,30 @@ test('legacy signed approvals normalize to signature approvals', () => {
   assert.equal(approval.approvedAt, approval.signedAt);
 });
 
+test('signature approvals require evidence, signer name, and a signed timestamp', () => {
+  const base = {
+    status: 'approved',
+    type: 'signature',
+    authorizationName: 'Pat Customer',
+    signatureKey: 'shops/shop-1/signatures/example.png',
+    signedAt: '2026-10-07T18:30:00.000Z',
+    approvedAt: '2026-10-07T18:30:01.000Z',
+  };
+  assert.equal(validateEstimateApproval(base).type, 'signature');
+  assert.throws(
+    () => validateEstimateApproval({ ...base, signatureKey: '' }),
+    /stored signature is required/i,
+  );
+  assert.throws(
+    () => validateEstimateApproval({ ...base, authorizationName: '' }),
+    /Approver name is required/,
+  );
+  assert.throws(
+    () => validateEstimateApproval({ ...base, signedAt: '' }),
+    /Signature timestamp is required/,
+  );
+});
+
 test('phone approval validates and produces an audit-friendly summary', () => {
   const approval = validateEstimateApproval({
     status: 'approved',

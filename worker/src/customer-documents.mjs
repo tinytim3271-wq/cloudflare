@@ -148,12 +148,12 @@ function lineRows(document, type) {
     const item = normalizeEstimateLine(line, index);
     const detail = item.type === 'part'
       ? `${item.quantity} × ${money(item.unitPrice)}${item.inventorySku ? ` · ${escapeHtml(item.inventorySku)}` : ''}`
-      : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
+      : item.type === 'fee' ? `Flat fee · ${money(item.total)}` : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
     const choices = type === 'estimate'
       ? `<fieldset class="decision"><legend>Choose this line</legend><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="approved" checked> Approve</label><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="declined"> Decline</label></fieldset>`
       : '';
     return `<article class="line" data-line-id="${escapeHtml(item.id)}">
-      <div class="line-type">${item.type === 'part' ? 'Part' : 'Labor'}</div>
+      <div class="line-type">${item.type === 'part' ? 'Part' : item.type === 'fee' ? 'Fee' : 'Labor'}</div>
       <div><strong>${escapeHtml(item.description)}</strong><small>${escapeHtml(detail)}</small>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</div>
       <b>${escapeHtml(money(item.total))}</b>
       ${choices}
