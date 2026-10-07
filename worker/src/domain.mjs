@@ -32,12 +32,55 @@ export function normalizeEntityType(value) {
   return type === 'bookings' ? 'appointments' : type;
 }
 
+function firstPresent(payload, ...keys) {
+  for (const key of keys) {
+    if (payload[key] !== undefined && payload[key] !== null && payload[key] !== '') return payload[key];
+  }
+  return undefined;
+}
+
+function normalizedInvoiceStatus(value) {
+  const status = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['paid', 'closed', 'complete', 'completed'].includes(status)) return 'paid';
+  if (['overdue', 'past_due'].includes(status)) return 'overdue';
+  if (['sent', 'open', 'unpaid'].includes(status)) return 'sent';
+  return status || 'sent';
+}
+
 export function normalizeEntityPayload(sourceType, payload) {
   const type = String(sourceType || '').trim().toLowerCase();
-  if (type === 'customers' && ('address' in payload || 'created_at' in payload)) {
+  if (type === 'customers') {
     return {
       ...payload,
-      billingAddress: payload.billingAddress ?? payload.address ?? '',
+      name: firstPresent(payload, 'name', 'customer_name'),
+      phone: firstPresent(payload, 'phone', 'mobile') ?? '',
+      billingAddress: firstPresent(payload, 'billingAddress', 'billing_address', 'address') ?? '',
+      billingNotes: firstPresent(payload, 'billingNotes', 'billing_notes', 'notes') ?? '',
+      createdAt: payload.createdAt ?? payload.created_at,
+      updatedAt: payload.updatedAt ?? payload.updated_at,
+    };
+  }
+  if (type === 'vehicles') {
+    return {
+      ...payload,
+      customer: firstPresent(payload, 'customer', 'customer_name', 'owner'),
+      year: firstPresent(payload, 'year', 'vehicle_year'),
+      make: firstPresent(payload, 'make', 'vehicle_make'),
+      model: firstPresent(payload, 'model', 'vehicle_model'),
+      vin: firstPresent(payload, 'vin', 'vehicle_vin') ?? '',
+      plate: firstPresent(payload, 'plate', 'license_plate', 'reg_num') ?? '',
+      createdAt: payload.createdAt ?? payload.created_at,
+      updatedAt: payload.updatedAt ?? payload.updated_at,
+    };
+  }
+  if (type === 'expenses') {
+    return {
+      ...payload,
+      date: firstPresent(payload, 'date', 'expense_date', 'paid_date'),
+      vendor: firstPresent(payload, 'vendor', 'payee'),
+      category: firstPresent(payload, 'category', 'expense_category') ?? 'Uncategorized',
+      memo: firstPresent(payload, 'memo', 'description', 'notes') ?? '',
+      amount: firstPresent(payload, 'amount', 'total_amount', 'total'),
       createdAt: payload.createdAt ?? payload.created_at,
       updatedAt: payload.updatedAt ?? payload.updated_at,
     };
@@ -70,11 +113,42 @@ export function normalizeEntityPayload(sourceType, payload) {
     };
   }
   if (type === 'invoices') {
+    const date = firstPresent(payload, 'date', 'invoice_date', 'issued_at');
+    const explicitCloseout = firstPresent(
+      payload,
+      'closedAt',
+      'closeoutDate',
+      'closeout_date',
+      'closed_at',
+      'closed_date',
+      'paidAt',
+      'paid_at',
+      'paid_date',
+      'completedAt',
+      'completed_at',
+      'completed_date',
+    );
+    const importedShape = Boolean(
+      payload.importSource
+      || payload.invoice_number
+      || payload.invoice_date
+      || payload.customer_name
+      || explicitCloseout,
+    );
+    const closedAt = explicitCloseout ?? (importedShape ? date : undefined);
     return {
       ...payload,
       customerId: payload.customerId ?? payload.customer_id,
       bookingId: payload.bookingId ?? payload.booking_id,
-      amount: payload.amount ?? payload.total_amount,
+      number: firstPresent(payload, 'number', 'invoice_number', 'invoice'),
+      customer: firstPresent(payload, 'customer', 'customer_name'),
+      ro: firstPresent(payload, 'ro', 'ro_number', 'work_order') ?? '',
+      date,
+      due: firstPresent(payload, 'due', 'due_date') ?? '',
+      amount: firstPresent(payload, 'amount', 'total_amount', 'total'),
+      status: normalizedInvoiceStatus(payload.status),
+      closedAt,
+      closeoutSource: payload.closeoutSource ?? (closedAt ? (explicitCloseout ? 'source_closeout_date' : 'invoice_date') : undefined),
       paymentMethod: payload.paymentMethod ?? payload.payment_method,
       createdAt: payload.createdAt ?? payload.created_at,
       updatedAt: payload.updatedAt ?? payload.updated_at,

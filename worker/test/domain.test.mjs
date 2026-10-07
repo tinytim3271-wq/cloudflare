@@ -56,6 +56,61 @@ test('legacy entity aliases remain compatible', () => {
   });
 });
 
+test('imported shop entities normalize into the app data model', () => {
+  assert.deepEqual(normalizeEntityPayload('vehicles', {
+    customer_name: 'Ada',
+    vehicle_year: '2020',
+    vehicle_make: 'Ford',
+    vehicle_model: 'Escape',
+    license_plate: 'ABC-123',
+  }), {
+    customer_name: 'Ada',
+    vehicle_year: '2020',
+    vehicle_make: 'Ford',
+    vehicle_model: 'Escape',
+    license_plate: 'ABC-123',
+    customer: 'Ada',
+    year: '2020',
+    make: 'Ford',
+    model: 'Escape',
+    vin: '',
+    plate: 'ABC-123',
+    createdAt: undefined,
+    updatedAt: undefined,
+  });
+  assert.equal(normalizeEntityPayload('expenses', {
+    expense_date: '2026-09-01',
+    payee: 'Tool Supply',
+    total_amount: 42.5,
+  }).amount, 42.5);
+});
+
+test('invoice normalization uses an explicit lifecycle date before invoice date', () => {
+  const explicit = normalizeEntityPayload('invoices', {
+    invoice_number: 'INV-9',
+    customer_name: 'Ada',
+    invoice_date: '2026-08-01',
+    paid_date: '2026-08-07',
+    total_amount: 108.25,
+    status: 'Completed',
+  });
+  assert.equal(explicit.number, 'INV-9');
+  assert.equal(explicit.status, 'paid');
+  assert.equal(explicit.closedAt, '2026-08-07');
+  assert.equal(explicit.closeoutSource, 'source_closeout_date');
+
+  const fallback = normalizeEntityPayload('invoices', {
+    number: 'INV-10',
+    customer: 'Bea',
+    date: '2026-08-02',
+    amount: 50,
+    status: 'sent',
+    importSource: 'csv',
+  });
+  assert.equal(fallback.closedAt, '2026-08-02');
+  assert.equal(fallback.closeoutSource, 'invoice_date');
+});
+
 test('invoice balance and tax report account for completed payments', () => {
   const payments = [
     { invoiceNumber: 'INV-1', customer: 'A', amount: 54.13, receivedAt: '2026-09-01T12:00:00Z', status: 'completed' },
