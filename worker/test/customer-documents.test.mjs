@@ -165,6 +165,30 @@ test('public estimate link renders itemized parts and labor without authenticati
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'nonce-/);
 });
 
+test('customer link becomes read-only and displays a staff-recorded non-signature approval', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  order.linesLockedAt = '2026-10-07T20:00:00.000Z';
+  order.estimateApproval = {
+    status: 'approved',
+    type: 'other',
+    customLabel: 'Approved via fleet manager email',
+    authorizationName: 'Dana Fleet',
+    approvedAt: order.linesLockedAt,
+    recordedBy: { id: 'writer-1', name: 'Timothy Alderman' },
+    note: 'Confirmed PO 447',
+  };
+
+  const response = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  const html = await response.text();
+  assert.match(html, /Approved: Approved via fleet manager email/);
+  assert.match(html, /recorded by Timothy Alderman/);
+  assert.doesNotMatch(html, /id="submit-signature"/);
+});
+
 test('remote estimate signature approves selected lines, locks them, and stores PNG in R2', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());

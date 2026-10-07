@@ -166,11 +166,13 @@ function customerDocumentPage(link, document, nonce) {
   const isEstimate = type === 'estimate';
   const estimate = isEstimate ? document.estimate || calculateEstimate([], 0) : document;
   const number = isEstimate ? document.estimateNumber || document.id : document.number;
-  const complete = Boolean(link.consumed_at);
   const savedApproval = isEstimate ? normalizeEstimateApproval(document.estimateApproval) : null;
+  const complete = Boolean(link.consumed_at || (isEstimate && estimateAlreadyLocked(document)));
   const completedDetail = savedApproval?.status === 'approved'
     ? approvalSummary(savedApproval)
-    : `This ${type} was ${link.result || 'completed'} on ${new Date(link.consumed_at).toLocaleString()}.`;
+    : link.consumed_at
+      ? `This ${type} was ${link.result || 'completed'} on ${new Date(link.consumed_at).toLocaleString()}.`
+      : `This ${type} is no longer awaiting a response.`;
   const status = complete
     ? `<section class="notice complete"><strong>Response recorded</strong><p>${escapeHtml(completedDetail)}</p></section>`
     : '';
