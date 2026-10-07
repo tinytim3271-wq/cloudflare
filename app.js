@@ -1978,15 +1978,24 @@
       recentVehicle: linkedVehicles[0] || null
     };
   }
+  function uniqueCustomers(customers2) {
+    const seen = /* @__PURE__ */ new Set();
+    return customers2.filter((customer) => {
+      const key = String(customer.id || customer.name || "").trim().toLocaleLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
   function localCustomerMatches(query2, customers2 = [], vehicles = []) {
     if (!shouldSearchCustomers(query2)) return [];
-    return customers2.filter((customer) => matchesName(customer.name, query2)).sort((left, right) => String(left.name).localeCompare(String(right.name))).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
+    return uniqueCustomers(customers2).filter((customer) => matchesName(customer.name, query2)).sort((left, right) => String(left.name).localeCompare(String(right.name))).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
   }
   function likelyDuplicateCustomers({ phone = "", email = "" }, customers2 = [], vehicles = []) {
     const phoneDigits = String(phone || "").replace(/\D/g, "");
     const normalizedEmail = String(email || "").trim().toLocaleLowerCase();
     if (!phoneDigits && !normalizedEmail) return [];
-    return customers2.filter((customer) => phoneDigits && String(customer.phone || "").replace(/\D/g, "") === phoneDigits || normalizedEmail && String(customer.email || "").trim().toLocaleLowerCase() === normalizedEmail).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
+    return uniqueCustomers(customers2).filter((customer) => phoneDigits && String(customer.phone || "").replace(/\D/g, "") === phoneDigits || normalizedEmail && String(customer.email || "").trim().toLocaleLowerCase() === normalizedEmail).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
   }
   var CUSTOMER_SEARCH_MIN_LENGTH, CUSTOMER_SEARCH_DEBOUNCE_MS, CUSTOMER_SEARCH_RESULT_LIMIT;
   var init_customer_intake = __esm({
@@ -7058,7 +7067,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       form.elements.phone.value = customer.phone || "";
       form.elements.email.value = customer.email || "";
       form.elements.billingAddress.value = customer.billingAddress || "";
-      const localIndex = state.customers.findIndex((item) => item.id === customer.id);
+      const localIndex = state.customers.findIndex((item) => item.id === customer.id || String(item.name || "").trim().toLowerCase() === String(customer.name || "").trim().toLowerCase());
       const localRecord = { ...customer, vehicles: Number(customer.vehicleCount || customer.vehicles?.length || 0) };
       if (localIndex >= 0) state.customers[localIndex] = { ...state.customers[localIndex], ...localRecord };
       else state.customers.unshift(localRecord);
