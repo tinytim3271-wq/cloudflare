@@ -281,6 +281,26 @@ test('remote estimate signature requires a decision for every line', async () =>
   );
 });
 
+test('remote estimate signature rejects stale decision keys', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+        decisions: { labor: 'approved', part: 'approved', stale: 'approved' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 400 && /do not match/.test(error.message),
+  );
+});
+
 test('public response rejects oversized bodies before decoding a signature', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());

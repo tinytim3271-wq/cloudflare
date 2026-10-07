@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { APPROVAL_CUSTOM_LABEL_MAX } from '../../src/modules/estimate-approval.js';
-import { validatedOrderApproval } from '../src/index.js';
+import { putEntity, validatedOrderApproval, verifyOrderApprovalSignature } from '../src/index.js';
 
 const context = {
   shopId: 'shop-1',
@@ -133,6 +133,29 @@ test('an explicit estimate revision may clear approval before a fresh authorizat
   assert.equal(order.estimateRevisionPending, true);
 });
 
+test('technicians and office staff cannot clear an existing approval as a revision', () => {
+  const existing = {
+    ...existingOrder(),
+    linesLockedAt: '2026-10-07T20:00:00.000Z',
+    estimateApproval: {
+      ...otherApproval('Fleet manager email').estimateApproval,
+      approvedAt: '2026-10-07T20:00:00.000Z',
+    },
+  };
+  const revision = {
+    ...existing,
+    estimateApproval: null,
+    linesLockedAt: null,
+    estimateRevisionPending: true,
+  };
+  for (const role of ['technician', 'office']) {
+    assert.throws(
+      () => validatedOrderApproval(revision, { ...context, role }, existing, serverTimestamp),
+      error => error.status === 403 && /cannot revise/.test(error.message),
+    );
+  }
+});
+
 test('Worker rejects missing and whitespace-only Other labels', () => {
   for (const value of ['', '   ']) {
     assert.throws(
@@ -233,4 +256,67 @@ test('Worker requires valid signature evidence and shop ownership', () => {
     ),
     error => error.status === 400 && /does not belong/.test(error.message),
   );
+});
+
+test('Worker verifies a referenced signature exists in R2 and is a PNG', async () => {
+  const signature = {
+    status: 'approved',
+    type: 'signature',
+    signatureKey: 'shops/shop-1/signature/example.png',
+  };
+  await verifyOrderApprovalSignature({
+    FILES: {
+      async head(key) {
+        assert.equal(key, signature.signatureKey);
+        return { httpMetadata: { contentType: 'image/png' } };
+      },
+    },
+  }, context, signature);
+  await assert.rejects(
+    () => verifyOrderApprovalSignature({ FILES: { async head() { return null; } } }, context, signature),
+    error => error.status === 400 && /not found/.test(error.message),
+  );
+  await assert.rejects(
+    () => verifyOrderApprovalSignature({
+      FILES: { async head() { return { httpMetadata: { contentType: 'image/jpeg' } }; } },
+    }, context, signature),
+    error => error.status === 400 && /PNG/.test(error.message),
+  );
+});
+
+test('the D1 approval write guard allows only one concurrent approval to commit', async () => {
+  let locked = false;
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind() {
+            return {
+              async first() {
+                return {
+                  created_at: '2026-10-07T19:00:00.000Z',
+                  created_by: 'staff-1',
+                  updated_at: '2026-10-07T19:00:00.000Z',
+                };
+              },
+              async run() {
+                assert.match(sql, /json_extract\(data_json, '\$\.estimateApproval\.status'\)/);
+                if (locked) return { meta: { changes: 0 } };
+                locked = true;
+                return { meta: { changes: 1 } };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const options = { requireUnlockedEstimate: true };
+  const outcomes = await Promise.allSettled([
+    putEntity(env, context, 'orders', 'RO-1200', otherApproval('Phone'), null, context.userId, options),
+    putEntity(env, context, 'orders', 'RO-1200', otherApproval('In person'), null, context.userId, options),
+  ]);
+  assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1);
+  const rejection = outcomes.find(outcome => outcome.status === 'rejected');
+  assert.equal(rejection.reason.status, 409);
 });

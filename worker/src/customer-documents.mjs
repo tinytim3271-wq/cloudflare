@@ -327,10 +327,13 @@ async function recordResponse(request, env, link, document) {
   const decisions = body.decisions && typeof body.decisions === 'object' ? body.decisions : {};
   let nextEstimate = null;
   if (link.document_type === 'estimate') {
-    const missingDecision = (document.estimate?.lines || [])
-      .map((line, index) => normalizeEstimateLine(line, index))
-      .some(line => !['approved', 'declined'].includes(decisions[line.id]));
+    const lineIds = (document.estimate?.lines || [])
+      .map((line, index) => normalizeEstimateLine(line, index).id);
+    const missingDecision = lineIds.some(id => !['approved', 'declined'].includes(decisions[id]));
     if (missingDecision) throw new HttpError(400, 'Approve or decline every estimate line');
+    if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+      throw new HttpError(400, 'Approval decisions do not match this estimate');
+    }
     nextEstimate = approvedEstimate(document.estimate || {}, decisions);
     if (!nextEstimate.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
   }

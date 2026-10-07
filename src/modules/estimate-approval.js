@@ -11,8 +11,22 @@ export const ESTIMATE_APPROVAL_TYPES = Object.freeze([
 ]);
 
 const APPROVAL_TYPE_VALUES = new Set(ESTIMATE_APPROVAL_TYPES.map(option => option.value));
+const SIGNATURE_DATA_LIMIT = 1024 * 1024;
 
 const trimmed = (value, maxLength) => String(value || '').trim().slice(0, maxLength);
+
+function validPngDataUrl(value) {
+  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(value || ''));
+  if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
+  try {
+    const binary = atob(match[1]);
+    if (!binary.length || binary.length > SIGNATURE_DATA_LIMIT) return false;
+    return [137, 80, 78, 71, 13, 10, 26, 10]
+      .every((byte, index) => binary.charCodeAt(index) === byte);
+  } catch {
+    return false;
+  }
+}
 
 export function approvalRecorder(user = {}) {
   return {
@@ -51,7 +65,7 @@ export function validateEstimateApproval(approval) {
   if (normalized.type === 'signature') {
     const signatureKey = String(normalized.signatureKey || '').trim();
     const signatureDataUrl = String(normalized.signatureDataUrl || '');
-    if (!signatureKey && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(signatureDataUrl)) {
+    if (!signatureKey && !validPngDataUrl(signatureDataUrl)) {
       throw new Error('A stored signature is required for signature approval');
     }
     if (!normalized.signedAt || !Number.isFinite(Date.parse(normalized.signedAt))) {
