@@ -36,6 +36,7 @@ test('after-midnight preset is a fixed itemized $200 fee line', () => {
   assert.equal(estimate.subtotal, 340);
   assert.equal(estimate.tax, 28.05);
   assert.equal(estimate.total, 368.05);
+  assert.equal(normalizeEstimateLine({ type: 'fee', quantity: 2, unitPrice: 200 }).total, 200);
 });
 
 test('after-midnight fee follows line approval and carries into the invoice', () => {

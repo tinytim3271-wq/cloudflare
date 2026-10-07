@@ -22,6 +22,9 @@ import {
   customLaborDraft,
   customersWithSelected,
   estimateEditorDescription,
+  invoicePrintLineItems,
+  isLegacyAfterMidnightLine,
+  terminalOrderChangesAfterMidnightFee,
 } from '../modules/work-order-editor.js';
 import {
   afterMidnightFeeLine,
@@ -616,6 +619,30 @@ openEstimateDiscount = function (id) { const estimate = state.estimates.find(ite
 
 function printInvoice(number) { const invoice = state.invoices.find(item => item.number === number); if (!invoice) return; const profile = shopProfile(), brand = printableBrand(profile), breakdown = invoiceTaxBreakdown(invoice), paid = invoicePaid(invoice), balance = invoiceBalance(invoice), customer = state.customers.find(item => item.name === invoice.customer), order = state.orders.find(item => item.id === invoice.ro), payments = paymentRecords().filter(payment => payment.invoiceNumber === invoice.number), paymentRows = payments.map(payment => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money(Number(payment.amount || 0))}</td></tr>`).join(""), win = window.open("", "_blank", "noopener"); if (!win) { toast("Allow pop-ups to print the invoice"); return } win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span{color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice summary</h2><table><thead><tr><th>Description</th><th>Amount</th></tr></thead><tbody><tr><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money(breakdown.subtotal)}</td></tr><tr><td>Sales tax (${Number(breakdown.taxRate || 0)}%)</td><td>${money(breakdown.tax)}</td></tr></tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money(breakdown.subtotal)}</b></p><p><span>Tax</span><b>${money(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money(invoice.amount)}</b></p><p><span>Payments</span><b>-${money(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`); win.document.close() }
 
+printInvoice = function (number) {
+  const invoice = state.invoices.find(item => item.number === number);
+  if (!invoice) return;
+  const profile = shopProfile();
+  const brand = printableBrand(profile);
+  const breakdown = invoiceTaxBreakdown(invoice);
+  const paid = invoicePaid(invoice);
+  const balance = invoiceBalance(invoice);
+  const customer = state.customers.find(item => item.name === invoice.customer);
+  const order = state.orders.find(item => item.id === invoice.ro);
+  const itemRows = invoicePrintLineItems(invoice).map(item => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money(item.amount)}</td></tr>`).join("");
+  const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money(breakdown.subtotal)}</td></tr>`;
+  const paymentRows = paymentRecords().filter(payment => payment.invoiceNumber === invoice.number)
+    .map(payment => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money(Number(payment.amount || 0))}</td></tr>`)
+    .join("");
+  const win = window.open("", "_blank", "noopener");
+  if (!win) {
+    toast("Allow pop-ups to print the invoice");
+    return;
+  }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money(invoice.amount)}</b></p><p><span>Payments</span><b>-${money(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+  win.document.close();
+};
+
 invoices = function () { const q = query.toLowerCase(), rows = state.invoices.filter(invoice => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map(invoice => { const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice); return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money(invoice.amount)}</b><small>Subtotal ${money(bd.subtotal)} · Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} · Balance ${money(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${escapeHtml(invoice.number)}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>` }).join(""); return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, payments, and branded print copies.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`) };
 
 const bindPrintableInvoiceCore = bindEstimateActions;
@@ -1077,7 +1104,7 @@ function estimateEditorLine(line = {}, index = 0, removable = true) {
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
-      <label><span class="job-line-quantity-label">${fee ? "Quantity" : part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part || fee ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}" ${fee && item.code ? "readonly" : ""}/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${money(item.total)}</b></div>
@@ -1114,10 +1141,13 @@ function estimateFromEditor(root, options = root?._estimateOptions || {}) {
 function refreshEstimateEditor(root) {
   root.querySelectorAll(".job-estimate-line").forEach(row => {
     const type = row.querySelector(".job-line-type").value;
-    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const quantityInput = row.querySelector(".job-line-quantity");
+    if (type === "fee") quantityInput.value = "1";
+    const quantity = Math.max(0, Number(quantityInput.value) || 0);
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     row.querySelector(".job-inventory-field").hidden = type !== "part";
     row.querySelector(".job-part-number-field").hidden = type !== "part";
+    row.querySelector(".job-line-quantity-field").hidden = type === "fee";
     row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
     row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "labor" ? ".25" : "1";
@@ -1152,6 +1182,33 @@ function bindEstimateEditor(root, options) {
   root._bindEstimateRows = bindRows;
   bindRows();
   refreshEstimateEditor(root);
+}
+
+function editorLineSnapshot(row) {
+  return {
+    id: row.dataset.lineId || "",
+    code: row.dataset.feeCode || "",
+    type: row.querySelector(".job-line-type")?.value || "labor",
+    description: row.querySelector(".job-line-description")?.value || "",
+    notes: row.querySelector(".job-line-notes")?.value || "",
+    unitPrice: Number(row.querySelector(".job-line-rate")?.value) || 0,
+  };
+}
+
+function addAfterMidnightFeeToEditor(root, append) {
+  const rows = [...root.querySelectorAll(".job-estimate-line")];
+  if (rows.some(row => row.dataset.feeCode === "after-midnight")) {
+    toast("The after-midnight fee is already on this work order");
+    return;
+  }
+  const legacyRows = rows.filter(row => isLegacyAfterMidnightLine(editorLineSnapshot(row)));
+  if (legacyRows.length) {
+    const descriptions = legacyRows.map(row => row.querySelector(".job-line-description")?.value.trim()).filter(Boolean).join(", ");
+    if (!confirm(`A likely legacy after-midnight charge already exists (${descriptions || "unnamed line"}). Adding another fee could double-charge the customer. Replace the legacy line with the standard $200 flat fee?`)) return;
+    legacyRows.forEach(row => row.remove());
+  }
+  append(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`));
+  if (legacyRows.length) toast("Legacy after-midnight charge replaced with the standard $200 flat fee");
 }
 
 newOrderEstimateRow = function (line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 140) }) {
@@ -1192,10 +1249,7 @@ bindNewOrderEstimator = function () {
   };
   document.querySelector("#add-estimate-line").onclick = () => append(customLaborDraft(`labor-${Date.now()}`, shopProfile().laborRate || 140));
   document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
-  document.querySelector("#add-after-midnight-fee").onclick = () => {
-    if ([...root.querySelectorAll(".job-estimate-line")].some(row => row.dataset.feeCode === "after-midnight")) return toast("The after-midnight fee is already on this work order");
-    append(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`));
-  };
+  document.querySelector("#add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(root, append);
   bindEstimateEditor(root);
 };
 
@@ -1374,6 +1428,7 @@ openOrder = function (id) {
   const estimate = order.estimate, invoice = state.invoices.find(item => item.ro === order.id);
   const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
   const paidInvoice = invoice && invoicePaid(invoice) > 0;
+  const terminalOrder = ["completed", "invoiced"].includes(order.status);
   const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
   const defaultLaborRate = estimate.lines.find(line => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
   const editNotice = paidInvoice
@@ -1383,7 +1438,7 @@ openOrder = function (id) {
       : wasApproved
         ? "Saving creates a revision and clears the prior customer approval."
         : "Changes recalculate labor, parts, tax, and total before saving.";
-  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button">${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? ""}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? ""}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -1394,14 +1449,16 @@ openOrder = function (id) {
     bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
     document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length)); bindEstimateEditor(editorRoot) };
     document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
-    document.querySelector("#job-add-after-midnight-fee").onclick = () => {
-      if ([...editorRoot.querySelectorAll(".job-estimate-line")].some(row => row.dataset.feeCode === "after-midnight")) return toast("The after-midnight fee is already on this work order");
-      editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`), editorRoot.children.length));
+    document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, line => {
+      editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
       bindEstimateEditor(editorRoot);
-    };
+    });
     document.querySelector("#save-job-lines").onclick = async event => {
       const next = estimateFromEditor(editorRoot);
-      if (!next.lines.length) return toast("Add at least one labor or part line");
+      if (!next.lines.length) return toast("Add at least one labor, part, or fee line");
+      if (terminalOrderChangesAfterMidnightFee(order.status, estimate.lines, next.lines)) {
+        return toast("Reopen this work order before adding, replacing, or removing the after-midnight fee");
+      }
       if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
       event.currentTarget.disabled = true;
       const editedAt = now();
@@ -1639,7 +1696,7 @@ estimateEditorLine = function (line = {}, index = 0, removable = true) {
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
-      <label><span class="job-line-quantity-label">${fee ? "Quantity" : part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part || fee ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}" ${fee && item.code ? "readonly" : ""}/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money(item.total)}</b></div>
@@ -1688,11 +1745,14 @@ estimateFromEditor = function (root) {
 refreshEstimateEditor = function (root) {
   root.querySelectorAll(".job-estimate-line").forEach(row => {
     const type = row.querySelector(".job-line-type").value;
-    const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+    const quantityInput = row.querySelector(".job-line-quantity");
+    if (type === "fee") quantityInput.value = "1";
+    const quantity = Math.max(0, Number(quantityInput.value) || 0);
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
     row.dataset.priceStatus = priceStatus;
     row.querySelector(".job-inventory-field").hidden = type !== "part";
+    row.querySelector(".job-line-quantity-field").hidden = type === "fee";
     row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
     row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "labor" ? ".1" : "1";
