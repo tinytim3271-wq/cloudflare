@@ -95,13 +95,42 @@ test('later work-order PUTs preserve the original approval, lock, decisions, and
   tampered.estimateApproval.recordedBy = { id: context.userId, name: context.name };
   tampered.estimateApproval.approvedAt = serverTimestamp;
   tampered.estimateApproval.decisions = { labor: 'declined', part: 'approved' };
-  const order = validatedOrderApproval(tampered, context, existing, serverTimestamp);
+  const laterEditor = {
+    ...context,
+    userId: 'tech-9',
+    name: 'Different Technician',
+    email: 'tech@example.test',
+    role: 'technician',
+  };
+  const order = validatedOrderApproval(tampered, laterEditor, existing, serverTimestamp);
   assert.deepEqual(order.estimateApproval.recordedBy, originalRecorder);
   assert.equal(order.estimateApproval.approvedAt, existing.estimateApproval.approvedAt);
   assert.deepEqual(order.estimateApproval.decisions, existing.estimateApproval.decisions);
   assert.equal(order.linesLockedAt, existing.linesLockedAt);
   assert.equal(order.total, existing.total);
   assert.equal(order.status, 'in_progress');
+});
+
+test('an explicit estimate revision may clear approval before a fresh authorization', () => {
+  const existing = {
+    ...existingOrder(),
+    status: 'approved',
+    linesLockedAt: '2026-10-07T20:00:00.000Z',
+    estimateApproval: {
+      ...otherApproval('Fleet manager email').estimateApproval,
+      approvedAt: '2026-10-07T20:00:00.000Z',
+    },
+  };
+  const revision = {
+    ...existing,
+    estimateApproval: null,
+    linesLockedAt: null,
+    estimateRevisionPending: true,
+  };
+  const order = validatedOrderApproval(revision, context, existing, serverTimestamp);
+  assert.equal(order.estimateApproval, null);
+  assert.equal(order.linesLockedAt, null);
+  assert.equal(order.estimateRevisionPending, true);
 });
 
 test('Worker rejects missing and whitespace-only Other labels', () => {
