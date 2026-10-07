@@ -41,4 +41,12 @@ test('likely duplicate detection normalizes phone and email', () => {
     likelyDuplicateCustomers({ email: ' ISAAC@EXAMPLE.COM ' }, customers, vehicles).map(item => item.id),
     ['customer-1'],
   );
+  assert.equal(
+    likelyDuplicateCustomers(
+      { phone: '555-111-2222' },
+      [...customers, { ...customers[0] }],
+      vehicles,
+    ).length,
+    1,
+  );
 });

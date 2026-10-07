@@ -971,7 +971,10 @@ function bindCustomerIntakeSearch(form) {
     form.elements.phone.value = customer.phone || "";
     form.elements.email.value = customer.email || "";
     form.elements.billingAddress.value = customer.billingAddress || "";
-    const localIndex = state.customers.findIndex(item => item.id === customer.id);
+    const localIndex = state.customers.findIndex(item => (
+      item.id === customer.id
+      || String(item.name || "").trim().toLowerCase() === String(customer.name || "").trim().toLowerCase()
+    ));
     const localRecord = { ...customer, vehicles: Number(customer.vehicleCount || customer.vehicles?.length || 0) };
     if (localIndex >= 0) state.customers[localIndex] = { ...state.customers[localIndex], ...localRecord };
     else state.customers.unshift(localRecord);

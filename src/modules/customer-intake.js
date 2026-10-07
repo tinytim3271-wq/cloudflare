@@ -38,9 +38,19 @@ function enrichCustomer(customer, vehicles) {
   };
 }
 
+function uniqueCustomers(customers) {
+  const seen = new Set();
+  return customers.filter(customer => {
+    const key = String(customer.id || customer.name || '').trim().toLocaleLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function localCustomerMatches(query, customers = [], vehicles = []) {
   if (!shouldSearchCustomers(query)) return [];
-  return customers
+  return uniqueCustomers(customers)
     .filter(customer => matchesName(customer.name, query))
     .sort((left, right) => String(left.name).localeCompare(String(right.name)))
     .slice(0, CUSTOMER_SEARCH_RESULT_LIMIT)
@@ -51,7 +61,7 @@ export function likelyDuplicateCustomers({ phone = '', email = '' }, customers =
   const phoneDigits = String(phone || '').replace(/\D/g, '');
   const normalizedEmail = String(email || '').trim().toLocaleLowerCase();
   if (!phoneDigits && !normalizedEmail) return [];
-  return customers
+  return uniqueCustomers(customers)
     .filter(customer => (
       (phoneDigits && String(customer.phone || '').replace(/\D/g, '') === phoneDigits)
       || (normalizedEmail && String(customer.email || '').trim().toLocaleLowerCase() === normalizedEmail)
