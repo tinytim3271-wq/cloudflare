@@ -3391,6 +3391,17 @@ button{margin-top:12px;padding:8px 14px}
   });
 
   // src/modules/estimate-approval.js
+  function validPngDataUrl(value2) {
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(value2 || ""));
+    if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
+    try {
+      const binary = globalThis.atob(match[1]);
+      if (!binary.length || binary.length > SIGNATURE_DATA_LIMIT) return false;
+      return [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => binary.charCodeAt(index) === byte);
+    } catch {
+      return false;
+    }
+  }
   function approvalRecorder(user = {}) {
     return {
       id: String(user.id || user.userId || "").trim(),
@@ -3424,7 +3435,7 @@ button{margin-top:12px;padding:8px 14px}
     if (normalized.type === "signature") {
       const signatureKey = String(normalized.signatureKey || "").trim();
       const signatureDataUrl = String(normalized.signatureDataUrl || "");
-      if (!signatureKey && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(signatureDataUrl)) {
+      if (!signatureKey && !validPngDataUrl(signatureDataUrl)) {
         throw new Error("A stored signature is required for signature approval");
       }
       if (!normalized.signedAt || !Number.isFinite(Date.parse(normalized.signedAt))) {
@@ -3467,7 +3478,7 @@ button{margin-top:12px;padding:8px 14px}
     const recorder = normalized.recordedBy?.name ? `recorded by ${normalized.recordedBy.name}` : "";
     return [`${method}${approver}${note}`, when, recorder].filter(Boolean).join(", ");
   }
-  var APPROVAL_CUSTOM_LABEL_MAX, APPROVAL_NOTE_MAX, ESTIMATE_APPROVAL_TYPES, APPROVAL_TYPE_VALUES, trimmed;
+  var APPROVAL_CUSTOM_LABEL_MAX, APPROVAL_NOTE_MAX, ESTIMATE_APPROVAL_TYPES, APPROVAL_TYPE_VALUES, SIGNATURE_DATA_LIMIT, trimmed;
   var init_estimate_approval = __esm({
     "src/modules/estimate-approval.js"() {
       APPROVAL_CUSTOM_LABEL_MAX = 120;
@@ -3481,6 +3492,7 @@ button{margin-top:12px;padding:8px 14px}
         { value: "other", label: "Other" }
       ]);
       APPROVAL_TYPE_VALUES = new Set(ESTIMATE_APPROVAL_TYPES.map((option) => option.value));
+      SIGNATURE_DATA_LIMIT = 1024 * 1024;
       trimmed = (value2, maxLength) => String(value2 || "").trim().slice(0, maxLength);
     }
   });
@@ -9019,9 +9031,10 @@ ${catRows}
         const canApprove = ["owner", "admin", "service_writer"].includes(currentUser().role);
         const paidInvoice = invoice && invoicePaid(invoice) > 0;
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
+        const canEditEstimate = canManage && (!wasApproved || canApprove);
         const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money3(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import {
   APPROVAL_CUSTOM_LABEL_MAX,
   approvalSummary,

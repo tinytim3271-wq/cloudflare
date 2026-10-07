@@ -19,7 +19,7 @@ function validPngDataUrl(value) {
   const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(value || ''));
   if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
   try {
-    const binary = atob(match[1]);
+    const binary = globalThis.atob(match[1]);
     if (!binary.length || binary.length > SIGNATURE_DATA_LIMIT) return false;
     return [137, 80, 78, 71, 13, 10, 26, 10]
       .every((byte, index) => binary.charCodeAt(index) === byte);
