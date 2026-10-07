@@ -9,10 +9,11 @@ import {
 import { HttpError, json, requestJson } from '../http.mjs';
 import { syncAccessUser } from '../access-users.mjs';
 
-function entityRecord(row) {
+function entityRecord(row, type = '') {
   if (!row) return null;
   try {
-    return JSON.parse(row.data_json);
+    const record = JSON.parse(row.data_json);
+    return type ? normalizeEntityPayload(type, record) : record;
   } catch {
     return null;
   }
@@ -21,7 +22,7 @@ function entityRecord(row) {
 export async function getEntity(env, shopId, type, id) {
   return entityRecord(await env.DB.prepare(
     'SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
-  ).bind(shopId, type, id).first());
+  ).bind(shopId, type, id).first(), type);
 }
 
 export async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) {
@@ -43,7 +44,7 @@ export async function listEntities(env, shopId, type, { limit = 0, cursor = '' }
   }
   const result = await env.DB.prepare(sql).bind(...bindValues).all();
   const rows = result.results || [];
-  const records = rows.map(entityRecord).filter(Boolean);
+  const records = rows.map(row => entityRecord(row, type)).filter(Boolean);
   if (!boundedLimit) return records;
   return {
     records,

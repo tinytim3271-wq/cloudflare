@@ -369,14 +369,15 @@ async function requireActiveAccount(context, env) {
   if (account && Number(account.suspended) === 1) throw new HttpError(403, 'Customer account is suspended');
 }
 
-function entityRecord(row) {
-  return row ? parseJson(row.data_json) : null;
+function entityRecord(row, type = '') {
+  const record = row ? parseJson(row.data_json) : null;
+  return record && type ? normalizeEntityPayload(type, record) : record;
 }
 
 async function getEntity(env, shopId, type, id) {
   return entityRecord(await env.DB.prepare(
     'SELECT data_json FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
-  ).bind(shopId, type, id).first());
+  ).bind(shopId, type, id).first(), type);
 }
 
 async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) {
@@ -399,7 +400,7 @@ async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) 
   }
   const result = await env.DB.prepare(sql).bind(...bindValues).all();
   const rows = result.results || [];
-  const records = rows.map(entityRecord).filter(Boolean);
+  const records = rows.map(row => entityRecord(row, type)).filter(Boolean);
   if (!boundedLimit) return records;
   return {
     records,
