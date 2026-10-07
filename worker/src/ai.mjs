@@ -45,7 +45,7 @@ export function buildAssistantSystemPrompt(pricing = DEFAULT_SHOP_PRICING, {
   const capabilities = allowEstimatePreparation
     ? 'You may prepare a reviewable estimate and work-order draft with the prepare_estimate_work_order tool when the user asks to create them, but the user must explicitly save the estimate and submit the work order in MechPro.'
     : 'Do not prepare or claim to create an estimate or work-order draft; this interaction cannot return structured drafts for review or saving.';
-  return `${MECHPRO_SYSTEM_PROMPT}\n\n${capabilities} For this shop, use $${laborRate.toFixed(2)} per labor hour, ${taxRate.toFixed(2)}% tax, shop supplies at 3% of labor capped at $20 when labor is billed, and no parts markup. Apply these shop settings rather than generic rates.`;
+  return `${MECHPRO_SYSTEM_PROMPT}\n\n${capabilities} For this shop, use $${laborRate.toFixed(2)} per labor hour, ${taxRate.toFixed(2)}% tax, shop supplies at 3% of labor capped at $20 when labor is billed, and no parts markup. When labor is performed between midnight (12:00 AM) and 6:00 AM, set afterMidnightFee to true so the estimate includes exactly a $200 flat fee as its own itemized work-order line; never calculate it as a percentage of labor. Apply these shop settings rather than generic rates.`;
 }
 
 const LOOKUP_TOOLS = Object.entries(LOOKUP_TYPES).map(([name, entityType]) => ({
@@ -121,6 +121,10 @@ const PREPARE_ESTIMATE_TOOL = {
           additionalProperties: false,
         },
       },
+      afterMidnightFee: {
+        type: 'boolean',
+        description: 'True only when quoted labor is performed between midnight (12:00 AM) and 6:00 AM; adds the fixed $200 itemized fee line.',
+      },
       discountPercent: { type: 'number', minimum: 0, maximum: 100 },
       discountReason: { type: 'string' },
       exclusions: { type: 'array', items: { type: 'string' } },
@@ -166,6 +170,7 @@ export function prepareEstimateWorkOrderDraft(input = {}, pricing = DEFAULT_SHOP
       hours: Math.max(0, Number(labor.hours) || 0),
       source: cleanDraftText(labor.source, 500),
     })).filter(labor => labor.description),
+    afterMidnightFee: input.afterMidnightFee === true,
     discountPercent: Math.min(100, Math.max(0, Number(input.discountPercent) || 0)),
     discountReason: cleanDraftText(input.discountReason, 200),
     exclusions: (input.exclusions || []).slice(0, 20).map(value => cleanDraftText(value, 500)).filter(Boolean),

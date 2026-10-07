@@ -165,6 +165,29 @@ test('public estimate link renders itemized parts and labor without authenticati
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'nonce-/);
 });
 
+test('public estimate link renders the after-midnight charge as a flat fee line', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  order.estimate.lines.push({
+    id: 'fee-after-midnight',
+    code: 'after-midnight',
+    type: 'fee',
+    description: 'a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.',
+    quantity: 1,
+    unitPrice: 200,
+  });
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+
+  const response = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  const html = await response.text();
+  assert.match(html, />Fee</);
+  assert.match(html, /Flat fee/);
+  assert.match(html, /\$200\.00/);
+  assert.doesNotMatch(html, /1\.00 hr × \$200\.00/);
+});
+
 test('remote estimate signature approves selected lines, locks them, and stores PNG in R2', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());

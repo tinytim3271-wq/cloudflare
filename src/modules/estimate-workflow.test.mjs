@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AFTER_MIDNIGHT_FEE_PRESET,
+  afterMidnightFeeLine,
   approvedEstimate,
   billableEstimateLines,
   calculateEstimate,
@@ -14,6 +16,48 @@ import {
   orderHasTechnician,
   workOrderWithEditedEstimate,
 } from './estimate-workflow.js';
+
+test('after-midnight preset is a fixed itemized $200 fee line', () => {
+  const line = afterMidnightFeeLine('fee-night-1');
+  const estimate = calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Emergency repair', hours: 1, laborRate: 140 },
+    line,
+  ], 8.25);
+
+  assert.equal(AFTER_MIDNIGHT_FEE_PRESET.description, 'a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.');
+  assert.equal(line.type, 'fee');
+  assert.equal(estimate.lines[1].id, 'fee-night-1');
+  assert.equal(estimate.lines[1].quantity, 1);
+  assert.equal(estimate.lines[1].unitPrice, 200);
+  assert.equal(estimate.lines[1].total, 200);
+  assert.equal(estimate.labor, 140);
+  assert.equal(estimate.parts, 0);
+  assert.equal(estimate.lineFees, 200);
+  assert.equal(estimate.subtotal, 340);
+  assert.equal(estimate.tax, 28.05);
+  assert.equal(estimate.total, 368.05);
+});
+
+test('after-midnight fee follows line approval and carries into the invoice', () => {
+  const estimate = calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Emergency repair', hours: 1, laborRate: 140 },
+    afterMidnightFeeLine(),
+  ], 8.25);
+  const approved = approvedEstimate(estimate, {
+    labor: 'approved',
+    'fee-after-midnight': 'approved',
+  });
+  const invoice = invoiceRecordForOrder({
+    id: 'RO-1057',
+    customer: 'Customer',
+    vehicle: 'Vehicle',
+    estimate: approved,
+  }, new Date('2026-10-07T06:00:00.000Z'));
+
+  assert.equal(approved.lines.find(line => line.type === 'fee').total, 200);
+  assert.equal(invoice.lines.find(line => line.type === 'fee').total, 200);
+  assert.equal(invoice.amount, 368.05);
+});
 
 test('estimate keeps labor and typed or inventory parts on one card', () => {
   const estimate = calculateEstimate([
@@ -186,6 +230,7 @@ test('editing approved work order lines recalculates totals and requires renewed
   const revisedAt = '2026-10-06T04:00:00.000Z';
   const revised = workOrderWithEditedEstimate({
     id: 'RO-1056',
+    customer: 'Isaac Gallardo',
     status: 'in_progress',
     linesLockedAt: '2026-10-05T12:00:00.000Z',
     estimateApproval: { status: 'approved', signedAt: '2026-10-05T12:00:00.000Z' },
@@ -199,6 +244,7 @@ test('editing approved work order lines recalculates totals and requires renewed
   }, revisedAt);
 
   assert.equal(revised.labor, 280);
+  assert.equal(revised.customer, 'Isaac Gallardo');
   assert.equal(revised.parts, 175);
   assert.equal(revised.total, 505.53);
   assert.equal(revised.estimate.lines[1].partNumber, 'MAF-1056');
@@ -206,6 +252,56 @@ test('editing approved work order lines recalculates totals and requires renewed
   assert.equal(revised.linesLockedAt, null);
   assert.equal(revised.estimateRevisionPending, true);
   assert.equal(revised.status, 'in_progress');
+});
+
+test('editing line items preserves every non-estimate work-order identity field', () => {
+  const identity = {
+    id: 'RO-1057',
+    customer: 'Isaac Gallardo',
+    customerId: 'customer-isaac',
+    phone: '555-0107',
+    email: 'isaac@example.test',
+    vehicle: '2021 Ford F-150',
+    vehicleId: 'vehicle-1057',
+    vin: '1FTFW1E50MFA01057',
+    complaint: 'Brake vibration',
+    status: 'in_progress',
+    priority: 'high',
+    tech: 'Alex',
+    bay: 'Bay 2',
+    mobile: false,
+    promise: 'Today, 4:00 PM',
+    scheduled: '1:00 PM',
+    notes: 'Customer is waiting',
+    createdAt: '2026-10-05T12:00:00.000Z',
+    updatedAt: '2026-10-06T12:00:00.000Z',
+  };
+  const original = {
+    ...identity,
+    labor: 140,
+    laborHours: 1,
+    parts: 0,
+    tax: 11.55,
+    total: 151.55,
+    estimate: {
+      taxRate: 8.25,
+      fees: [],
+      lines: [{ id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 140 }],
+    },
+  };
+
+  const revised = workOrderWithEditedEstimate(original, {
+    ...original.estimate,
+    lines: [{ id: 'labor', type: 'labor', description: 'Brake diagnosis', hours: 2, laborRate: 140 }],
+  }, '2026-10-07T20:00:00.000Z');
+
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(identity).map(key => [key, revised[key]])),
+    identity,
+  );
+  assert.equal(revised.customer, 'Isaac Gallardo');
+  assert.equal(revised.estimate.lines[0].description, 'Brake diagnosis');
+  assert.equal(revised.laborHours, 2);
 });
 
 test('editing an invoiced work order synchronizes unpaid invoice lines and totals', () => {
