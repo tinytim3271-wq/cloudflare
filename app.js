@@ -6984,6 +6984,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const customerInput = form.elements.customer;
     if (!oldSelect || !customerInput) return;
     oldSelect.closest("label").hidden = true;
+    oldSelect.closest("label").style.display = "none";
     customerInput.hidden = false;
     customerInput.required = true;
     customerInput.autocomplete = "off";
@@ -8934,7 +8935,7 @@ ${catRows}
               id,
               customerId: customer.id,
               customer: customer.name,
-              phone: customer.phone || data.phone,
+              phone: data.phone || customer.phone,
               vehicle: data.vehicle,
               vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
               complaint: data.complaint,
