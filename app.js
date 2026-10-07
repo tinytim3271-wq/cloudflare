@@ -3387,6 +3387,91 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/estimate-approval.js
+  function approvalRecorder(user = {}) {
+    return {
+      id: String(user.id || user.userId || "").trim(),
+      name: String(user.name || user.email || "Staff member").trim(),
+      email: String(user.email || "").trim().toLowerCase()
+    };
+  }
+  function normalizeEstimateApproval(approval) {
+    if (!approval || typeof approval !== "object") return approval || null;
+    if (approval.status !== "approved") return { ...approval };
+    const inferredType = approval.type || "signature";
+    return {
+      ...approval,
+      type: String(inferredType).trim().toLowerCase(),
+      customLabel: trimmed(approval.customLabel, APPROVAL_CUSTOM_LABEL_MAX),
+      authorizationName: trimmed(approval.authorizationName, 100),
+      approvedAt: String(approval.approvedAt || approval.signedAt || "").trim(),
+      note: trimmed(approval.note, APPROVAL_NOTE_MAX),
+      recordedBy: approval.recordedBy && typeof approval.recordedBy === "object" ? approvalRecorder(approval.recordedBy) : approval.recordedBy ? approvalRecorder({ name: approval.recordedBy }) : null
+    };
+  }
+  function validateEstimateApproval(approval) {
+    const normalized = normalizeEstimateApproval(approval);
+    if (!normalized || normalized.status !== "approved") return normalized;
+    if (!APPROVAL_TYPE_VALUES.has(normalized.type)) {
+      throw new Error("Choose a valid estimate approval type");
+    }
+    if (normalized.type !== "signature" && !normalized.authorizationName) {
+      throw new Error("Approver name is required");
+    }
+    if (normalized.type === "other" && !normalized.customLabel) {
+      throw new Error("Custom approval type is required when Other is selected");
+    }
+    if (String(approval?.customLabel || "").trim().length > APPROVAL_CUSTOM_LABEL_MAX) {
+      throw new Error(`Custom approval type must be ${APPROVAL_CUSTOM_LABEL_MAX} characters or fewer`);
+    }
+    if (String(approval?.note || "").trim().length > APPROVAL_NOTE_MAX) {
+      throw new Error(`Approval note must be ${APPROVAL_NOTE_MAX} characters or fewer`);
+    }
+    if (!normalized.approvedAt || !Number.isFinite(Date.parse(normalized.approvedAt))) {
+      throw new Error("Approval timestamp is required");
+    }
+    if (normalized.type !== "signature" && !normalized.recordedBy?.name) {
+      throw new Error("The staff member recording this approval is required");
+    }
+    return normalized;
+  }
+  function approvalTypeLabel(approval) {
+    const normalized = normalizeEstimateApproval(approval);
+    if (!normalized) return "";
+    if (normalized.type === "other") return normalized.customLabel || "Other";
+    return ESTIMATE_APPROVAL_TYPES.find((option) => option.value === normalized.type)?.label || "Signature";
+  }
+  function approvalSummary(approval, formatDate = (value2) => new Date(value2).toLocaleString()) {
+    const normalized = normalizeEstimateApproval(approval);
+    if (!normalized || normalized.status !== "approved") return "";
+    const when = normalized.approvedAt ? formatDate(normalized.approvedAt) : "";
+    if (normalized.type === "signature") {
+      return [`Signed by ${normalized.authorizationName || "customer"}`, when].filter(Boolean).join(" \u2014 ");
+    }
+    const method = normalized.type === "other" ? `Approved: ${normalized.customLabel || "Other"}` : `Approved by ${approvalTypeLabel(normalized).replace(/ approval$/i, "").toLowerCase()}`;
+    const approver = normalized.authorizationName ? ` \u2014 ${normalized.authorizationName}` : "";
+    const note = normalized.note ? ` (${normalized.note})` : "";
+    const recorder = normalized.recordedBy?.name ? `recorded by ${normalized.recordedBy.name}` : "";
+    return [`${method}${approver}${note}`, when, recorder].filter(Boolean).join(", ");
+  }
+  var APPROVAL_CUSTOM_LABEL_MAX, APPROVAL_NOTE_MAX, ESTIMATE_APPROVAL_TYPES, APPROVAL_TYPE_VALUES, trimmed;
+  var init_estimate_approval = __esm({
+    "src/modules/estimate-approval.js"() {
+      APPROVAL_CUSTOM_LABEL_MAX = 120;
+      APPROVAL_NOTE_MAX = 300;
+      ESTIMATE_APPROVAL_TYPES = Object.freeze([
+        { value: "signature", label: "Signature" },
+        { value: "phone", label: "Phone approval" },
+        { value: "in_person", label: "In-person approval" },
+        { value: "email", label: "Email approval" },
+        { value: "text", label: "Text approval" },
+        { value: "other", label: "Other" }
+      ]);
+      APPROVAL_TYPE_VALUES = new Set(ESTIMATE_APPROVAL_TYPES.map((option) => option.value));
+      trimmed = (value2, maxLength) => String(value2 || "").trim().slice(0, maxLength);
+    }
+  });
+
   // src/runtime/legacy.js
   var legacy_exports = {};
   function empty(message) {
@@ -7072,11 +7157,25 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       toast(error.message || "Could not create the customer approval link");
     }
   }
+  function approvalSignatureSrc(approval) {
+    if (String(approval?.signatureDataUrl || "").startsWith("data:image/")) return approval.signatureDataUrl;
+    const key = String(approval?.signatureKey || "");
+    return key ? `${cloudflareConfig2.apiUrl}/files/object?key=${encodeURIComponent(key)}` : "";
+  }
+  function estimateApprovalMarkup(approval) {
+    const normalized = normalizeEstimateApproval(approval);
+    if (!normalized || normalized.status !== "approved") return "";
+    const summary = approvalSummary(normalized);
+    const signatureSrc = normalized.type === "signature" ? approvalSignatureSrc(normalized) : "";
+    return `<section class="estimate-approval-record"><div><span>Estimate authorization</span><strong>${escapeHtml(summary)}</strong></div>${signatureSrc ? `<img src="${escapeAttr(signatureSrc)}" alt="Customer signature"/>` : ""}</section>`;
+  }
   function onsiteSignatureModal(kind, record) {
     const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
     const number = kind === "estimate" ? record.id : record.number;
     const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money3(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money3(line.laborRate)}`}</small></span><strong>${money3(line.total)}</strong></label>`).join("")}</fieldset>` : "";
-    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money3(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    const typeOptions = ESTIMATE_APPROVAL_TYPES.map((option) => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join("");
+    const approvalFields = kind === "estimate" ? `<div class="form-grid approval-method-fields"><label>Approval type *<select name="approvalType" id="approval-type">${typeOptions}</select></label><label id="custom-approval-label" hidden>Custom approval type *<input name="customLabel" maxlength="${APPROVAL_CUSTOM_LABEL_MAX}" placeholder="e.g. Approved via fleet manager email"/></label><label class="full">Approval note (optional)<textarea name="approvalNote" maxlength="${APPROVAL_NOTE_MAX}" placeholder="Who approved, callback number, or other audit detail"></textarea></label></div>` : "";
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Authorize estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money3(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}${approvalFields}<label>Approver name *<input name="authorizationName" maxlength="100" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label" id="signature-capture">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer" id="approval-disclaimer">${kind === "estimate" ? "A signature authorizes the selected work. For phone, in-person, email, text, or other approval, MechPro records the current staff user and time instead." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary" id="save-document-approval">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
     let drawing = false, drawn = false;
     const position = (event) => {
@@ -7107,26 +7206,48 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       context.clearRect(0, 0, canvas.width, canvas.height);
       drawn = false;
     };
+    const approvalType = document.querySelector("#approval-type");
+    const syncApprovalMethod = () => {
+      if (!approvalType) return;
+      const signature = approvalType.value === "signature";
+      const other = approvalType.value === "other";
+      document.querySelector("#signature-capture").hidden = !signature;
+      document.querySelector("#clear-signature").hidden = !signature;
+      document.querySelector("#custom-approval-label").hidden = !other;
+      document.querySelector('[name="customLabel"]').required = other;
+      document.querySelector("#save-document-approval").innerHTML = `${icon(signature ? "signature" : "circle-check", 14)} ${signature ? "Sign & approve" : "Record approval"}`;
+      lucide.createIcons();
+    };
+    approvalType?.addEventListener("change", syncApprovalMethod);
+    syncApprovalMethod();
     document.querySelector("#document-signature-form").onsubmit = async (event) => {
       event.preventDefault();
-      if (!drawn) return toast("Draw the customer signature first");
+      const data = new FormData(event.target);
+      const selectedType = kind === "estimate" ? String(data.get("approvalType") || "signature") : "signature";
+      if (selectedType === "signature" && !drawn) return toast("Draw the customer signature first");
       const approvedIds = new Set([...event.target.querySelectorAll('[name="approvedLine"]:checked')].map((input) => input.value));
       if (kind === "estimate" && !approvedIds.size) return toast("Approve at least one line or close without signing");
       const button = event.target.querySelector("button[type=submit]");
       button.disabled = true;
       try {
-        const signatureDataUrl = canvas.toDataURL("image/png");
-        const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
-        const signature = {
-          authorizationName: new FormData(event.target).get("authorizationName").trim(),
-          signatureKey: key,
-          signatureDataUrl: isLocalShell() ? signatureDataUrl : void 0,
-          signedAt: now(),
-          source: "on-site"
-        };
+        const approvedAt = now();
+        const hasSignature = selectedType === "signature";
+        const signatureDataUrl = hasSignature ? canvas.toDataURL("image/png") : void 0;
+        const key = hasSignature && !isLocalShell() ? await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png") : null;
+        const signature = { authorizationName: String(data.get("authorizationName") || "").trim(), signatureKey: key, signatureDataUrl: hasSignature && isLocalShell() ? signatureDataUrl : void 0, signedAt: hasSignature ? approvedAt : void 0, source: "on-site" };
         if (kind === "estimate") {
           const decisions = Object.fromEntries(estimate.lines.map((line) => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
           const approved = approvedEstimate(estimate, decisions);
+          const approval = validateEstimateApproval({
+            status: "approved",
+            ...signature,
+            type: selectedType,
+            customLabel: String(data.get("customLabel") || "").trim(),
+            approvedAt,
+            note: String(data.get("approvalNote") || "").trim(),
+            recordedBy: approvalRecorder(currentUser()),
+            decisions
+          });
           record.estimate = approved;
           record.total = approved.total;
           record.labor = approved.labor;
@@ -7134,8 +7255,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           record.parts = approved.parts;
           record.tax = approved.tax;
           record.status = record.estimateRevisionPreviousStatus || "approved";
-          record.linesLockedAt = signature.signedAt;
-          record.estimateApproval = { status: "approved", ...signature, decisions };
+          record.linesLockedAt = approvedAt;
+          record.estimateApproval = approval;
           record.estimateRevisionPending = false;
           delete record.estimateRevisionPreviousStatus;
           await updateOrderInApi(record);
@@ -7145,7 +7266,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         }
         save();
         closeModal();
-        toast(kind === "estimate" ? `${record.id} approved and signed` : `${record.number} signed`);
+        toast(kind === "estimate" ? `${record.id} approval recorded` : `${record.number} signed`);
         render();
       } catch (error) {
         button.disabled = false;
@@ -7185,15 +7306,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money3(line.laborRate)}</td><td>${money3(line.total)}</td></tr>`).join("");
     const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
+    const approvalMarkup = estimateApprovalMarkup(order.estimateApproval);
     const win = window.open("", "_blank");
     if (!win) return toast("Allow pop-ups to print the job card");
     win.opener = null;
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money3(estimate.parts)}</b></div><div><span>Labor</span><b>${money3(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money3(supplies)}</b></div><div><span>Discount</span><b>-${money3(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money3(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money3(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.estimate-approval-record{display:flex;justify-content:space-between;gap:20px;margin-top:20px;padding:14px;border:1px solid #b9d0c2;background:#edf5ef}.estimate-approval-record span,.estimate-approval-record strong{display:block}.estimate-approval-record span{font-size:9px;text-transform:uppercase}.estimate-approval-record img{max-width:260px;max-height:90px;object-fit:contain}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money3(estimate.parts)}</b></div><div><span>Labor</span><b>${money3(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money3(supplies)}</b></div><div><span>Discount</span><b>-${money3(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money3(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money3(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${approvalMarkup}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
     win.document.close();
   }
   function jobWorkflowSteps(order, invoice) {
     const approval = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Approval required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
   }
   async function completeJobCard(order) {
     const explicitlyApproved = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status));
@@ -7246,6 +7368,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <div class="total"><span>Estimate total</span><b>${money3(estimate.total)}</b></div>
     </section>
     <aside class="reference-exclusions"><strong>Not included / still pending</strong><ul>${exclusions.length ? exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Additional or hidden work is not included without a revised estimate and authorization.</li>"}</ul></aside>
+    ${standalone ? "" : estimateApprovalMarkup(record.estimateApproval)}
   </section>`;
   }
   function availableEstimateSources() {
@@ -7970,6 +8093,7 @@ ${catRows}
       init_estimate_workflow();
       init_estimate_templates();
       init_bay();
+      init_estimate_approval();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
@@ -8875,7 +8999,7 @@ ${catRows}
         const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
         const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
-        const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
+        const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money3(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
         const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
