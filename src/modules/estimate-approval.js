@@ -15,6 +15,17 @@ const SIGNATURE_DATA_LIMIT = 1024 * 1024;
 
 const trimmed = (value, maxLength) => String(value || '').trim().slice(0, maxLength);
 
+function pngCrc32(bytes, start, end) {
+  let crc = 0xffffffff;
+  for (let index = start; index < end; index++) {
+    crc ^= bytes[index];
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function validPngDataUrl(value) {
   const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(value || ''));
   if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
@@ -26,11 +37,14 @@ function validPngDataUrl(value) {
     const view = new DataView(bytes.buffer);
     let offset = 8;
     let sawHeader = false;
+    let sawImageData = false;
     while (offset + 12 <= bytes.length) {
       const length = view.getUint32(offset);
       const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
       const nextOffset = offset + 12 + length;
       if (nextOffset > bytes.length) return false;
+      const storedCrc = view.getUint32(offset + 8 + length);
+      if (pngCrc32(bytes, offset + 4, offset + 8 + length) !== storedCrc) return false;
       if (!sawHeader) {
         if (type !== 'IHDR' || length !== 13) return false;
         const width = view.getUint32(offset + 8);
@@ -38,7 +52,10 @@ function validPngDataUrl(value) {
         if (!width || !height) return false;
         sawHeader = true;
       }
-      if (type === 'IEND') return length === 0 && sawHeader && nextOffset === bytes.length;
+      if (type === 'IDAT' && length > 0) sawImageData = true;
+      if (type === 'IEND') {
+        return length === 0 && sawHeader && sawImageData && nextOffset === bytes.length;
+      }
       offset = nextOffset;
     }
     return false;
