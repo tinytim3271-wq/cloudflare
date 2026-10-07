@@ -11,6 +11,13 @@ import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
 import { uploadFailureMessage, uploadFileToStorage } from '../modules/file-upload.js';
 import { applyAiWorkflowEstimate } from '../modules/ai-workflow.js';
+import {
+  CUSTOMER_SEARCH_DEBOUNCE_MS,
+  CUSTOMER_SEARCH_MIN_LENGTH,
+  likelyDuplicateCustomers,
+  localCustomerMatches,
+  shouldSearchCustomers,
+} from '../modules/customer-intake.js';
 import * as Mileage from '../modules/mileage.js';
 import * as Filing from '../modules/filing/index.js';
 import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMarkup, offlineSession, snapshotShop } from '../modules/offline-desktop.js';
@@ -877,25 +884,221 @@ customers = function () {
 };
 
 const openNewCore = openNew;
+
+function customerIntakeResultMarkup(result, index) {
+  const contact = [result.phone, result.email].filter(Boolean).join(" · ") || "No phone or email on file";
+  const vehicle = result.recentVehicle?.label || result.recentVehicle?.vehicle || "No vehicle on file";
+  return `<button class="customer-search-option" type="button" role="option" data-customer-result="${index}"><span><strong>${escapeHtml(result.name)}</strong><small>${escapeHtml(contact)}</small></span><span class="customer-search-vehicle">${escapeHtml(vehicle)}<small>${Number(result.vehicleCount || result.vehicles?.length || 0)} vehicle${Number(result.vehicleCount || result.vehicles?.length || 0) === 1 ? "" : "s"}</small></span></button>`;
+}
+
+function installCustomerIntakeFields(form) {
+  const oldSelect = form.elements.customerSelect;
+  const customerInput = form.elements.customer;
+  if (!oldSelect || !customerInput) return;
+  oldSelect.closest("label").hidden = true;
+  customerInput.hidden = false;
+  customerInput.required = true;
+  customerInput.autocomplete = "off";
+  customerInput.placeholder = "Start typing a first or last name";
+  customerInput.setAttribute("role", "combobox");
+  customerInput.setAttribute("aria-autocomplete", "list");
+  customerInput.setAttribute("aria-controls", "customer-search-results");
+  customerInput.setAttribute("aria-expanded", "false");
+  customerInput.closest("label").firstChild.textContent = "Customer name *";
+  customerInput.closest("label").classList.add("customer-search-field", "full");
+  customerInput.closest("label").insertAdjacentHTML("beforeend", `<small class="customer-search-help">Type at least ${CUSTOMER_SEARCH_MIN_LENGTH} characters to search existing customers.</small>`);
+  customerInput.closest("label").insertAdjacentHTML("afterend", `<div class="customer-search-results full" id="customer-search-results" role="listbox" aria-label="Matching customers" hidden></div>`);
+  form.elements.phone.closest("label").insertAdjacentHTML("afterend", `<label>Email<input name="email" type="email" autocomplete="email"/></label><label class="full">Billing address<input name="billingAddress" autocomplete="street-address"/></label><input name="selectedCustomerId" type="hidden"/><div class="duplicate-customer-warning full" id="duplicate-customer-warning" role="alert" hidden></div>`);
+}
+
+function bindCustomerIntakeSearch(form) {
+  const input = form.elements.customer;
+  const resultsElement = document.querySelector("#customer-search-results");
+  const duplicateElement = document.querySelector("#duplicate-customer-warning");
+  if (!input || !resultsElement) return { selected: () => null, select: () => {} };
+  let timer = null;
+  let requestSequence = 0;
+  let controller = null;
+  let results = [];
+  let selectedCustomer = null;
+  let dismissedQuery = "";
+
+  const hideResults = () => {
+    resultsElement.hidden = true;
+    resultsElement.innerHTML = "";
+    input.setAttribute("aria-expanded", "false");
+  };
+  const showStatus = message => {
+    resultsElement.hidden = false;
+    resultsElement.innerHTML = `<div class="customer-search-status">${escapeHtml(message)}</div>`;
+    input.setAttribute("aria-expanded", "true");
+  };
+  const showResults = (matches, source) => {
+    results = matches;
+    resultsElement.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    resultsElement.innerHTML = `<div class="customer-search-head"><span>${matches.length ? `${matches.length} existing customer${matches.length === 1 ? "" : "s"} found${source === "local" ? " · saved on this device" : ""}` : "No matching customers found"}</span><button type="button" class="customer-search-dismiss">Dismiss</button></div>${matches.map(customerIntakeResultMarkup).join("")}`;
+    resultsElement.querySelector(".customer-search-dismiss").onclick = () => {
+      dismissedQuery = input.value.trim();
+      hideResults();
+      input.focus();
+    };
+    resultsElement.querySelectorAll("[data-customer-result]").forEach(button => {
+      button.onclick = () => selectCustomer(results[Number(button.dataset.customerResult)]);
+      button.onkeydown = event => {
+        const options = [...resultsElement.querySelectorAll("[data-customer-result]")];
+        const index = options.indexOf(button);
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          (options[index + 1] || options[0])?.focus();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          (options[index - 1] || options.at(-1))?.focus();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          hideResults();
+          input.focus();
+        }
+      };
+    });
+  };
+  const selectCustomer = customer => {
+    if (!customer) return;
+    selectedCustomer = customer;
+    form.elements.selectedCustomerId.value = customer.id;
+    input.value = customer.name || "";
+    form.elements.phone.value = customer.phone || "";
+    form.elements.email.value = customer.email || "";
+    form.elements.billingAddress.value = customer.billingAddress || "";
+    const localIndex = state.customers.findIndex(item => item.id === customer.id);
+    const localRecord = { ...customer, vehicles: Number(customer.vehicleCount || customer.vehicles?.length || 0) };
+    if (localIndex >= 0) state.customers[localIndex] = { ...state.customers[localIndex], ...localRecord };
+    else state.customers.unshift(localRecord);
+    for (const vehicle of customer.vehicles || []) {
+      if (!state.vehicles.some(item => item.id === vehicle.id)) {
+        state.vehicles.push({ ...vehicle, customer: customer.name, customerId: customer.id });
+      }
+    }
+    form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer(customer.name);
+    form.elements.vehicleSelect.value = "";
+    form.elements.vehicle.readOnly = false;
+    duplicateElement.hidden = true;
+    hideResults();
+    input.focus();
+  };
+  const runSearch = async () => {
+    const queryValue = input.value.trim();
+    if (!shouldSearchCustomers(queryValue) || queryValue === dismissedQuery) {
+      hideResults();
+      return;
+    }
+    const sequence = ++requestSequence;
+    controller?.abort();
+    controller = new AbortController();
+    showStatus("Searching customers…");
+    try {
+      const response = await apiFetch(`/customers/search?q=${encodeURIComponent(queryValue)}`, { signal: controller.signal });
+      if (sequence !== requestSequence || input.value.trim() !== queryValue) return;
+      showResults(response.results || [], "cloud");
+    } catch (error) {
+      if (sequence !== requestSequence || error.name === "AbortError") return;
+      showResults(localCustomerMatches(queryValue, state.customers, state.vehicles), "local");
+    }
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    controller?.abort();
+    requestSequence += 1;
+    dismissedQuery = "";
+    duplicateElement.hidden = true;
+    if (selectedCustomer && input.value.trim() !== selectedCustomer.name) {
+      selectedCustomer = null;
+      form.elements.selectedCustomerId.value = "";
+      form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer("");
+    }
+    if (!shouldSearchCustomers(input.value)) {
+      hideResults();
+      return;
+    }
+    timer = setTimeout(runSearch, CUSTOMER_SEARCH_DEBOUNCE_MS);
+  });
+  input.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" && !resultsElement.hidden) {
+      event.preventDefault();
+      resultsElement.querySelector("[data-customer-result]")?.focus();
+    } else if (event.key === "Escape") {
+      hideResults();
+    }
+  });
+  [form.elements.phone, form.elements.email].forEach(field => field.addEventListener("input", () => {
+    form.dataset.duplicateConfirmed = "";
+    duplicateElement.hidden = true;
+  }));
+  input.focus();
+  return { selected: () => selectedCustomer, select: selectCustomer };
+}
+
+async function intakeDuplicateMatches(data) {
+  try {
+    const response = await apiFetch("/customers/duplicates", {
+      method: "POST",
+      body: JSON.stringify({ phone: data.phone, email: data.email }),
+    });
+    return response.results || [];
+  } catch {
+    return likelyDuplicateCustomers(data, state.customers, state.vehicles);
+  }
+}
+
+function showIntakeDuplicateWarning(form, matches, picker, confirmationKey) {
+  const warning = document.querySelector("#duplicate-customer-warning");
+  warning.hidden = false;
+  warning.innerHTML = `<strong>Possible duplicate customer</strong><p>This phone or email is already used by:</p>${matches.map((match, index) => `<button type="button" class="duplicate-customer-use" data-duplicate-result="${index}">Use ${escapeHtml(match.name)} instead</button>`).join("")}<button type="button" class="duplicate-customer-continue">Create a new customer anyway</button>`;
+  warning.querySelectorAll("[data-duplicate-result]").forEach(button => {
+    button.onclick = () => {
+      picker.select(matches[Number(button.dataset.duplicateResult)]);
+      form.requestSubmit();
+    };
+  });
+  warning.querySelector(".duplicate-customer-continue").onclick = () => {
+    form.dataset.duplicateConfirmed = confirmationKey;
+    warning.hidden = true;
+    form.requestSubmit();
+  };
+  warning.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 openNew = function () {
   openNewCore();
   const form = document.querySelector("#new-form");
   if (!form) return;
+  installCustomerIntakeFields(form);
+  const customerPicker = bindCustomerIntakeSearch(form);
   form.onsubmit = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
-    const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+    const customerName = String(data.customer || "").trim();
     if (!customerName) return toast("Select or enter a customer name");
     const button = form.querySelector("button[type=submit], button:not([type])");
     button.disabled = true;
     try {
-      let customer = state.customers.find(item => item.name.toLowerCase() === customerName.toLowerCase());
+      const selectedCustomer = customerPicker.selected();
+      const duplicateKey = `${String(data.phone || "").replace(/\D/g, "")}|${String(data.email || "").trim().toLowerCase()}`;
+      if (!selectedCustomer && duplicateKey !== "|" && form.dataset.duplicateConfirmed !== duplicateKey) {
+        const duplicates = await intakeDuplicateMatches(data);
+        if (duplicates.length) {
+          button.disabled = false;
+          showIntakeDuplicateWarning(form, duplicates, customerPicker, duplicateKey);
+          return;
+        }
+      }
+      let customer = selectedCustomer || state.customers.find(item => item.id === data.selectedCustomerId);
       if (!customer) {
         customer = await saveCustomerRecord(null, {
           name: customerName,
           phone: String(data.phone || ""),
-          email: "",
-          billingAddress: "",
+          email: String(data.email || ""),
+          billingAddress: String(data.billingAddress || ""),
           billingNotes: "",
         });
       }
@@ -903,8 +1106,9 @@ openNew = function () {
       const id = `RO-${Math.max(1040, ...state.orders.map(item => Number(item.id.split("-")[1]) || 0)) + 1}`;
       const order = {
         id,
+        customerId: customer.id,
         customer: customer.name,
-        phone: data.phone,
+        phone: customer.phone || data.phone,
         vehicle: data.vehicle,
         vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
         complaint: data.complaint,
