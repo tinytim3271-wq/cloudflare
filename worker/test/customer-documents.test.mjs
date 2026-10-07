@@ -187,12 +187,18 @@ test('remote estimate signature approves selected lines, locks them, and stores 
   const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
   assert.equal(saved.status, 'approved');
   assert.equal(saved.estimateApproval.status, 'approved');
+  assert.equal(saved.estimateApproval.type, 'signature');
   assert.equal(saved.estimateApproval.authorizationName, 'Pat Customer');
+  assert.equal(saved.estimateApproval.approvedAt, saved.estimateApproval.signedAt);
+  assert.equal(saved.estimateApproval.recordedBy.name, 'Pat Customer');
   assert.equal(saved.estimate.lines.find(line => line.id === 'part').approvalStatus, 'declined');
   assert.equal(saved.total, 165);
   assert.ok(saved.linesLockedAt);
   assert.equal(fixture.files.size, 1);
   assert.equal(fixture.links[0].result, 'approved');
+
+  const completed = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  assert.match(await completed.text(), /Signed by Pat Customer/);
 });
 
 test('remote estimate signature requires a decision for every line', async () => {

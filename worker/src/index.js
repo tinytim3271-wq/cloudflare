@@ -43,6 +43,11 @@ import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
 import { recordPayment as recordPaymentToTarget } from './payments.mjs';
+import {
+  approvalRecorder,
+  normalizeEstimateApproval,
+  validateEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -433,6 +438,23 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
   return record;
 }
 
+export function validatedOrderApproval(body, context) {
+  const approval = body?.estimateApproval;
+  if (!approval || approval.status !== 'approved') return body;
+  const inferred = normalizeEstimateApproval(approval);
+  const recordedBy = inferred.type === 'signature' && inferred.recordedBy
+    ? inferred.recordedBy
+    : approvalRecorder(context);
+  try {
+    return {
+      ...body,
+      estimateApproval: validateEstimateApproval({ ...approval, recordedBy }),
+    };
+  } catch (error) {
+    throw new HttpError(400, error.message || 'Estimate approval is invalid');
+  }
+}
+
 function members(record) {
   return [...new Set((Array.isArray(record?.memberEmails) ? record.memberEmails : [])
     .map(email => String(email).trim().toLowerCase()).filter(Boolean))];
@@ -574,6 +596,7 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'POST' && !id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    if (type === 'orders') body = validatedOrderApproval(body, context);
     const naturalId = type === 'invoices' ? body.number : type === 'customers' ? body.name : null;
     const newId = String(body.id || naturalId || crypto.randomUUID());
     if (type === 'conversations') {
@@ -605,6 +628,7 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'PUT' && id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    if (type === 'orders') body = validatedOrderApproval(body, context);
     if (type === 'chatmessages') throw new HttpError(405, 'Chat messages cannot be edited');
     if (type === 'conversations') {
       const existing = await getEntity(env, context.shopId, type, id);

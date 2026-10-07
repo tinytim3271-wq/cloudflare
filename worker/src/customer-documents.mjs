@@ -4,6 +4,10 @@ import {
   declinedEstimate,
   normalizeEstimateLine,
 } from '../../src/modules/estimate-workflow.js';
+import {
+  approvalSummary,
+  normalizeEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
 import { HttpError, json, requestJson } from './http.mjs';
 
 const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -163,8 +167,12 @@ function customerDocumentPage(link, document, nonce) {
   const estimate = isEstimate ? document.estimate || calculateEstimate([], 0) : document;
   const number = isEstimate ? document.estimateNumber || document.id : document.number;
   const complete = Boolean(link.consumed_at);
+  const savedApproval = isEstimate ? normalizeEstimateApproval(document.estimateApproval) : null;
+  const completedDetail = savedApproval?.status === 'approved'
+    ? approvalSummary(savedApproval)
+    : `This ${type} was ${link.result || 'completed'} on ${new Date(link.consumed_at).toLocaleString()}.`;
   const status = complete
-    ? `<section class="notice complete"><strong>Response recorded</strong><p>This ${type} was ${escapeHtml(link.result || 'completed')} on ${escapeHtml(new Date(link.consumed_at).toLocaleString())}.</p></section>`
+    ? `<section class="notice complete"><strong>Response recorded</strong><p>${escapeHtml(completedDetail)}</p></section>`
     : '';
   const controls = complete ? '' : `
     <section class="signature">
@@ -327,9 +335,12 @@ async function recordResponse(request, env, link, document) {
   const signatureKey = await storeSignature(env, link, body.signatureDataUrl);
   const timestamp = new Date().toISOString();
   const signature = {
+    type: 'signature',
     authorizationName,
     signatureKey,
     signedAt: timestamp,
+    approvedAt: timestamp,
+    recordedBy: { id: 'customer', name: authorizationName, email: '' },
     source: 'remote',
   };
   const result = link.document_type === 'estimate' ? 'approved' : 'signed';
