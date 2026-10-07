@@ -7148,7 +7148,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function showIntakeDuplicateWarning(form, matches, picker, confirmationKey) {
     const warning = document.querySelector("#duplicate-customer-warning");
     warning.hidden = false;
-    warning.innerHTML = `<strong>Possible duplicate customer</strong><p>This phone or email is already used by:</p>${matches.map((match, index) => `<button type="button" class="duplicate-customer-use" data-duplicate-result="${index}">Use ${escapeHtml(match.name)} instead</button>`).join("")}<button type="button" class="duplicate-customer-continue">Create a new customer anyway</button>`;
+    warning.innerHTML = `<strong>Possible duplicate customer</strong><p>This phone or email matches an existing customer. Link this work order or explicitly continue:</p>${matches.map((match, index) => `<button type="button" class="duplicate-customer-use" data-duplicate-result="${index}">Use ${escapeHtml(match.name)} instead</button>`).join("")}<button type="button" class="duplicate-customer-continue">Create a new customer anyway</button>`;
     warning.querySelectorAll("[data-duplicate-result]").forEach((button) => {
       button.onclick = () => {
         picker.select(matches[Number(button.dataset.duplicateResult)]);
