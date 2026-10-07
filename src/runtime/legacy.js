@@ -896,6 +896,7 @@ function installCustomerIntakeFields(form) {
   const customerInput = form.elements.customer;
   if (!oldSelect || !customerInput) return;
   oldSelect.closest("label").hidden = true;
+  oldSelect.closest("label").style.display = "none";
   customerInput.hidden = false;
   customerInput.required = true;
   customerInput.autocomplete = "off";
