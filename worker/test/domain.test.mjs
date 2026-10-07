@@ -125,6 +125,48 @@ test('invoice balance and tax report account for completed payments', () => {
   });
 });
 
+test('tax report includes imported paid invoices without duplicate payment rows', () => {
+  const invoice = {
+    number: 'INV-IMPORT-100',
+    customer: 'Imported Customer',
+    amount: 149.99,
+    subtotal: 138.56,
+    tax: 11.43,
+    taxRate: 8.25,
+    status: 'paid',
+    date: '2026-10-01',
+    closedAt: '2026-10-06',
+    importSource: 'csv',
+  };
+  const report = buildTaxReport([], [invoice], 8.25, '2026-10-01', '2026-10-07');
+  assert.deepEqual(report.rows, [{
+    date: '2026-10-06',
+    invoiceNumber: 'INV-IMPORT-100',
+    customer: 'Imported Customer',
+    gross: 149.99,
+    taxable: 138.56,
+    nontaxable: 0,
+    tax: 11.43,
+    taxRate: 8.25,
+  }]);
+  assert.deepEqual(report.totals, {
+    gross: 149.99,
+    taxable: 138.56,
+    nontaxable: 0,
+    tax: 11.43,
+  });
+
+  const withPayment = buildTaxReport([{
+    invoiceNumber: invoice.number,
+    customer: invoice.customer,
+    amount: invoice.amount,
+    receivedAt: '2026-10-06',
+    status: 'completed',
+  }], [invoice], 8.25, '2026-10-01', '2026-10-07');
+  assert.equal(withPayment.rows.length, 1);
+  assert.equal(withPayment.totals.gross, 149.99);
+});
+
 test('integration secrets round-trip through AES-GCM', async () => {
   const encrypted = await encryptSecret('whsec_example', 'local-test-key');
   assert.notEqual(encrypted.ciphertext, 'whsec_example');

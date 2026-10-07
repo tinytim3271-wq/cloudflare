@@ -210,7 +210,18 @@ export function buildTaxReport(payments, invoices, fallbackRate, from, to) {
   const start = new Date(from);
   const end = new Date(to);
   end.setUTCHours(23, 59, 59, 999);
-  const rows = payments.filter(payment => payment.status === 'completed')
+  const completedPayments = payments.filter(payment => payment.status === 'completed');
+  const legacyPaidInvoices = invoices
+    .filter(invoice => invoice.status === 'paid'
+      && !payments.some(payment => payment.invoiceNumber === invoice.number))
+    .map(invoice => ({
+      invoiceNumber: invoice.number,
+      customer: invoice.customer,
+      amount: invoice.amount,
+      receivedAt: invoice.paidAt || invoice.closedAt || invoice.date,
+      status: 'completed',
+    }));
+  const rows = [...completedPayments, ...legacyPaidInvoices]
     .filter(payment => new Date(payment.receivedAt) >= start && new Date(payment.receivedAt) <= end)
     .map(payment => {
       const invoice = invoices.find(item => item.number === payment.invoiceNumber);
