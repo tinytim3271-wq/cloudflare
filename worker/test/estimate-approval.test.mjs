@@ -36,6 +36,14 @@ test('Worker validates and normalizes Other approvals while binding the current 
   });
 });
 
+test('later work-order updates preserve the staff member who originally recorded approval', () => {
+  const originalRecorder = { id: 'staff-2', name: 'Service Writer', email: 'writer@example.test' };
+  const body = otherApproval('Fleet manager email');
+  body.estimateApproval.recordedBy = originalRecorder;
+  const order = validatedOrderApproval(body, context, body.estimateApproval);
+  assert.deepEqual(order.estimateApproval.recordedBy, originalRecorder);
+});
+
 test('Worker rejects missing and whitespace-only Other labels', () => {
   for (const value of ['', '   ']) {
     assert.throws(

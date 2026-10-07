@@ -438,13 +438,19 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
   return record;
 }
 
-export function validatedOrderApproval(body, context) {
+export function validatedOrderApproval(body, context, existingApproval = null) {
   const approval = body?.estimateApproval;
   if (!approval || approval.status !== 'approved') return body;
   const inferred = normalizeEstimateApproval(approval);
-  const recordedBy = inferred.type === 'signature' && inferred.recordedBy
-    ? inferred.recordedBy
-    : approvalRecorder(context);
+  const existing = normalizeEstimateApproval(existingApproval);
+  const unchangedApproval = existing?.status === 'approved'
+    && existing.type === inferred.type
+    && existing.approvedAt === inferred.approvedAt;
+  const recordedBy = unchangedApproval && existing.recordedBy
+    ? existing.recordedBy
+    : inferred.type === 'signature' && inferred.recordedBy
+      ? inferred.recordedBy
+      : approvalRecorder(context);
   try {
     return {
       ...body,
@@ -628,7 +634,10 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'PUT' && id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
-    if (type === 'orders') body = validatedOrderApproval(body, context);
+    if (type === 'orders') {
+      const existingOrder = await getEntity(env, context.shopId, type, id);
+      body = validatedOrderApproval(body, context, existingOrder?.estimateApproval);
+    }
     if (type === 'chatmessages') throw new HttpError(405, 'Chat messages cannot be edited');
     if (type === 'conversations') {
       const existing = await getEntity(env, context.shopId, type, id);

@@ -7211,9 +7211,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       if (!approvalType) return;
       const signature = approvalType.value === "signature";
       const other = approvalType.value === "other";
-      document.querySelector("#signature-capture").hidden = !signature;
-      document.querySelector("#clear-signature").hidden = !signature;
-      document.querySelector("#custom-approval-label").hidden = !other;
+      const signatureCapture = document.querySelector("#signature-capture");
+      const clearSignature = document.querySelector("#clear-signature");
+      const customApproval = document.querySelector("#custom-approval-label");
+      signatureCapture.hidden = !signature;
+      signatureCapture.style.display = signature ? "" : "none";
+      clearSignature.hidden = !signature;
+      clearSignature.style.display = signature ? "" : "none";
+      customApproval.hidden = !other;
+      customApproval.style.display = other ? "" : "none";
       document.querySelector('[name="customLabel"]').required = other;
       document.querySelector("#save-document-approval").innerHTML = `${icon(signature ? "signature" : "circle-check", 14)} ${signature ? "Sign & approve" : "Record approval"}`;
       lucide.createIcons();
