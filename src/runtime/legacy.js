@@ -1108,7 +1108,7 @@ openNew = function () {
         id,
         customerId: customer.id,
         customer: customer.name,
-        phone: customer.phone || data.phone,
+        phone: data.phone || customer.phone,
         vehicle: data.vehicle,
         vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
         complaint: data.complaint,
