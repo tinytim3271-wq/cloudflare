@@ -57,6 +57,34 @@ export function localCustomerMatches(query, customers = [], vehicles = []) {
     .map(customer => enrichCustomer(customer, vehicles));
 }
 
+const CONTACT_FIELDS = ['name', 'phone', 'email', 'billingAddress', 'billingNotes'];
+
+export function customerContactFields(data = {}, existing = null) {
+  const source = data && typeof data === 'object' ? data : {};
+  const notesProvided = Object.prototype.hasOwnProperty.call(source, 'billingNotes') && source.billingNotes != null;
+  return {
+    name: String(source.name ?? existing?.name ?? '').trim(),
+    phone: String(source.phone ?? '').trim(),
+    email: String(source.email ?? '').trim(),
+    billingAddress: String(source.billingAddress ?? '').trim(),
+    billingNotes: notesProvided ? String(source.billingNotes).trim() : String(existing?.billingNotes || '').trim(),
+  };
+}
+
+export function customerContactChanged(existing, fields) {
+  if (!existing) return true;
+  return CONTACT_FIELDS.some(key => String(existing[key] || '').trim() !== String(fields?.[key] || '').trim());
+}
+
+export function mergeSavedCustomer(record, response) {
+  if (!response || response.queued) return record;
+  const saved = { ...record, ...response, id: response.id || record.id };
+  for (const key of CONTACT_FIELDS) {
+    if (response[key] == null) saved[key] = record[key] ?? '';
+  }
+  return saved;
+}
+
 export function likelyDuplicateCustomers({ phone = '', email = '' }, customers = [], vehicles = []) {
   const phoneDigits = String(phone || '').replace(/\D/g, '');
   const normalizedEmail = String(email || '').trim().toLocaleLowerCase();
