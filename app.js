@@ -2897,7 +2897,82 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/work-order-editor.js
+  function customersWithSelected(customers2 = [], selected = "") {
+    const records = Array.isArray(customers2) ? customers2 : [];
+    const selectedName = String(selected || "");
+    if (!selectedName || records.some((customer) => customer?.name === selectedName)) return records;
+    return [{ name: selectedName }, ...records];
+  }
+  function customLaborDraft(id, laborRate) {
+    return {
+      id,
+      type: "labor",
+      description: "",
+      descriptionPlaceholder: "Custom labor",
+      hours: 1,
+      laborRate: Number(laborRate) || 0
+    };
+  }
+  function estimateEditorDescription(line = {}, normalizedDescription = "") {
+    const placeholder = String(line.descriptionPlaceholder || "");
+    return {
+      value: placeholder ? String(line.description || "") : String(normalizedDescription || ""),
+      placeholder
+    };
+  }
+  function normalizedFeeText(value2) {
+    return String(value2 || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function isAfterMidnightFeeLine(line = {}) {
+    if (line.code === "after-midnight") return true;
+    const text = normalizedFeeText(`${line.description || line.service || ""} ${line.notes || line.explanation || ""}`);
+    const hasTime = /\bmidnight\b|\bovernight\b|\blate night\b|\bafter 12(?: 00)? a?m\b/.test(text);
+    const hasCharge = /\bfee\b|\bsurcharge\b|\bdifferen(?:tial|tail)\b|\bdifferentail\b/.test(text);
+    return line.type !== "part" && hasTime && hasCharge;
+  }
+  function isLegacyAfterMidnightLine(line = {}) {
+    return line.code !== "after-midnight" && line.type !== "fee" && isAfterMidnightFeeLine(line);
+  }
+  function afterMidnightFeeFingerprint(lines = []) {
+    return JSON.stringify((Array.isArray(lines) ? lines : []).filter(isAfterMidnightFeeLine).map((line) => ({
+      id: String(line.id || ""),
+      description: String(line.description || ""),
+      unitPrice: Number(line.unitPrice ?? line.amount) || 0
+    })).sort((left, right) => left.id.localeCompare(right.id)));
+  }
+  function terminalOrderChangesAfterMidnightFee(status, beforeLines = [], afterLines = []) {
+    if (!["completed", "invoiced"].includes(String(status || ""))) return false;
+    return afterMidnightFeeFingerprint(beforeLines) !== afterMidnightFeeFingerprint(afterLines);
+  }
+  function invoicePrintLineItems(invoice = {}) {
+    const lineItems = (Array.isArray(invoice.lines) ? invoice.lines : []).map((line) => {
+      const type = ["part", "fee"].includes(line?.type) ? line.type : "labor";
+      const amount = Math.max(0, Number(line?.total) || 0);
+      return {
+        type,
+        description: String(line?.description || line?.service || (type === "fee" ? "Fee" : type === "part" ? "Part" : "Labor")),
+        detail: type === "fee" ? "Flat fee" : type === "part" ? `${Math.max(0, Number(line?.quantity) || 0)} \xD7 ${Math.max(0, Number(line?.unitPrice) || 0).toFixed(2)}` : `${Math.max(0, Number(line?.hours) || 0).toFixed(2)} hr \xD7 ${Math.max(0, Number(line?.laborRate) || 0).toFixed(2)}`,
+        amount
+      };
+    });
+    const feeItems = (Array.isArray(invoice.fees) ? invoice.fees : []).map((fee) => ({
+      type: "fee",
+      description: String(fee?.description || "Fee"),
+      detail: "Fee",
+      amount: Math.max(0, Number(fee?.amount) || 0)
+    }));
+    return [...lineItems, ...feeItems];
+  }
+  var init_work_order_editor = __esm({
+    "src/modules/work-order-editor.js"() {
+    }
+  });
+
   // src/modules/estimate-workflow.js
+  function afterMidnightFeeLine(id = "fee-after-midnight") {
+    return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
+  }
   function isDeclinedEstimateLine(line) {
     return line?.approvalStatus === "declined";
   }
@@ -2912,9 +2987,9 @@ button{margin-top:12px;padding:8px 14px}
     return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
   }
   function normalizeEstimateLine(line = {}, index = 0) {
-    const type = line.type === "part" ? "part" : "labor";
-    const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
-    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : line.laborRate)) || 0);
+    const type = ["part", "fee"].includes(line.type) ? line.type : "labor";
+    const quantity = type === "fee" ? 1 : Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
+    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : type === "fee" ? line.amount : line.laborRate)) || 0);
     const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
     const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
     const total = type === "labor" ? roundMoney3(hours * laborRate) : roundMoney3(quantity * unitPrice);
@@ -2922,7 +2997,7 @@ button{margin-top:12px;padding:8px 14px}
       ...line,
       id: String(line.id || `line-${index + 1}`),
       type,
-      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : "Labor")),
+      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : type === "fee" ? "Fee" : "Labor")),
       notes: String(line.notes || line.explanation || ""),
       partNumber: type === "part" ? String(line.partNumber || line.part_number || line.inventorySku || "") : "",
       quantity,
@@ -2960,7 +3035,8 @@ button{margin-top:12px;padding:8px 14px}
     }));
     const labor = roundMoney3(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
     const parts = roundMoney3(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
-    const feeTotal = roundMoney3(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const lineFees = roundMoney3(billableLines.filter((line) => line.type === "fee").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney3(lineFees + normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
     const subtotal = roundMoney3(labor + parts + feeTotal);
     const safeTaxRate = Math.max(0, Number(taxRate) || 0);
     const tax = roundMoney3(subtotal * safeTaxRate / 100);
@@ -2970,6 +3046,8 @@ button{margin-top:12px;padding:8px 14px}
       labor,
       laborHours: roundMoney3(billableLines.reduce((sum, line) => sum + line.hours, 0)),
       parts,
+      lineFees,
+      feeTotal,
       subtotal,
       taxRate: safeTaxRate,
       tax,
@@ -3094,13 +3172,21 @@ button{margin-top:12px;padding:8px 14px}
       revisedAt: editedAt
     };
   }
-  var roundMoney3, SHOP_SUPPLIES_RULES;
+  var roundMoney3, SHOP_SUPPLIES_RULES, AFTER_MIDNIGHT_FEE_PRESET;
   var init_estimate_workflow = __esm({
     "src/modules/estimate-workflow.js"() {
       roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       SHOP_SUPPLIES_RULES = Object.freeze({
         shopSuppliesRate: 3,
         shopSuppliesCap: 20
+      });
+      AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
+        code: "after-midnight",
+        type: "fee",
+        description: "a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.",
+        quantity: 1,
+        unitPrice: 200,
+        amount: 200
       });
     }
   });
@@ -3201,7 +3287,8 @@ button{margin-top:12px;padding:8px 14px}
       laborRate: resolvedLaborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
-    const totals = calculateShopEstimate([...partLines, ...laborLines], {
+    const feeLines = draft.afterMidnightFee ? [afterMidnightFeeLine("assistant-fee-after-midnight")] : [];
+    const totals = calculateShopEstimate([...partLines, ...laborLines, ...feeLines], {
       laborRate: resolvedLaborRate,
       taxRate,
       discountPercent: draft.discountPercent,
@@ -3659,7 +3746,7 @@ button{margin-top:12px;padding:8px 14px}
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 165), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 140), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
     const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]), { taxRate: state.taxSettings.rate });
     return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
@@ -4501,7 +4588,7 @@ button{margin-top:12px;padding:8px 14px}
     return shell(`${heading("Relationships", "Customers", "Customer contact details, vehicles, and service value at a glance.")}<div class="customer-grid">${cards}</div>`);
   }
   function customerOptions(selected = "") {
-    return state.customers.map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
+    return customersWithSelected(state.customers, selected).map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
   }
   function vehicleLabel(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
@@ -7016,17 +7103,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money3(item.price)}</option>`).join("")}`;
   }
   function estimateEditorLine(line = {}, index = 0, removable = true) {
-    const item = normalizeEstimateLine(line, index), part = item.type === "part";
-    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
+    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-fee-code="${escapeAttr(item.code || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
-      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${money3(item.total)}</b></div>
   </article>`;
@@ -7049,7 +7136,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         laborRate: type === "labor" ? unitPrice : 0,
         inventoryId: inventory?.id || null,
         inventorySku: inventory?.sku || "",
-        committedQuantity: type === "part" && inventory ? quantity : 0
+        committedQuantity: type === "part" && inventory ? quantity : 0,
+        code: type === "fee" ? row.dataset.feeCode : "",
+        amount: type === "fee" ? unitPrice : 0
       }, index);
     }).filter((line) => line.description && line.quantity > 0);
     const fees = options.fees ?? (lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
@@ -7058,13 +7147,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function refreshEstimateEditor(root) {
     root.querySelectorAll(".job-estimate-line").forEach((row) => {
       const type = row.querySelector(".job-line-type").value;
-      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const quantityInput = row.querySelector(".job-line-quantity");
+      if (type === "fee") quantityInput.value = "1";
+      const quantity = Math.max(0, Number(quantityInput.value) || 0);
       const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
       row.querySelector(".job-inventory-field").hidden = type !== "part";
       row.querySelector(".job-part-number-field").hidden = type !== "part";
-      row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
-      row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
-      row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
+      row.querySelector(".job-line-quantity-field").hidden = type === "fee";
+      row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
+      row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
+      row.querySelector(".job-line-quantity").step = type === "labor" ? ".25" : "1";
       row.querySelector(".job-line-total b").textContent = money3(quantity * rate);
     });
     const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
@@ -7096,6 +7188,31 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     bindRows();
     refreshEstimateEditor(root);
   }
+  function editorLineSnapshot(row) {
+    return {
+      id: row.dataset.lineId || "",
+      code: row.dataset.feeCode || "",
+      type: row.querySelector(".job-line-type")?.value || "labor",
+      description: row.querySelector(".job-line-description")?.value || "",
+      notes: row.querySelector(".job-line-notes")?.value || "",
+      unitPrice: Number(row.querySelector(".job-line-rate")?.value) || 0
+    };
+  }
+  function addAfterMidnightFeeToEditor(root, append) {
+    const rows = [...root.querySelectorAll(".job-estimate-line")];
+    if (rows.some((row) => row.dataset.feeCode === "after-midnight")) {
+      toast("The after-midnight fee is already on this work order");
+      return;
+    }
+    const legacyRows = rows.filter((row) => isLegacyAfterMidnightLine(editorLineSnapshot(row)));
+    if (legacyRows.length) {
+      const descriptions = legacyRows.map((row) => row.querySelector(".job-line-description")?.value.trim()).filter(Boolean).join(", ");
+      if (!confirm(`A likely legacy after-midnight charge already exists (${descriptions || "unnamed line"}). Adding another fee could double-charge the customer. Replace the legacy line with the standard $200 flat fee?`)) return;
+      legacyRows.forEach((row) => row.remove());
+    }
+    append(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`));
+    if (legacyRows.length) toast("Legacy after-midnight charge replaced with the standard $200 flat fee");
+  }
   async function ensureCustomerDocumentLink(documentType, documentId) {
     return apiFetch("/document-links", {
       method: "POST",
@@ -7122,7 +7239,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function onsiteSignatureModal(kind, record) {
     const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
     const number = kind === "estimate" ? record.id : record.number;
-    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money3(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money3(line.laborRate)}`}</small></span><strong>${money3(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money3(line.unitPrice)}` : line.type === "fee" ? `Flat fee \xB7 ${money3(line.total)}` : `${line.hours.toFixed(2)} hr \xD7 ${money3(line.laborRate)}`}</small></span><strong>${money3(line.total)}</strong></label>`).join("")}</fieldset>` : "";
     showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money3(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
     let drawing = false, drawn = false;
@@ -7231,11 +7348,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
     const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money3(line.laborRate)}</td><td>${money3(line.total)}</td></tr>`).join("");
     const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.total)}</td></tr>`).join("");
+    const feeRows = billableLines.filter((line) => line.type === "fee").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>Flat fee</td><td>${money3(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
     const win = window.open("", "_blank");
     if (!win) return toast("Allow pop-ups to print the job card");
     win.opener = null;
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money3(estimate.parts)}</b></div><div><span>Labor</span><b>${money3(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money3(supplies)}</b></div><div><span>Discount</span><b>-${money3(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money3(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money3(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table>${feeRows ? `<h2>Fees</h2><table><thead><tr><th>Description</th><th>Type</th><th>Line total</th></tr></thead><tbody>${feeRows}</tbody></table>` : ""}<div class="totals"><div><span>Parts</span><b>${money3(estimate.parts)}</b></div><div><span>Labor</span><b>${money3(estimate.labor)}</b></div><div><span>Fees</span><b>${money3(estimate.lineFees || 0)}</b></div><div><span>Shop supplies</span><b>${money3(supplies)}</b></div><div><span>Discount</span><b>-${money3(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money3(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money3(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
     win.document.close();
   }
   function jobWorkflowSteps(order, invoice) {
@@ -7263,7 +7381,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function estimateLinePresentation(line) {
     const pending = line.priceStatus === "pending";
-    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money3(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money3(line.laborRate)}`;
+    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money3(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : line.type === "fee" ? `Flat fee \xB7 ${money3(line.total)}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money3(line.laborRate)}`;
     const assigned = line.type === "labor" ? normalizeTechnicianIds(line).map(technicianName) : [];
     return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money3(line.total)}</b></article>`;
   }
@@ -7271,6 +7389,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const { customer, vehicle } = estimateParty(estimate, record);
     const parts = (estimate.lines || []).filter((line) => line.type === "part");
     const labor = (estimate.lines || []).filter((line) => line.type === "labor");
+    const feeLines = (estimate.lines || []).filter((line) => line.type === "fee");
     const supply = (estimate.fees || []).find((fee) => /shop supplies/i.test(fee.description));
     const exclusions = estimate.exclusions || record.exclusions || [];
     const insurance = estimate.insurance || record.insurance || {};
@@ -7285,8 +7404,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money3(estimate.parts)}</b></div></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
+    ${feeLines.length ? `<section class="reference-estimate-section"><div class="reference-section-title"><span>03</span><h3>Fees</h3></div>${feeLines.map(estimateLinePresentation).join("")}</section>` : ""}
     <section class="reference-totals">
       <div><span>Labor</span><b>${money3(estimate.labor)}</b></div>
+      ${feeLines.length ? `<div><span>Fees</span><b>${money3(estimate.lineFees || 0)}</b></div>` : ""}
       <div><span>Shop supplies</span><b>${money3(supply?.amount || 0)}</b></div>
       <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` \xB7 ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money3(estimate.discountAmount)}` : money3(0)}</b></div>
       <div><span>Tax \xB7 ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money3(estimate.tax)}</b></div>
@@ -8015,6 +8136,7 @@ ${catRows}
       init_entity_persistence();
       init_mutation_queue_store();
       init_payments();
+      init_work_order_editor();
       init_estimate_workflow();
       init_estimate_templates();
       init_bay();
@@ -8318,7 +8440,7 @@ ${catRows}
           }
         });
       };
-      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 140, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
@@ -8431,6 +8553,27 @@ ${catRows}
           toast("Estimate discount applied");
           render();
         };
+      };
+      printInvoice = function(number) {
+        const invoice = state.invoices.find((item) => item.number === number);
+        if (!invoice) return;
+        const profile = shopProfile();
+        const brand = printableBrand(profile);
+        const breakdown = invoiceTaxBreakdown(invoice);
+        const paid = invoicePaid(invoice);
+        const balance = invoiceBalance(invoice);
+        const customer = state.customers.find((item) => item.name === invoice.customer);
+        const order = state.orders.find((item) => item.id === invoice.ro);
+        const itemRows = invoicePrintLineItems(invoice).map((item) => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money3(item.amount)}</td></tr>`).join("");
+        const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money3(breakdown.subtotal)}</td></tr>`;
+        const paymentRows = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number).map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money3(Number(payment.amount || 0))}</td></tr>`).join("");
+        const win = window.open("", "_blank", "noopener");
+        if (!win) {
+          toast("Allow pop-ups to print the invoice");
+          return;
+        }
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money3(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money3(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money3(invoice.amount)}</b></p><p><span>Payments</span><b>-${money3(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money3(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+        win.document.close();
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
@@ -8870,7 +9013,7 @@ ${catRows}
           }
         };
       };
-      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 165) }) {
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 140) }) {
         return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
       };
       readNewOrderEstimate = function() {
@@ -8884,7 +9027,7 @@ ${catRows}
         form.elements.status.value = "estimate";
         const toolbar2 = root.previousElementSibling;
         if (toolbar2 && !document.querySelector("#add-part-line")) {
-          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-after-midnight-fee" type="button">${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
         }
         const append = (line) => {
           root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
@@ -8896,7 +9039,7 @@ ${catRows}
           const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
           const generated = services.flatMap((service, index) => {
             const source = estimateLocal(vehicle, service).lines[0];
-            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 165) }, index);
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 140) }, index);
             const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
             return [labor, ...parts];
           });
@@ -8904,8 +9047,9 @@ ${catRows}
           bindEstimateEditor(root);
           toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
         };
-        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate || 165) });
+        document.querySelector("#add-estimate-line").onclick = () => append(customLaborDraft(`labor-${Date.now()}`, shopProfile().laborRate || 140));
         document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
+        document.querySelector("#add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(root, append);
         bindEstimateEditor(root);
       };
       ensureInvoiceForOrder = async function(order) {
@@ -8929,10 +9073,11 @@ ${catRows}
         const estimate = order.estimate, invoice = state.invoices.find((item) => item.ro === order.id);
         const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
         const paidInvoice = invoice && invoicePaid(invoice) > 0;
+        const terminalOrder = ["completed", "invoiced"].includes(order.status);
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
+        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? ""}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money3(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -8942,16 +9087,23 @@ ${catRows}
         if (editorRoot) {
           bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
           document.querySelector("#job-add-labor").onclick = () => {
-            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length));
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length));
             bindEstimateEditor(editorRoot);
           };
           document.querySelector("#job-add-part").onclick = () => {
             editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length));
             bindEstimateEditor(editorRoot);
           };
+          document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, (line) => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          });
           document.querySelector("#save-job-lines").onclick = async (event) => {
             const next = estimateFromEditor(editorRoot);
-            if (!next.lines.length) return toast("Add at least one labor or part line");
+            if (!next.lines.length) return toast("Add at least one labor, part, or fee line");
+            if (terminalOrderChangesAfterMidnightFee(order.status, estimate.lines, next.lines)) {
+              return toast("Reopen this work order before adding, replacing, or removing the after-midnight fee");
+            }
             if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
             event.currentTarget.disabled = true;
             const editedAt = now();
@@ -9099,16 +9251,16 @@ ${catRows}
         });
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
-        const item = normalizeEstimateLine(line, index), part = item.type === "part";
-        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+        const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}" data-fee-code="${escapeAttr(item.code || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
-      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money3(item.total)}</b></div>
   </article>`;
@@ -9133,7 +9285,9 @@ ${catRows}
             committedQuantity: type === "part" && inventory ? quantity : 0,
             priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
-            technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
+            technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
+            code: type === "fee" ? row.dataset.feeCode : "",
+            amount: type === "fee" ? unitPrice : 0
           }, index);
         }).filter((line) => line.description && line.quantity > 0);
         const form = root.closest("form");
@@ -9152,19 +9306,22 @@ ${catRows}
       refreshEstimateEditor = function(root) {
         root.querySelectorAll(".job-estimate-line").forEach((row) => {
           const type = row.querySelector(".job-line-type").value;
-          const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+          const quantityInput = row.querySelector(".job-line-quantity");
+          if (type === "fee") quantityInput.value = "1";
+          const quantity = Math.max(0, Number(quantityInput.value) || 0);
           const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
           const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
           row.dataset.priceStatus = priceStatus;
           row.querySelector(".job-inventory-field").hidden = type !== "part";
-          row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
-          row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
-          row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
+          row.querySelector(".job-line-quantity-field").hidden = type === "fee";
+          row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
+          row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
+          row.querySelector(".job-line-quantity").step = type === "labor" ? ".1" : "1";
           row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money3(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
-        if (summary) summary.innerHTML = `<span>Parts <b>${money3(estimate.parts)}</b></span><span>Labor <b>${money3(estimate.labor)}</b></span><span>Supplies <b>${money3(supplies)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Parts <b>${money3(estimate.parts)}</b></span><span>Labor <b>${money3(estimate.labor)}</b></span><span>Fees <b>${money3(estimate.lineFees)}</b></span><span>Supplies <b>${money3(supplies)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
       };
