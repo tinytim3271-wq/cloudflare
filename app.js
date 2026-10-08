@@ -2656,18 +2656,42 @@
     if (!shouldSearchCustomers(query2)) return [];
     return uniqueCustomers(customers2).filter((customer) => matchesName(customer.name, query2)).sort((left, right) => String(left.name).localeCompare(String(right.name))).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
   }
+  function customerContactFields(data = {}, existing = null) {
+    const source = data && typeof data === "object" ? data : {};
+    const notesProvided = Object.prototype.hasOwnProperty.call(source, "billingNotes") && source.billingNotes != null;
+    return {
+      name: String(source.name ?? existing?.name ?? "").trim(),
+      phone: String(source.phone ?? "").trim(),
+      email: String(source.email ?? "").trim(),
+      billingAddress: String(source.billingAddress ?? "").trim(),
+      billingNotes: notesProvided ? String(source.billingNotes).trim() : String(existing?.billingNotes || "").trim()
+    };
+  }
+  function customerContactChanged(existing, fields) {
+    if (!existing) return true;
+    return CONTACT_FIELDS.some((key) => String(existing[key] || "").trim() !== String(fields?.[key] || "").trim());
+  }
+  function mergeSavedCustomer(record, response) {
+    if (!response || response.queued) return record;
+    const saved = { ...record, ...response, id: response.id || record.id };
+    for (const key of CONTACT_FIELDS) {
+      if (response[key] == null) saved[key] = record[key] ?? "";
+    }
+    return saved;
+  }
   function likelyDuplicateCustomers({ phone = "", email = "" }, customers2 = [], vehicles = []) {
     const phoneDigits = String(phone || "").replace(/\D/g, "");
     const normalizedEmail = String(email || "").trim().toLocaleLowerCase();
     if (!phoneDigits && !normalizedEmail) return [];
     return uniqueCustomers(customers2).filter((customer) => phoneDigits && String(customer.phone || "").replace(/\D/g, "") === phoneDigits || normalizedEmail && String(customer.email || "").trim().toLocaleLowerCase() === normalizedEmail).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
   }
-  var CUSTOMER_SEARCH_MIN_LENGTH, CUSTOMER_SEARCH_DEBOUNCE_MS, CUSTOMER_SEARCH_RESULT_LIMIT;
+  var CUSTOMER_SEARCH_MIN_LENGTH, CUSTOMER_SEARCH_DEBOUNCE_MS, CUSTOMER_SEARCH_RESULT_LIMIT, CONTACT_FIELDS;
   var init_customer_intake = __esm({
     "src/modules/customer-intake.js"() {
       CUSTOMER_SEARCH_MIN_LENGTH = 3;
       CUSTOMER_SEARCH_DEBOUNCE_MS = 275;
       CUSTOMER_SEARCH_RESULT_LIMIT = 8;
+      CONTACT_FIELDS = ["name", "phone", "email", "billingAddress", "billingNotes"];
     }
   });
 
@@ -4125,6 +4149,11 @@ button{margin-top:12px;padding:8px 14px}
 
   // src/runtime/legacy.js
   var legacy_exports = {};
+  function safeHtml(markup) {
+    const html = String(markup ?? "");
+    if (typeof DOMPurify === "undefined" || typeof DOMPurify.sanitize !== "function") return html;
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ["target"] });
+  }
   function empty(message) {
     return emptyState2(message);
   }
@@ -4765,14 +4794,6 @@ button{margin-top:12px;padding:8px 14px}
         return { queued: true };
       }
       throw error;
-    }
-  }
-  async function pushCustomerToApi(record) {
-    record.id || (record.id = mutationId());
-    try {
-      await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) });
-    } catch (error) {
-      console.error("Failed to sync customer to API", error);
     }
   }
   async function loadCustomersFromApi() {
@@ -6419,7 +6440,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function render() {
     const root = document.querySelector("#root");
     if (!currentUser()) {
-      root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen();
+      root.innerHTML = safeHtml(pendingAuthProfile ? pendingProfileScreen() : loginScreen());
       lucide.createIcons();
       bind();
       return;
@@ -6431,7 +6452,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     if (typeof imports === "function") views.imports = imports;
     if (typeof employees === "function") views.employees = employees;
     if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView;
-    root.innerHTML = (views[state.route] || views.home || views.dispatch)();
+    root.innerHTML = safeHtml((views[state.route] || views.home || views.dispatch)());
     const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
     if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) {
       const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav");
@@ -6750,7 +6771,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const root = document.createElement("div");
     root.id = "modal-root";
     root.className = "modal-backdrop";
-    root.innerHTML = html;
+    root.innerHTML = safeHtml(html);
     root.onclick = (e) => {
       if (e.target === root) closeModal();
     };
@@ -6912,15 +6933,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       try {
         const saved = await pushOrderToApi(order);
         state.orders.unshift(saved || order);
-        if (!state.customers.some((x) => x.name.toLowerCase() === customerName.toLowerCase())) {
-          const record = { id: mutationId(), name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
-          state.customers.unshift(record);
-          try {
-            await pushCustomerToApi(record);
-          } catch (customerError) {
-            console.error("Failed to sync customer", customerError);
-          }
-        }
+        const existingCustomer = state.customers.find((x) => x.name.toLowerCase() === customerName.toLowerCase());
+        const contact = customerContactFields({ name: customerName, phone: data.phone, email: data.email, billingAddress: data.billingAddress }, existingCustomer);
+        if (!existingCustomer || customerContactChanged(existingCustomer, contact)) await saveCustomerRecord(existingCustomer || null, contact);
         save();
         closeModal();
         toast(`${id} created successfully`);
@@ -7767,7 +7782,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function applyRemoteList(key, records, entityType = key) {
-    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
+    const pending = pendingCreateIdsForCollection2(key, readMutationQueue(), shopEntityCollections);
+    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord, pending);
     state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue());
     save();
   }
@@ -7848,14 +7864,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return updated;
   }
   async function saveCustomerRecord(existing, data) {
+    customerListEpoch += 1;
+    const contact = customerContactFields(data, existing);
+    if (!contact.name) throw new Error("Customer name is required");
     const record = {
       ...existing || {},
+      ...contact,
       id: existing?.id || mutationId(),
-      name: data.name.trim(),
-      phone: data.phone.trim(),
-      email: data.email.trim(),
-      billingAddress: data.billingAddress.trim(),
-      billingNotes: data.billingNotes.trim(),
       vehicles: Number(existing?.vehicles || 0),
       visits: Number(existing?.visits || 0),
       spend: Number(existing?.spend || 0),
@@ -7868,7 +7883,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         method: existing ? "PUT" : "POST",
         body: JSON.stringify(record)
       });
-      saved = response?.queued ? record : response;
+      saved = mergeSavedCustomer(record, response);
     }
     const index = existing ? state.customers.indexOf(existing) : -1;
     if (index >= 0) state.customers[index] = saved;
@@ -9178,7 +9193,7 @@ ${catRows}
     }
     if (state.route === "settings") render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, pendingCreateIdsForCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, customerListEpoch, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -9212,7 +9227,7 @@ ${catRows}
       init_estimate_templates();
       init_bay();
       init_estimate_approval();
-      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
+      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, pendingCreateIdsForCollection: pendingCreateIdsForCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       assistantConversation = [];
       assistantPaused = false;
@@ -9415,7 +9430,7 @@ ${catRows}
         applyAppearance(shopProfile().themeMode);
         if (currentUser() && state.route === "shopops") {
           const root = document.querySelector("#root");
-          root.innerHTML = DOMPurify.sanitize(shopOperations(), { USE_PROFILES: { html: true } });
+          root.innerHTML = safeHtml(shopOperations());
           lucide.createIcons();
           bind();
           bindShopOperations();
@@ -9855,7 +9870,7 @@ ${catRows}
       render = function() {
         if (currentUser() && state.route === "home") {
           const root = document.querySelector("#root");
-          root.innerHTML = DOMPurify.sanitize(homeDashboard(), { USE_PROFILES: { html: true } });
+          root.innerHTML = safeHtml(homeDashboard());
           lucide.createIcons();
           bind();
           bindExpandedFeatures();
@@ -9866,6 +9881,7 @@ ${catRows}
         }
         renderHomeCore();
       };
+      customerListEpoch = 0;
       loadOrdersFromApi = async function() {
         try {
           applyRemoteList("orders", await apiFetch("/entities/orders"));
@@ -9874,8 +9890,11 @@ ${catRows}
         }
       };
       loadCustomersFromApi = async function() {
+        const epoch = customerListEpoch;
         try {
-          applyRemoteList("customers", await apiFetch("/entities/customers"));
+          const records = await apiFetch("/entities/customers");
+          if (epoch !== customerListEpoch) return;
+          applyRemoteList("customers", records);
         } catch (error) {
           console.error("Failed to load customers from API; using local data", error);
         }
@@ -9943,7 +9962,7 @@ ${catRows}
           const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
           const visitCount = state.orders.filter((order) => order.customer === item.name).length;
           const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p>${item.billingAddress ? `<p>${escapeHtml(item.billingAddress)}</p>` : ""}</div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -9972,15 +9991,15 @@ ${catRows}
                 return;
               }
             }
-            let customer = selectedCustomer || state.customers.find((item) => item.id === data.selectedCustomerId);
-            if (!customer) {
-              customer = await saveCustomerRecord(null, {
-                name: customerName,
-                phone: String(data.phone || ""),
-                email: String(data.email || ""),
-                billingAddress: String(data.billingAddress || ""),
-                billingNotes: ""
-              });
+            let customer = selectedCustomer || state.customers.find((item) => item.id === data.selectedCustomerId) || state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
+            const contact = customerContactFields({
+              name: customerName,
+              phone: data.phone,
+              email: data.email,
+              billingAddress: data.billingAddress
+            }, customer);
+            if (!customer || customerContactChanged(customer, contact)) {
+              customer = await saveCustomerRecord(customer || null, contact);
             }
             const estimate = readNewOrderEstimate();
             const id = `RO-${Math.max(1040, ...state.orders.map((item) => Number(item.id.split("-")[1]) || 0)) + 1}`;
@@ -11030,7 +11049,7 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         if (currentUser() && (state.route === "obd" || state.route === "keys")) {
           const root = document.querySelector("#root");
           const markup = state.route === "obd" ? obdBay() : keyProgrammingBay();
-          root.innerHTML = DOMPurify.sanitize(markup, { USE_PROFILES: { html: true } });
+          root.innerHTML = safeHtml(markup);
           lucide.createIcons();
           bind();
           bindExpandedFeatures();
