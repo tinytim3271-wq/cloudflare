@@ -43,6 +43,16 @@ import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
 import { recordPayment as recordPaymentToTarget } from './payments.mjs';
+import {
+  approvalRecorder,
+  normalizeEstimateApproval,
+  validateEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
+import {
+  approvedEstimate,
+  normalizeEstimateLine,
+  normalizeTechnicianIds,
+} from '../../src/modules/estimate-workflow.js';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -408,7 +418,16 @@ async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) 
   };
 }
 
-async function putEntity(env, context, type, id, body, expectedUpdatedAt = null, createdBy = context.userId) {
+export async function putEntity(
+  env,
+  context,
+  type,
+  id,
+  body,
+  expectedUpdatedAt = null,
+  createdBy = context.userId,
+  { requireUnlockedEstimate = false } = {},
+) {
   const now = new Date().toISOString();
   const existing = await env.DB.prepare(
     'SELECT created_at, created_by, updated_at FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
@@ -424,6 +443,20 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
     createdAt: body.createdAt || existing?.created_at || now,
     updatedAt: now,
   };
+  if (requireUnlockedEstimate) {
+    const outcome = await env.DB.prepare(`
+      UPDATE entities
+      SET data_json = ?, updated_at = ?
+      WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
+        AND COALESCE(json_extract(data_json, '$.linesLockedAt'), '') = ''
+        AND COALESCE(json_extract(data_json, '$.estimateApproval.status'), '')
+          NOT IN ('approved', 'declined')
+    `).bind(JSON.stringify(record), now, context.shopId, type, id).run();
+    if (!outcome?.meta?.changes) {
+      throw new HttpError(409, 'This estimate has already been approved or declined');
+    }
+    return record;
+  }
   await env.DB.prepare(`
     INSERT INTO entities (shop_id, entity_type, entity_id, data_json, created_by, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -432,6 +465,127 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
       updated_at = excluded.updated_at
   `).bind(context.shopId, type, id, JSON.stringify(record), record.createdBy, record.createdAt, now).run();
   return record;
+}
+
+const ESTIMATE_APPROVAL_WRITE_ROLES = new Set(['owner', 'admin', 'service_writer']);
+
+function preserveRecordedApproval(body, existingOrder) {
+  const requestedLines = new Map((body.estimate?.lines || []).map((line, index) => [
+    normalizeEstimateLine(line, index).id,
+    line,
+  ]));
+  const estimate = {
+    ...existingOrder.estimate,
+    lines: (existingOrder.estimate?.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      const requested = requestedLines.get(normalized.id);
+      if (normalized.type !== 'labor' || !Array.isArray(requested?.technicianIds)) return line;
+      return { ...line, technicianIds: normalizeTechnicianIds(requested) };
+    }),
+  };
+  return {
+    ...body,
+    estimate,
+    labor: existingOrder.labor,
+    laborHours: existingOrder.laborHours,
+    parts: existingOrder.parts,
+    tax: existingOrder.tax,
+    total: existingOrder.total,
+    linesLockedAt: existingOrder.linesLockedAt,
+    estimateApproval: existingOrder.estimateApproval,
+  };
+}
+
+export function validatedOrderApproval(body, context, existingOrder = null, timestamp = new Date().toISOString()) {
+  const requestedApproval = body?.estimateApproval;
+  const existingApproval = normalizeEstimateApproval(existingOrder?.estimateApproval);
+  if (existingApproval?.status === 'approved') {
+    const explicitRevision = requestedApproval == null
+      && body.estimateRevisionPending === true
+      && !body.linesLockedAt;
+    if (explicitRevision && !ESTIMATE_APPROVAL_WRITE_ROLES.has(context.role)) {
+      throw new HttpError(403, 'This role cannot revise an approved estimate');
+    }
+    return explicitRevision ? body : preserveRecordedApproval(body, existingOrder);
+  }
+  if (!requestedApproval || requestedApproval.status !== 'approved') return body;
+  if (!existingOrder) throw new HttpError(409, 'Create the work order before recording approval');
+  if (existingOrder.linesLockedAt || existingOrder.estimateApproval?.status === 'declined') {
+    throw new HttpError(409, 'Revise the locked estimate before recording a new approval');
+  }
+  if (!ESTIMATE_APPROVAL_WRITE_ROLES.has(context.role)) {
+    throw new HttpError(403, 'This role cannot record estimate approvals');
+  }
+
+  const sourceLines = existingOrder.estimate?.lines || [];
+  if (!sourceLines.length) throw new HttpError(409, 'Add estimate lines before recording approval');
+  const decisions = requestedApproval.decisions && typeof requestedApproval.decisions === 'object'
+    ? requestedApproval.decisions
+    : {};
+  const lineIds = sourceLines.map((line, index) => normalizeEstimateLine(line, index).id);
+  if (lineIds.some(id => !['approved', 'declined'].includes(decisions[id]))) {
+    throw new HttpError(400, 'Approve or decline every estimate line');
+  }
+  if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+    throw new HttpError(400, 'Approval decisions do not match this estimate');
+  }
+
+  const estimate = approvedEstimate(existingOrder.estimate, decisions);
+  if (!estimate.approvedLineCount) {
+    throw new HttpError(400, 'Approve at least one line or decline the estimate');
+  }
+  const recordedBy = approvalRecorder(context);
+  let approval;
+  try {
+    approval = validateEstimateApproval({
+      ...requestedApproval,
+      approvedAt: timestamp,
+      recordedBy,
+      decisions,
+    });
+  } catch (error) {
+    throw new HttpError(400, error.message || 'Estimate approval is invalid');
+  }
+  if (approval.type === 'signature' && approval.signatureKey && context.shopId
+    && !String(approval.signatureKey).startsWith(`shops/${context.shopId}/`)) {
+    throw new HttpError(400, 'Signature does not belong to this shop');
+  }
+  if (approval.type !== 'signature') {
+    delete approval.signatureKey;
+    delete approval.signatureDataUrl;
+    delete approval.signedAt;
+  }
+
+  const result = {
+    ...body,
+    estimate,
+    labor: estimate.labor,
+    laborHours: estimate.laborHours,
+    parts: estimate.parts,
+    tax: estimate.tax,
+    total: estimate.total,
+    status: existingOrder.estimateRevisionPreviousStatus || 'approved',
+    linesLockedAt: timestamp,
+    estimateApproval: approval,
+    estimateRevisionPending: false,
+  };
+  delete result.estimateRevisionPreviousStatus;
+  return result;
+}
+
+export async function verifyOrderApprovalSignature(env, context, approval) {
+  const normalized = normalizeEstimateApproval(approval);
+  if (normalized?.status !== 'approved' || normalized.type !== 'signature' || !normalized.signatureKey) return;
+  if (context.shopId && !String(normalized.signatureKey).startsWith(`shops/${context.shopId}/`)) {
+    throw new HttpError(400, 'Signature does not belong to this shop');
+  }
+  if (!env.FILES?.head) throw new HttpError(503, 'Signature storage is unavailable');
+  const object = await env.FILES.head(normalized.signatureKey);
+  if (!object) throw new HttpError(400, 'Stored signature was not found');
+  const contentType = String(object.httpMetadata?.contentType || object.contentType || '').toLowerCase();
+  if (contentType !== 'image/png') {
+    throw new HttpError(400, 'Stored signature must be a PNG image');
+  }
 }
 
 function members(record) {
@@ -575,6 +729,7 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'POST' && !id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    if (type === 'orders') body = validatedOrderApproval(body, context);
     const naturalId = type === 'invoices' ? body.number : type === 'customers' ? body.name : null;
     const newId = String(body.id || naturalId || crypto.randomUUID());
     if (type === 'conversations') {
@@ -606,6 +761,17 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'PUT' && id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    let requireUnlockedEstimate = false;
+    if (type === 'orders') {
+      const existingOrder = await getEntity(env, context.shopId, type, id);
+      requireUnlockedEstimate = Boolean(
+        existingOrder
+        && body.estimateApproval?.status === 'approved'
+        && existingOrder.estimateApproval?.status !== 'approved',
+      );
+      body = validatedOrderApproval(body, context, existingOrder);
+      if (requireUnlockedEstimate) await verifyOrderApprovalSignature(env, context, body.estimateApproval);
+    }
     if (type === 'chatmessages') throw new HttpError(405, 'Chat messages cannot be edited');
     if (type === 'conversations') {
       const existing = await getEntity(env, context.shopId, type, id);
@@ -616,7 +782,16 @@ async function handleEntities(request, env, context, segments, analytics) {
       body = { ...body, memberEmails, creatorEmail: existing.creatorEmail };
     }
     if (type === 'employees') await syncAccessUser(env, context, body);
-    const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
+    const saved = await putEntity(
+      env,
+      context,
+      type,
+      id,
+      body,
+      request.headers.get('If-Match'),
+      context.userId,
+      { requireUnlockedEstimate },
+    );
     captureForContext(analytics, context, 'entity_updated', { entity_type: type });
     capturePostHogEvent(env, context, 'entity_updated', {
       entity_type: type,

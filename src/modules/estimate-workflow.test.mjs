@@ -89,6 +89,28 @@ test('customer decisions retain declined lines while totaling approved work only
   assert.equal(approved.total, 178.61);
 });
 
+test('flat fee lines survive approval decisions and contribute to totals without labor hours', () => {
+  const estimate = calculateEstimate([
+    { id: 'labor', type: 'labor', description: 'Diagnosis', hours: 1, laborRate: 140 },
+    { id: 'after-midnight', type: 'fee', description: 'After-midnight service', amount: 200 },
+  ], 8.25);
+  assert.equal(estimate.lineFees, 200);
+  assert.equal(estimate.laborHours, 1);
+  assert.equal(estimate.subtotal, 340);
+  assert.equal(estimate.total, 368.05);
+
+  const approved = approvedEstimate(estimate, {
+    labor: 'declined',
+    'after-midnight': 'approved',
+  });
+  assert.equal(approved.lines.find(line => line.id === 'after-midnight').type, 'fee');
+  assert.equal(approved.lines.find(line => line.id === 'after-midnight').approvalStatus, 'approved');
+  assert.equal(approved.labor, 0);
+  assert.equal(approved.laborHours, 0);
+  assert.equal(approved.lineFees, 200);
+  assert.equal(approved.total, 216.5);
+});
+
 test('estimate approval recalculates supplies and discount for approved work and invoice', () => {
   const estimate = {
     ...calculateEstimate([
