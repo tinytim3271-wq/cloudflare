@@ -4317,6 +4317,11 @@ button{margin-top:12px;padding:8px 14px}
   }
   async function apiFetch(path, options = {}) {
     if (isOfflineDesktop()) {
+      if (String(path).startsWith("/ai/")) {
+        const aiError = new Error("MechPro AI runs in the cloud. This offline copy keeps records on this computer only, so sign in to the online version at yourcarguy806.com to use the assistant.");
+        aiError.retryable = false;
+        throw aiError;
+      }
       const method = String(options.method || "GET").toUpperCase();
       if (method === "GET" || method === "HEAD") {
         const offlineError = new Error("This copy of MechPro keeps shop records on this computer.");
