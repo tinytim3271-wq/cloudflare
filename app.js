@@ -585,6 +585,18 @@
         const providedNumber = cleanText(value(row, "number", "invoice", "invoice_number"), 40).toUpperCase();
         const status = normalizeStatus(value(row, "status")) || "sent";
         const date = isoDate(value(row, "date", "issued", "invoice_date")) || today;
+        const closeoutRaw = value(
+          row,
+          "closeout_date",
+          "closeout",
+          "closed_date",
+          "closed_at",
+          "paid_date",
+          "paid_at",
+          "completed_date",
+          "completed_at"
+        );
+        const closedAt = isoDate(closeoutRaw) || (closeoutRaw ? "" : date);
         const dueRaw = value(row, "due", "due_date");
         const due = isoDate(dueRaw) || (dueRaw ? "" : addDays(date, 14));
         const rateRaw = value(row, "tax_rate", "taxrate");
@@ -594,6 +606,7 @@
         if (!customer) error = "Customer is required";
         else if (!Number.isFinite(amount) || amount < 0) error = "A numeric invoice amount is required";
         else if (rateRaw !== "" && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = "Tax rate must be between 0 and 100";
+        else if (closeoutRaw && !closedAt) error = "Closeout date must be a real date";
         else if (dueRaw && !due) error = "Due date must be a real date";
         else if (!INVOICE_STATUSES.includes(status)) error = "Status must be sent, overdue, or paid";
         else if (providedNumber && seenInvoices.has(providedNumber.toLowerCase())) skipped += 1;
@@ -614,8 +627,11 @@
             taxRate,
             status,
             date,
+            closedAt,
+            closeoutSource: closeoutRaw ? "source_closeout_date" : "invoice_date",
             due,
             lines: [],
+            importSource: "csv",
             createdAt
           };
         }
@@ -711,9 +727,9 @@
         invoices: {
           title: "Invoices",
           icon: "receipt",
-          columns: "number, customer, ro, date, due, status, subtotal, tax_rate, tax, amount",
+          columns: "number, customer, ro, date, closeout_date, due, status, subtotal, tax_rate, tax, amount",
           required: "customer, amount",
-          sample: "number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-15,sent,100.00,8.25,8.25,108.25"
+          sample: "number,customer,ro,date,closeout_date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-01,2026-09-15,paid,100.00,8.25,8.25,108.25"
         },
         estimates: {
           title: "Estimates",
@@ -2395,6 +2411,17 @@ button{margin-top:12px;padding:8px 14px}
       init_withholding();
       init_jurisdictions();
       init_forms();
+    }
+  });
+
+  // src/modules/customer-metrics.js
+  function customerLifetimeSpend(customer, invoices2 = []) {
+    const linked = invoices2.filter((invoice) => invoice.customer === customer?.name);
+    if (!linked.length) return Number(customer?.spend || 0);
+    return Math.round(linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0) * 100) / 100;
+  }
+  var init_customer_metrics = __esm({
+    "src/modules/customer-metrics.js"() {
     }
   });
 
@@ -4088,13 +4115,6 @@ button{margin-top:12px;padding:8px 14px}
     } catch (error) {
       console.error("Failed to load orders from API; using local data", error);
       cloudSyncStatus = authSession() ? "offline" : "local";
-    }
-  }
-  async function pushInvoiceToApi(record) {
-    try {
-      await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(record) });
-    } catch (error) {
-      console.error("Failed to sync invoice to API", error);
     }
   }
   async function updateInvoiceInApi(record, { throwOnError = false } = {}) {
@@ -6428,7 +6448,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     };
   }
   function paymentRecords() {
-    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
+    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.paidAt || invoice.closedAt || invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
     return [...legacy, ...state.payments.filter((payment) => payment.status === "completed")];
   }
   function finance() {
@@ -6520,40 +6540,56 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     link.click();
     URL.revokeObjectURL(link.href);
   }
-  function ensureImportedCustomer(record) {
-    const name = record?.customer;
-    if (!name || state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) return;
-    const created = { name, phone: record.phone || "", email: record.email || "Not provided", vehicles: 0, visits: 0, spend: 0 };
-    state.customers.push(created);
-    pushCustomerToApi(created);
+  async function ensureImportedCustomers(records) {
+    const existing = new Set(state.customers.map((item) => String(item.name || "").toLowerCase()));
+    const missing = [];
+    for (const record of records) {
+      const name = String(record?.customer || "").trim();
+      if (!name || existing.has(name.toLowerCase())) continue;
+      existing.add(name.toLowerCase());
+      missing.push({ id: mutationId(), name, phone: record.phone || "", email: record.email || "", vehicles: 0, visits: 0, spend: 0 });
+    }
+    if (!missing.length) return;
+    const saved = await Promise.all(missing.map((record) => apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) })));
+    state.customers.push(...saved.map((record, index) => record?.queued ? missing[index] : record || missing[index]));
   }
-  function applyImport() {
+  async function applyImport() {
     const p = importPreview;
     if (!p?.records.length) return;
     const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", invoices: "invoices", estimates: "estimates", expenses: "expenses" }[p.type];
     if (!collection || !Array.isArray(state[collection])) return;
-    state[collection].push(...p.records);
-    if (p.type === "customers") p.records.forEach(pushCustomerToApi);
-    if (p.type === "vehicles") p.records.forEach((vehicle) => {
-      const customer = state.customers.find((item) => item.name.toLowerCase() === vehicle.customer.toLowerCase());
-      if (customer) customer.vehicles += 1;
-    });
-    if (p.type === "orders") p.records.forEach((order) => {
-      pushOrderToApi(order);
-      ensureImportedCustomer(order);
-    });
-    if (p.type === "invoices") p.records.forEach((invoice) => {
-      pushInvoiceToApi(invoice);
-      ensureImportedCustomer(invoice);
-    });
-    if (p.type === "estimates") p.records.forEach((estimate) => {
-      pushEstimateToApi(estimate);
-      ensureImportedCustomer(estimate);
-    });
-    if (p.type === "expenses") p.records.forEach(pushExpenseToApi);
-    save();
-    toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
-    importPreview = null;
+    const button = document.querySelector("#confirm-import");
+    if (button) button.disabled = true;
+    try {
+      if (p.type !== "customers") await ensureImportedCustomers(p.records);
+      const saved = await Promise.all(p.records.map((record) => apiFetch(`/entities/${p.type}`, { method: "POST", body: JSON.stringify(record) })));
+      const resolved = saved.map((record, index) => record?.queued ? p.records[index] : record || p.records[index]);
+      state[collection].push(...resolved);
+      save();
+      toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
+      importPreview = null;
+      render();
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error.message || "Import could not be saved to this shop");
+    }
+  }
+  async function loadMeldedDataView(route) {
+    if (route === "customers") {
+      await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadShopEntities()]);
+    } else if (route === "shopops") {
+      await Promise.all([loadShopEntities(), loadCustomersFromApi(), loadOrdersFromApi()]);
+    } else if (route === "imports") {
+      await Promise.all([
+        loadCustomersFromApi(),
+        loadOrdersFromApi(),
+        loadInvoicesFromApi(),
+        loadPaymentsFromApi(),
+        loadExpensesFromApi(),
+        loadEstimatesFromApi(),
+        loadShopEntities()
+      ]);
+    }
     render();
   }
   function appearanceFieldset(profile = shopProfile()) {
@@ -7956,7 +7992,7 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -7973,6 +8009,7 @@ ${catRows}
       init_ai_workflow();
       init_mileage();
       init_filing();
+      init_customer_metrics();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
@@ -8288,6 +8325,13 @@ ${catRows}
       });
       applyAppearance();
       importTypes = IMPORT_TYPES;
+      bindImportIntegrityCore = bindExpandedFeatures;
+      bindExpandedFeatures = function() {
+        bindImportIntegrityCore();
+        document.querySelectorAll('[data-route="customers"], [data-route="shopops"], [data-route="imports"]').forEach((link) => {
+          link.addEventListener("click", () => void loadMeldedDataView(link.dataset.route));
+        });
+      };
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
         const emptyCouponRows = '<tr><td colspan="4">No coupons configured.</td></tr>', vendorKindFields = kinds.map((kind) => "<label>" + kind + ' default<select name="vendor' + kind + '">' + vendorOptions(profile.defaultVendorByKind?.[kind] || "") + "</select></label>").join("");
@@ -8678,7 +8722,10 @@ ${catRows}
         const q = query.toLowerCase();
         const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money3(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
+          const visitCount = state.orders.filter((order) => order.customer === item.name).length;
+          const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -9257,9 +9304,9 @@ ${catRows}
         const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const summary = invoicePaymentSummary(invoice);
           const bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
         }).join("");
-        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
+        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Closeout</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="8">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
       openOrderPaymentCore = openOrder;
       openOrder = function(id) {
