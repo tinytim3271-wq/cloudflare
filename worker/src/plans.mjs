@@ -5,6 +5,8 @@ export const PUBLIC_PLANS = [
     id: 'solo',
     name: 'Solo',
     stripePriceId: 'price_solo',
+    stripeMonthlyEnv: 'STRIPE_PRICE_SOLO_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_SOLO_ANNUAL',
     monthlyPriceCents: 6900,
     annualPriceCents: 6900 * 10,
     aiPhoneMinutes: 200,
@@ -17,6 +19,8 @@ export const PUBLIC_PLANS = [
     id: 'shop',
     name: 'Shop',
     stripePriceId: 'price_shop',
+    stripeMonthlyEnv: 'STRIPE_PRICE_SHOP_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_SHOP_ANNUAL',
     monthlyPriceCents: 13900,
     annualPriceCents: 13900 * 10,
     aiPhoneMinutes: 800,
@@ -29,6 +33,8 @@ export const PUBLIC_PLANS = [
     id: 'shop_pro',
     name: 'Shop Pro',
     stripePriceId: 'price_shop_pro',
+    stripeMonthlyEnv: 'STRIPE_PRICE_SHOP_PRO_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_SHOP_PRO_ANNUAL',
     monthlyPriceCents: 27900,
     annualPriceCents: 27900 * 10,
     aiPhoneMinutes: 2500,
@@ -41,6 +47,8 @@ export const PUBLIC_PLANS = [
     id: 'enterprise',
     name: 'Enterprise',
     stripePriceId: 'price_enterprise',
+    stripeMonthlyEnv: 'STRIPE_PRICE_ENTERPRISE_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_ENTERPRISE_ANNUAL',
     monthlyPriceCents: 55900,
     annualPriceCents: 55900 * 10,
     aiPhoneMinutes: 10000,
@@ -56,6 +64,8 @@ export const FOUNDING_PLANS = [
     id: 'founding_solo',
     name: 'Founding Solo',
     stripePriceId: 'price_founding_solo',
+    stripeMonthlyEnv: 'STRIPE_PRICE_FOUNDING_SOLO_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_FOUNDING_SOLO_ANNUAL',
     monthlyPriceCents: 4900,
     annualPriceCents: 4900 * 10,
     aiPhoneMinutes: 200,
@@ -67,6 +77,8 @@ export const FOUNDING_PLANS = [
     id: 'founding_shop',
     name: 'Founding Shop',
     stripePriceId: 'price_founding_shop',
+    stripeMonthlyEnv: 'STRIPE_PRICE_FOUNDING_SHOP_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_FOUNDING_SHOP_ANNUAL',
     monthlyPriceCents: 9900,
     annualPriceCents: 9900 * 10,
     aiPhoneMinutes: 800,
@@ -78,6 +90,8 @@ export const FOUNDING_PLANS = [
     id: 'founding_pro',
     name: 'Founding Pro',
     stripePriceId: 'price_founding_pro',
+    stripeMonthlyEnv: 'STRIPE_PRICE_FOUNDING_PRO_MONTHLY',
+    stripeAnnualEnv: 'STRIPE_PRICE_FOUNDING_PRO_ANNUAL',
     monthlyPriceCents: 19900,
     annualPriceCents: 19900 * 10,
     aiPhoneMinutes: 2500,
@@ -104,6 +118,32 @@ export function isFoundingPlan(planId) {
 
 export function isPublicPlan(planId) {
   return PUBLIC_PLANS.some(plan => plan.id === planId);
+}
+
+export function planById(planId) {
+  return [...PUBLIC_PLANS, ...FOUNDING_PLANS].find(plan => plan.id === planId) || null;
+}
+
+export function stripePriceForPlan(env, planId, interval = 'monthly') {
+  const plan = planById(planId);
+  if (!plan) return '';
+  const key = interval === 'annual' ? plan.stripeAnnualEnv : plan.stripeMonthlyEnv;
+  const priceId = String(env?.[key] || '').trim();
+  return /^price_[A-Za-z0-9]+$/.test(priceId) && !isPlaceholderPrice(priceId) ? priceId : '';
+}
+
+export const PLAN_CAPABILITIES = Object.freeze({
+  solo: ['labor_guides', 'parts_ordering', 'support'],
+  shop: ['labor_guides', 'parts_ordering', 'sms', 'quickbooks', 'support'],
+  shop_pro: ['labor_guides', 'parts_ordering', 'sms', 'quickbooks', 'live_diagnostics', 'support'],
+  enterprise: ['labor_guides', 'parts_ordering', 'sms', 'quickbooks', 'live_diagnostics', 'multi_location', 'support'],
+  founding_solo: ['labor_guides', 'parts_ordering', 'support'],
+  founding_shop: ['labor_guides', 'parts_ordering', 'sms', 'quickbooks', 'support'],
+  founding_pro: ['labor_guides', 'parts_ordering', 'sms', 'quickbooks', 'live_diagnostics', 'support'],
+});
+
+export function planCapabilities(planId) {
+  return [...(PLAN_CAPABILITIES[planId] || [])];
 }
 
 export function claimDecision({ invite, counter, planId }) {
