@@ -15,7 +15,7 @@ HTTP-only cookie, with magic-link and Google sign-in endpoints at
 - **D1** stores tenant accounts, identity mappings, entities, audit events, and
   encrypted integration configuration.
 - **R2** stores inspection photos, signatures, and Windows downloads.
-- **Workers AI** powers `/api/ai/assistant` and AgentPhone responses.
+- **Anthropic Claude** (when `ANTHROPIC_API_KEY` is set) or the **Workers AI** fallback powers `/api/ai/assistant` and AgentPhone responses. See `docs/AI_CONVERSATIONAL.md`.
 - **Cloudflare Access** should be reserved for internal/operator surfaces as the
   product moves to public SaaS signup, login, and billing.
 

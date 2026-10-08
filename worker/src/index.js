@@ -1213,7 +1213,7 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     shopId,
     userId: options.userId || null,
     channel: options.channel || 'text',
-    provider: 'anthropic',
+    provider: result.provider || 'anthropic',
     model: result.model,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,

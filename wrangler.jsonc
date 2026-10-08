@@ -7,8 +7,10 @@
   // The Worker serves /api/* and proxies the shop app from Pages.
   "workers_dev": false,
   "vars": {
-    // Conversational AI remains disabled until provider secrets and billing rates are configured.
-    "AI_ENABLED": "0",
+    // Conversational AI: Anthropic answers when ANTHROPIC_API_KEY is set as a secret;
+    // otherwise the Workers AI binding below keeps the assistant connected.
+    "AI_ENABLED": "1",
+    "WORKERS_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "ANTHROPIC_SONNET_MODEL": "claude-sonnet-5",
     "ANTHROPIC_OPUS_MODEL": "claude-opus-5",
     "DEEPGRAM_LISTEN_MODEL": "nova-3",
@@ -38,6 +40,9 @@
       "preview_bucket_name": "mechpro-files-preview"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
   "durable_objects": {
     "bindings": [
       {

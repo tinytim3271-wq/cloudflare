@@ -8,10 +8,12 @@ DIAGNOSTICS_CAPABILITY_SECRET=replace-with-a-different-random-value
 # Base64 DER PKCS#8 ECDSA P-256 private key for /api/diagnostics/authorize
 DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
 
-# Conversational AI (keep AI_ENABLED=0 until both provider secrets are set).
-AI_ENABLED=0
-ANTHROPIC_API_KEY=replace-with-your-anthropic-api-key
-DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
+# Conversational AI. With no ANTHROPIC_API_KEY the text assistant uses the
+# Workers AI binding from wrangler.jsonc (wrangler dev runs it against your
+# Cloudflare account). Set AI_ENABLED=0 to turn the assistant off locally.
+AI_ENABLED=1
+# ANTHROPIC_API_KEY=replace-with-your-anthropic-api-key
+# DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 
 # Configure current contracted provider rates before enabling pass-through billing.
 # ANTHROPIC_SONNET_INPUT_USD_PER_MTOK=
