@@ -11,6 +11,7 @@ import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
 import { partstechPanelHtml } from '../modules/partstech.js';
 import { laborGuidePanelHtml, createManualLaborEntry } from '../modules/labor-guide.js';
+import { shopAiPanelHtml } from '../modules/shop-ai-settings.js';
 import { quickbooksPanelHtml } from '../modules/quickbooks.js';
 import { applyEstimateFromInspection } from '../modules/repair-order-flow.js';
 import { uploadFailureMessage, uploadFileToStorage } from '../modules/file-upload.js';
@@ -3527,5 +3528,49 @@ render = function () {
   }
   renderShopOsCore();
 };
+
+// --- Shop AI provider settings (optional bring-your-own Anthropic key) ---
+let shopAiSettings = { loaded: false, loading: false };
+function canManageShopAi() { return ["admin", "owner"].includes(currentUser()?.role || "") }
+async function loadShopAiSettings(force = false) {
+  if (shopAiSettings.loading || (shopAiSettings.loaded && !force)) return;
+  shopAiSettings = { ...shopAiSettings, loading: true };
+  try { shopAiSettings = { ...(await apiFetch("/settings/ai")), loaded: true, loading: false } }
+  catch { shopAiSettings = { hasKey: false, loaded: true, loading: false, unavailable: true } }
+  if (state.route === "settings") render();
+}
+const settingsShopAiCore = settings;
+settings = function () { const page = settingsShopAiCore(); if (isOfflineDesktop()) return page; return page.replace("</main>", `${shopAiPanelHtml(shopAiSettings, { canManage: canManageShopAi(), escapeHtml, icon })}</main>`) };
+const bindShopAiCore = bind;
+bind = function () {
+  bindShopAiCore();
+  if (state.route !== "settings" || !currentUser() || isOfflineDesktop()) return;
+  if (!shopAiSettings.loaded) void loadShopAiSettings();
+  document.querySelector("#shop-ai-key-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.target, button = form.querySelector("button[type=submit]"), apiKey = String(new FormData(form).get("apiKey") || "").trim();
+    if (!apiKey) return;
+    button.disabled = true; button.textContent = "Checking key...";
+    try {
+      const result = await apiFetch("/settings/ai", { method: "PUT", body: JSON.stringify({ apiKey }) });
+      form.reset();
+      shopAiSettings = { ...result, loaded: true, loading: false };
+      toast(result.warning ? `Claude key saved. ${result.warning}` : "Claude key saved. MechPro AI now uses Claude for this shop.");
+      render();
+    } catch (error) { button.disabled = false; button.textContent = shopAiSettings.hasKey ? "Replace key" : "Save key"; toast(error.message || "Could not save the Anthropic key") }
+  });
+  document.querySelector("#shop-ai-remove-key")?.addEventListener("click", async event => {
+    if (!confirm("Remove this shop's Anthropic key? MechPro AI will go back to Cloudflare AI (included).")) return;
+    event.currentTarget.disabled = true;
+    try {
+      const result = await apiFetch("/settings/ai", { method: "DELETE" });
+      shopAiSettings = { ...result, loaded: true, loading: false };
+      toast("Anthropic key removed. Using Cloudflare AI (included).");
+      render();
+    } catch (error) { toast(error.message || "Could not remove the Anthropic key"); render() }
+  });
+};
+const apiFetchShopAiNoticeCore = apiFetch;
+apiFetch = async function (path, options = {}) { const result = await apiFetchShopAiNoticeCore(path, options); if (String(path).startsWith("/ai/assistant") && result?.notice) { toast(result.notice); shopAiSettings = { ...shopAiSettings, loaded: false } } return result };
 
 void startApp();
