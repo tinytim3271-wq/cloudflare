@@ -165,6 +165,68 @@ test('public estimate link renders itemized parts and labor without authenticati
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'nonce-/);
 });
 
+test('customer link becomes read-only and displays a staff-recorded non-signature approval', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  order.linesLockedAt = '2026-10-07T20:00:00.000Z';
+  order.estimateApproval = {
+    status: 'approved',
+    type: 'other',
+    customLabel: 'Approved via fleet manager email',
+    authorizationName: 'Dana Fleet',
+    approvedAt: order.linesLockedAt,
+    recordedBy: { id: 'writer-1', name: 'Timothy Alderman' },
+    note: 'Confirmed PO 447',
+  };
+
+  const response = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  const html = await response.text();
+  assert.match(html, /Approved: Approved via fleet manager email/);
+  assert.match(html, /recorded by Timothy Alderman/);
+  assert.doesNotMatch(html, /id="submit-signature"/);
+});
+
+test('customer estimate link renders and approves flat fee lines as fees', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  order.estimate.lines.push({
+    id: 'after-midnight',
+    code: 'after-midnight',
+    type: 'fee',
+    description: 'After-midnight service',
+    amount: 200,
+    quantity: 1,
+    unitPrice: 200,
+  });
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  const page = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  const html = await page.text();
+  assert.match(html, /After-midnight service/);
+  assert.match(html, />Fee</);
+  assert.match(html, /Flat fee/);
+
+  const response = await handleCustomerDocument(new Request(link.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'sign',
+      authorizationName: 'Pat Customer',
+      signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+      decisions: { labor: 'declined', part: 'declined', 'after-midnight': 'approved' },
+    }),
+  }), fixture.env, token);
+  assert.equal(response.status, 200);
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.equal(saved.estimate.lines.find(line => line.id === 'after-midnight').type, 'fee');
+  assert.equal(saved.estimate.lineFees, 200);
+  assert.equal(saved.total, 200);
+});
+
 test('remote estimate signature approves selected lines, locks them, and stores PNG in R2', async () => {
   const fixture = mockEnvironment();
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
@@ -187,12 +249,18 @@ test('remote estimate signature approves selected lines, locks them, and stores 
   const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
   assert.equal(saved.status, 'approved');
   assert.equal(saved.estimateApproval.status, 'approved');
+  assert.equal(saved.estimateApproval.type, 'signature');
   assert.equal(saved.estimateApproval.authorizationName, 'Pat Customer');
+  assert.equal(saved.estimateApproval.approvedAt, saved.estimateApproval.signedAt);
+  assert.equal(saved.estimateApproval.recordedBy.name, 'Pat Customer');
   assert.equal(saved.estimate.lines.find(line => line.id === 'part').approvalStatus, 'declined');
   assert.equal(saved.total, 165);
   assert.ok(saved.linesLockedAt);
   assert.equal(fixture.files.size, 1);
   assert.equal(fixture.links[0].result, 'approved');
+
+  const completed = await handleCustomerDocument(new Request(link.url), fixture.env, token);
+  assert.match(await completed.text(), /Signed by Pat Customer/);
 });
 
 test('remote estimate signature requires a decision for every line', async () => {
@@ -213,6 +281,26 @@ test('remote estimate signature requires a decision for every line', async () =>
       }),
     }), fixture.env, token),
     error => error.status === 400 && /every estimate line/i.test(error.message),
+  );
+});
+
+test('remote estimate signature rejects stale decision keys', async () => {
+  const fixture = mockEnvironment();
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), estimateOrder());
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+        decisions: { labor: 'approved', part: 'approved', stale: 'approved' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 400 && /do not match/.test(error.message),
   );
 });
 

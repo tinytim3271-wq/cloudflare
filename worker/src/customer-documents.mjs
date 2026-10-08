@@ -4,6 +4,10 @@ import {
   declinedEstimate,
   normalizeEstimateLine,
 } from '../../src/modules/estimate-workflow.js';
+import {
+  approvalSummary,
+  normalizeEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
 import { HttpError, json, requestJson } from './http.mjs';
 
 const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -144,12 +148,12 @@ function lineRows(document, type) {
     const item = normalizeEstimateLine(line, index);
     const detail = item.type === 'part'
       ? `${item.quantity} × ${money(item.unitPrice)}${item.inventorySku ? ` · ${escapeHtml(item.inventorySku)}` : ''}`
-      : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
+      : item.type === 'fee' ? `Flat fee · ${money(item.total)}` : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
     const choices = type === 'estimate'
       ? `<fieldset class="decision"><legend>Choose this line</legend><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="approved" checked> Approve</label><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="declined"> Decline</label></fieldset>`
       : '';
     return `<article class="line" data-line-id="${escapeHtml(item.id)}">
-      <div class="line-type">${item.type === 'part' ? 'Part' : 'Labor'}</div>
+      <div class="line-type">${item.type === 'part' ? 'Part' : item.type === 'fee' ? 'Fee' : 'Labor'}</div>
       <div><strong>${escapeHtml(item.description)}</strong><small>${escapeHtml(detail)}</small>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</div>
       <b>${escapeHtml(money(item.total))}</b>
       ${choices}
@@ -162,9 +166,15 @@ function customerDocumentPage(link, document, nonce) {
   const isEstimate = type === 'estimate';
   const estimate = isEstimate ? document.estimate || calculateEstimate([], 0) : document;
   const number = isEstimate ? document.estimateNumber || document.id : document.number;
-  const complete = Boolean(link.consumed_at);
+  const savedApproval = isEstimate ? normalizeEstimateApproval(document.estimateApproval) : null;
+  const complete = Boolean(link.consumed_at || (isEstimate && estimateAlreadyLocked(document)));
+  const completedDetail = savedApproval?.status === 'approved'
+    ? approvalSummary(savedApproval)
+    : link.consumed_at
+      ? `This ${type} was ${link.result || 'completed'} on ${new Date(link.consumed_at).toLocaleString()}.`
+      : `This ${type} is no longer awaiting a response.`;
   const status = complete
-    ? `<section class="notice complete"><strong>Response recorded</strong><p>This ${type} was ${escapeHtml(link.result || 'completed')} on ${escapeHtml(new Date(link.consumed_at).toLocaleString())}.</p></section>`
+    ? `<section class="notice complete"><strong>Response recorded</strong><p>${escapeHtml(completedDetail)}</p></section>`
     : '';
   const controls = complete ? '' : `
     <section class="signature">
@@ -317,19 +327,25 @@ async function recordResponse(request, env, link, document) {
   const decisions = body.decisions && typeof body.decisions === 'object' ? body.decisions : {};
   let nextEstimate = null;
   if (link.document_type === 'estimate') {
-    const missingDecision = (document.estimate?.lines || [])
-      .map((line, index) => normalizeEstimateLine(line, index))
-      .some(line => !['approved', 'declined'].includes(decisions[line.id]));
+    const lineIds = (document.estimate?.lines || [])
+      .map((line, index) => normalizeEstimateLine(line, index).id);
+    const missingDecision = lineIds.some(id => !['approved', 'declined'].includes(decisions[id]));
     if (missingDecision) throw new HttpError(400, 'Approve or decline every estimate line');
+    if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+      throw new HttpError(400, 'Approval decisions do not match this estimate');
+    }
     nextEstimate = approvedEstimate(document.estimate || {}, decisions);
     if (!nextEstimate.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
   }
   const signatureKey = await storeSignature(env, link, body.signatureDataUrl);
   const timestamp = new Date().toISOString();
   const signature = {
+    type: 'signature',
     authorizationName,
     signatureKey,
     signedAt: timestamp,
+    approvedAt: timestamp,
+    recordedBy: { id: 'customer', name: authorizationName, email: '' },
     source: 'remote',
   };
   const result = link.document_type === 'estimate' ? 'approved' : 'signed';

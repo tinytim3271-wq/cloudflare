@@ -1,4 +1,9 @@
-import { calculateEstimate, normalizeEstimateLine, SHOP_SUPPLIES_RULES } from './estimate-workflow.js';
+import {
+  afterMidnightFeeLine,
+  calculateEstimate,
+  normalizeEstimateLine,
+  SHOP_SUPPLIES_RULES,
+} from './estimate-workflow.js';
 
 const money = value => Math.round((Number(value) || 0) * 100) / 100;
 const REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
@@ -235,7 +240,8 @@ export function estimateFromAssistantDraft(action = {}, { laborRate = 0, taxRate
     laborRate: resolvedLaborRate,
     laborSource: String(labor.source || 'Customer conversation; verify before authorization'),
   }));
-  const totals = calculateShopEstimate([...partLines, ...laborLines], {
+  const feeLines = draft.afterMidnightFee ? [afterMidnightFeeLine('assistant-fee-after-midnight')] : [];
+  const totals = calculateShopEstimate([...partLines, ...laborLines, ...feeLines], {
     laborRate: resolvedLaborRate,
     taxRate,
     discountPercent: draft.discountPercent,

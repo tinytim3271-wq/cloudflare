@@ -95,3 +95,22 @@ test('assistant draft totals are recomputed with shop rules instead of trusting 
   assert.equal(estimate.tax, 18.22);
   assert.equal(estimate.total, 298.47);
 });
+
+test('assistant draft adds the fixed after-midnight fee as an itemized line', () => {
+  const estimate = estimateFromAssistantDraft({
+    draft: {
+      customer: { name: 'Caller' },
+      vehicle: { description: '2020 Example' },
+      complaint: 'Emergency repair',
+      parts: [],
+      labor: [{ description: 'Emergency diagnosis', hours: 1 }],
+      afterMidnightFee: true,
+    },
+  }, { laborRate: 140, taxRate: 8.25, shopSupplies: 0 });
+
+  const fee = estimate.lines.find(line => line.type === 'fee');
+  assert.equal(fee.description, 'a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.');
+  assert.equal(fee.total, 200);
+  assert.equal(estimate.subtotal, 340);
+  assert.equal(estimate.total, 368.05);
+});

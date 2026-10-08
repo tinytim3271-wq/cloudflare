@@ -28,9 +28,9 @@ export const IMPORT_TYPES = {
   invoices: {
     title: 'Invoices',
     icon: 'receipt',
-    columns: 'number, customer, ro, date, due, status, subtotal, tax_rate, tax, amount',
+    columns: 'number, customer, ro, date, closeout_date, due, status, subtotal, tax_rate, tax, amount',
     required: 'customer, amount',
-    sample: 'number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-15,sent,100.00,8.25,8.25,108.25',
+    sample: 'number,customer,ro,date,closeout_date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-01,2026-09-15,paid,100.00,8.25,8.25,108.25',
   },
   estimates: {
     title: 'Estimates',
@@ -259,6 +259,20 @@ export function prepareImportRecords(type, text, existing = {}) {
       const providedNumber = cleanText(value(row, 'number', 'invoice', 'invoice_number'), 40).toUpperCase();
       const status = normalizeStatus(value(row, 'status')) || 'sent';
       const date = isoDate(value(row, 'date', 'issued', 'invoice_date')) || today;
+      const closeoutRaw = value(
+        row,
+        'closeout_date',
+        'closeout',
+        'closed_date',
+        'closed_at',
+        'paid_date',
+        'paid_at',
+        'completed_date',
+        'completed_at',
+      );
+      // Historical imports need a stable reporting date. Prefer an explicit
+      // lifecycle date; when the source has none, use the invoice date.
+      const closedAt = isoDate(closeoutRaw) || (closeoutRaw ? '' : date);
       const dueRaw = value(row, 'due', 'due_date');
       const due = isoDate(dueRaw) || (dueRaw ? '' : addDays(date, 14));
       const rateRaw = value(row, 'tax_rate', 'taxrate');
@@ -268,6 +282,7 @@ export function prepareImportRecords(type, text, existing = {}) {
       if (!customer) error = 'Customer is required';
       else if (!Number.isFinite(amount) || amount < 0) error = 'A numeric invoice amount is required';
       else if (rateRaw !== '' && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = 'Tax rate must be between 0 and 100';
+      else if (closeoutRaw && !closedAt) error = 'Closeout date must be a real date';
       else if (dueRaw && !due) error = 'Due date must be a real date';
       else if (!INVOICE_STATUSES.includes(status)) error = 'Status must be sent, overdue, or paid';
       else if (providedNumber && seenInvoices.has(providedNumber.toLowerCase())) skipped += 1;
@@ -288,8 +303,11 @@ export function prepareImportRecords(type, text, existing = {}) {
           taxRate,
           status,
           date,
+          closedAt,
+          closeoutSource: closeoutRaw ? 'source_closeout_date' : 'invoice_date',
           due,
           lines: [],
+          importSource: 'csv',
           createdAt,
         };
       }
