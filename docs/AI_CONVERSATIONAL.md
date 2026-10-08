@@ -2,7 +2,7 @@
 
 MechPro's primary shop-reasoning path is Anthropic Claude. Sonnet handles normal shop questions and Opus is available for explicit or heuristic escalation of difficult diagnostics. Deepgram Voice Agent provides speech-to-text and text-to-speech while using the same Anthropic account as its BYO thinking backend.
 
-`AI_ENABLED` defaults to `0` in `wrangler.jsonc`. Production remains off until the provider secrets and current contracted billing rates are configured.
+`AI_ENABLED` is `1` in `wrangler.jsonc`. When the `ANTHROPIC_API_KEY` secret is set, Claude answers assistant turns. When it is not, the text assistant falls back to the Cloudflare Workers AI binding (`AI`, model `WORKERS_AI_MODEL`, default `@cf/meta/llama-3.3-70b-instruct-fp8-fast`) so `/api/ai/assistant` stays connected. The fallback receives the 40 most recently updated shop records as read-only context, cannot call tools, and never prepares estimate drafts. Voice (Deepgram) still requires both provider secrets. Set `AI_ENABLED` to `0` to turn all AI endpoints off.
 
 ## Configuration
 
@@ -13,7 +13,7 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put DEEPGRAM_API_KEY
 ```
 
-For local development, copy `.dev.vars.example` to `.dev.vars`, replace its placeholders locally, and set `AI_ENABLED=1`. `.dev.vars` is gitignored.
+For local development, copy `.dev.vars.example` to `.dev.vars` and replace its placeholders locally. Without an Anthropic key, `wrangler dev` runs the Workers AI fallback against your Cloudflare account (requires `wrangler login`). `.dev.vars` is gitignored.
 
 The non-secret model settings are:
 

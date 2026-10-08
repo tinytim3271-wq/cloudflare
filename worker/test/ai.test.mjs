@@ -12,6 +12,7 @@ import {
   readAudioWithinLimit,
   runAnthropicTurn,
   selectAnthropicModel,
+  selectTextProvider,
   shouldEscalateToOpus,
   transcribeDeepgramAudio,
 } from '../src/ai.mjs';
@@ -496,4 +497,77 @@ test('successful audio transcription records shop-scoped Deepgram usage', async 
   assert.equal(usageInsert.args[8], 30);
   assert.equal(usageInsert.args[9], 0.03);
   assert.equal(usageInsert.args[10], 0.06);
+});
+
+test('assistant route falls back to the Workers AI binding when no Anthropic key is set', async (t) => {
+  const DB = assistantDb();
+  const provider = t.mock.method(globalThis, 'fetch', async () => {
+    assert.fail('Workers AI fallback must not call an external provider');
+  });
+  const runs = [];
+  const env = {
+    DB,
+    DEV_AUTH_BYPASS: '1',
+    AI_ENABLED: '1',
+    AI: {
+      async run(model, input) {
+        runs.push({ model, input });
+        return { response: 'Check the wastegate actuator first.', usage: { prompt_tokens: 40, completion_tokens: 8 } };
+      },
+    },
+  };
+  env.AI_CHAT_SESSIONS = chatNamespace(env);
+  const response = await worker.fetch(assistantRequest(), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.message, 'Check the wastegate actuator first.');
+  assert.equal(payload.modelFamily, 'workers-ai');
+  assert.equal(payload.model, '@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+  assert.deepEqual(payload.actions, []);
+  assert.equal(provider.mock.callCount(), 0);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].input.messages[0].role, 'system');
+  assert.match(runs[0].input.messages[0].content, /cannot call tools/);
+  assert.equal(runs[0].input.messages.at(-1).content, 'Explain this open estimate.');
+  const usageInsert = DB.calls.find(call => /INSERT INTO ai_usage_events/.test(call.sql));
+  assert.ok(usageInsert);
+  assert.deepEqual(usageInsert.args.slice(1, 5), ['shop-a', 'local-development', 'text', 'workers-ai']);
+  assert.equal(usageInsert.args[6], 40);
+  assert.equal(usageInsert.args[9], null);
+});
+
+test('Anthropic stays primary when its key and the Workers AI binding are both present', async () => {
+  const result = await runAnthropicTurn({
+    AI_ENABLED: '1',
+    ANTHROPIC_API_KEY: secret(),
+    AI: { async run() { assert.fail('Workers AI must not be used when Anthropic is configured'); } },
+  }, {
+    message: 'Hello',
+    fetcher: async () => Response.json({ content: [{ type: 'text', text: 'Hi.' }], usage: {} }),
+  });
+  assert.equal(result.provider, 'anthropic');
+  assert.equal(selectTextProvider({ AI: { run() {} } }), 'workers-ai');
+  assert.equal(selectTextProvider({}), null);
+});
+
+test('chat session returns provider errors with their HTTP status instead of a generic 500', async () => {
+  const response = await worker.fetch(assistantRequest(), (() => {
+    const env = {
+      DB: assistantDb(),
+      DEV_AUTH_BYPASS: '1',
+      AI_ENABLED: '1',
+      AI: { async run() { throw new Error('upstream down'); } },
+    };
+    env.AI_CHAT_SESSIONS = chatNamespace(env);
+    return env;
+  })());
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).message, /provider is unavailable/);
+});
+
+test('Workers AI usage is never priced with Anthropic rates', () => {
+  assert.deepEqual(
+    calculateTextCost({ ANTHROPIC_SONNET_INPUT_USD_PER_MTOK: '3', ANTHROPIC_SONNET_OUTPUT_USD_PER_MTOK: '15' }, 'workers-ai', 1000, 1000),
+    { providerCostUsd: null, billedUsd: null },
+  );
 });
