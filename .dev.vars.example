@@ -12,7 +12,11 @@ DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
 # Workers AI binding from wrangler.jsonc (wrangler dev runs it against your
 # Cloudflare account). Set AI_ENABLED=0 to turn the assistant off locally.
 AI_ENABLED=1
+# Shops can add their own Anthropic key in Shop settings > AI (encrypted with
+# INTEGRATION_ENCRYPTION_KEY). ANTHROPIC_API_KEY is only an optional platform-wide
+# override that makes MechPro pay for Claude for every shop without its own key.
 # ANTHROPIC_API_KEY=replace-with-your-anthropic-api-key
+# SHOP_ANTHROPIC_MODEL=claude-sonnet-5
 # DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 
 # Configure current contracted provider rates before enabling pass-through billing.

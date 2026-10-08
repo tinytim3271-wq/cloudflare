@@ -1,4 +1,13 @@
 import { HttpError } from './http.mjs';
+import {
+  ANTHROPIC_MESSAGES_URL,
+  ANTHROPIC_VERSION,
+  AnthropicApiError,
+  anthropicFailureMessage,
+  isShopKeyProblem,
+  loadShopAnthropicConfig,
+  markShopKeyStatus,
+} from './shop-ai.mjs';
 
 export const DEFAULT_SONNET_MODEL = 'claude-sonnet-5';
 export const DEFAULT_OPUS_MODEL = 'claude-opus-5';
@@ -198,14 +207,21 @@ export function isAiEnabled(env) {
 }
 
 /**
- * Which text provider answers assistant turns. Anthropic stays primary whenever
- * its key is configured; the Workers AI binding keeps the assistant connected
- * when it is not. Returns null when neither is available.
+ * Which text provider answers assistant turns, in priority order:
+ *   1. the shop's own Anthropic key ("bring your own key" upgrade),
+ *   2. the platform ANTHROPIC_API_KEY secret (optional platform-wide override),
+ *   3. the included Cloudflare Workers AI binding.
+ * Returns null when none is available.
  */
-export function selectTextProvider(env) {
+export function selectTextProvider(env, { shopAnthropic = null } = {}) {
+  if (String(shopAnthropic?.apiKey || '').trim()) return 'anthropic-shop';
   if (String(env.ANTHROPIC_API_KEY || '').trim()) return 'anthropic';
-  if (env.AI && typeof env.AI.run === 'function') return 'workers-ai';
+  if (hasWorkersAi(env)) return 'workers-ai';
   return null;
+}
+
+function hasWorkersAi(env) {
+  return Boolean(env.AI && typeof env.AI.run === 'function');
 }
 
 export function shouldEscalateToOpus(message) {
@@ -219,7 +235,7 @@ export function shouldEscalateToOpus(message) {
   return diagnosticSignals.filter(pattern => pattern.test(text)).length >= 2;
 }
 
-export function selectAnthropicModel(env, { requestedModel = 'sonnet', autoEscalate = false, message = '' } = {}) {
+export function selectAnthropicModel(env, { requestedModel = 'sonnet', autoEscalate = false, message = '', sonnetModel = '' } = {}) {
   const requested = String(requestedModel || 'sonnet').trim().toLowerCase();
   if (!['sonnet', 'opus'].includes(requested)) {
     throw new HttpError(400, 'model must be "sonnet" or "opus"');
@@ -229,7 +245,7 @@ export function selectAnthropicModel(env, { requestedModel = 'sonnet', autoEscal
     family: escalate ? 'opus' : 'sonnet',
     model: escalate
       ? String(env.ANTHROPIC_OPUS_MODEL || DEFAULT_OPUS_MODEL)
-      : String(env.ANTHROPIC_SONNET_MODEL || DEFAULT_SONNET_MODEL),
+      : String(sonnetModel || env.ANTHROPIC_SONNET_MODEL || DEFAULT_SONNET_MODEL),
     routingReason: requested === 'opus'
       ? 'requested_opus'
       : escalate ? 'auto_escalated_diagnostics' : 'default_sonnet',
@@ -275,16 +291,27 @@ function normalizeHistory(history) {
   })).filter(entry => entry.content);
 }
 
-async function anthropicRequest(env, payload, fetcher) {
-  const response = await fetcher('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(payload),
-  });
+async function anthropicRequest(env, payload, fetcher, apiKey = env.ANTHROPIC_API_KEY) {
+  let response;
+  try {
+    response = await fetcher(ANTHROPIC_MESSAGES_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: 'Anthropic Messages API request failed',
+      status: 0,
+      type: 'network',
+      error: String(error?.message || error).slice(0, 200),
+    }));
+    throw new AnthropicApiError({ status: 0, type: 'network' });
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     console.error(JSON.stringify({
@@ -292,7 +319,11 @@ async function anthropicRequest(env, payload, fetcher) {
       status: response.status,
       type: body?.error?.type || 'unknown',
     }));
-    throw new HttpError(502, 'The MechPro assistant provider is unavailable');
+    throw new AnthropicApiError({
+      status: response.status,
+      type: body?.error?.type || '',
+      message: body?.error?.message || '',
+    });
   }
   return body;
 }
@@ -359,16 +390,78 @@ export async function runAnthropicTurn(env, {
   autoEscalate = false,
   allowEstimatePreparation = true,
   fetcher = fetch,
+  shopAnthropic,
 } = {}) {
   if (!isAiEnabled(env)) throw new HttpError(503, 'MechPro AI is not enabled');
-  const provider = selectTextProvider(env);
+  // `shopAnthropic` may be injected (tests); otherwise read the shop's own key.
+  const shopConfig = shopAnthropic === undefined ? await loadShopAnthropicConfig(env, shopId) : shopAnthropic;
+  const provider = selectTextProvider(env, { shopAnthropic: shopConfig });
   if (!provider) throw new HttpError(503, 'MechPro AI is not configured');
   if (provider === 'workers-ai') {
-    return runWorkersAiTurn(env, { shopId, message, history });
+    return { ...(await runWorkersAiTurn(env, { shopId, message, history })), keySource: 'included' };
   }
 
+  const keySource = provider === 'anthropic-shop' ? 'shop' : 'platform';
+  try {
+    const result = await runClaudeConversation(env, {
+      shopId,
+      message,
+      history,
+      requestedModel,
+      autoEscalate,
+      allowEstimatePreparation,
+      fetcher,
+      apiKey: keySource === 'shop' ? shopConfig.apiKey : env.ANTHROPIC_API_KEY,
+      sonnetModel: keySource === 'shop' ? shopConfig.model : '',
+    });
+    if (keySource === 'shop' && shopConfig.status === 'error') {
+      await markShopKeyStatus(env, shopId, { status: 'active' });
+    }
+    return { ...result, keySource };
+  } catch (error) {
+    if (!(error instanceof AnthropicApiError) || !hasWorkersAi(env)) throw error;
+    const kind = error.kind;
+    let notice = '';
+    if (keySource === 'shop') {
+      if (isShopKeyProblem(kind)) {
+        const reason = anthropicFailureMessage(kind);
+        await markShopKeyStatus(env, shopId, { status: 'error', error: reason });
+        notice = `Your Claude (Anthropic) API key did not work: ${reason} This answer came from Cloudflare AI instead. Check your key in Shop settings > AI.`;
+      } else {
+        notice = 'Claude was unavailable, so this answer came from Cloudflare AI (included). Your Anthropic key is still saved.';
+      }
+    }
+    console.warn(JSON.stringify({
+      message: 'Anthropic turn failed; answering with Workers AI',
+      keySource,
+      kind,
+      status: error.upstreamStatus,
+    }));
+    const fallback = await runWorkersAiTurn(env, { shopId, message, history });
+    return {
+      ...fallback,
+      routingReason: keySource === 'shop' ? 'shop_anthropic_failed_fallback' : 'platform_anthropic_failed_fallback',
+      keySource: 'included',
+      fallbackFrom: 'anthropic',
+      failureKind: kind,
+      ...(notice ? { notice } : {}),
+    };
+  }
+}
+
+async function runClaudeConversation(env, {
+  shopId,
+  message,
+  history,
+  requestedModel,
+  autoEscalate,
+  allowEstimatePreparation,
+  fetcher,
+  apiKey,
+  sonnetModel,
+}) {
   const pricing = shopId ? await loadShopPricing(env, shopId) : DEFAULT_SHOP_PRICING;
-  const route = selectAnthropicModel(env, { requestedModel, autoEscalate, message });
+  const route = selectAnthropicModel(env, { requestedModel, autoEscalate, message, sonnetModel });
   const messages = [...normalizeHistory(history), { role: 'user', content: String(message) }];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -383,7 +476,7 @@ export async function runAnthropicTurn(env, {
       system: buildAssistantSystemPrompt(pricing, { allowEstimatePreparation }),
       tools: allowEstimatePreparation ? ANTHROPIC_TOOLS : LOOKUP_TOOLS,
       messages,
-    }, fetcher);
+    }, fetcher, apiKey);
     inputTokens += Number(response.usage?.input_tokens || 0);
     outputTokens += Number(response.usage?.output_tokens || 0);
     const toolCalls = (response.content || []).filter(block => block.type === 'tool_use');
@@ -478,6 +571,15 @@ export function calculateTextCost(env, family, inputTokens, outputTokens) {
     providerCostUsd,
     billedUsd: markup === null ? null : providerCostUsd * markup,
   };
+}
+
+/**
+ * Usage costs for a finished turn. A shop using its own Anthropic key is billed
+ * by Anthropic directly, so MechPro records no provider cost or billed amount.
+ */
+export function usageCostsForResult(env, result = {}) {
+  if (result.keySource === 'shop') return { providerCostUsd: null, billedUsd: null };
+  return calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
 }
 
 export function calculateVoiceCost(env, voiceSeconds) {
