@@ -1978,18 +1978,69 @@
   });
 
   // src/modules/labor-guide.js
-  function laborGuideConnectionStatus(record) {
-    if (!record || typeof record !== "object") {
-      return { connected: false, provider: "manual", status: "not_connected", label: "Labor guide not connected" };
-    }
-    const provider = String(record.provider || "manual").toLowerCase();
+  function normalizeProvider(value2) {
+    const provider = String(value2 || "manual").trim().toLowerCase();
+    return LABOR_GUIDE_PROVIDERS.includes(provider) ? provider : null;
+  }
+  function bookCredentialsReady(provider, record = {}) {
     if (provider === "motor") {
-      const ready = Boolean(
+      return Boolean(
         record.apiKey || record.userId && record.userKey && record.partnerId && record.partnerKey || record.viaPartstech === true
       );
-      return ready ? { connected: true, provider: "motor", status: "connected", label: "MOTOR labor guide connected", connectedAt: record.connectedAt || null, viaPartstech: Boolean(record.viaPartstech) } : { connected: false, provider: "motor", status: "not_connected", label: "MOTOR labor guide not connected" };
     }
-    return { connected: true, provider: "manual", status: "manual", label: "Manual labor entry" };
+    if (provider === "alldata" || provider === "shopkey") {
+      return Boolean(record.apiKey || record.username && record.password || record.subscriptionId);
+    }
+    return false;
+  }
+  function isBookLaborProvider(provider) {
+    return BOOK_LABOR_PROVIDERS.includes(String(provider || "").toLowerCase());
+  }
+  function laborGuideConnectionStatus(record) {
+    if (!record || typeof record !== "object") {
+      return {
+        connected: false,
+        provider: null,
+        status: "not_connected",
+        label: "Labor guide not connected",
+        webFallbackEligible: true
+      };
+    }
+    const provider = normalizeProvider(record.provider) || "manual";
+    if (provider === "manual") {
+      return {
+        connected: false,
+        provider: "manual",
+        status: "manual",
+        label: PROVIDER_LABELS.manual,
+        webFallbackEligible: true
+      };
+    }
+    if (!isBookLaborProvider(provider)) {
+      return {
+        connected: false,
+        provider: null,
+        status: "not_connected",
+        label: "Labor guide not connected",
+        webFallbackEligible: true
+      };
+    }
+    const ready = bookCredentialsReady(provider, record);
+    return ready ? {
+      connected: true,
+      provider,
+      status: "connected",
+      label: `${PROVIDER_LABELS[provider]} connected`,
+      connectedAt: record.connectedAt || null,
+      viaPartstech: provider === "motor" ? Boolean(record.viaPartstech) : false,
+      webFallbackEligible: false
+    } : {
+      connected: false,
+      provider,
+      status: "not_connected",
+      label: `${PROVIDER_LABELS[provider]} not connected`,
+      webFallbackEligible: true
+    };
   }
   function createManualLaborEntry({
     description = "Labor",
@@ -2017,19 +2068,30 @@
   }
   function laborGuidePanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
     const status = laborGuideConnectionStatus(account);
-    const banner = status.connected && status.provider === "motor" ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>MOTOR times via PartsTech taxonomy labor API</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Manual labor entry always works. Connect MOTOR (PartsTech labor API) for guide times \u2014 never invents hours when disconnected.</span></div></div>`;
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Book times from the connected provider</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Manual entry always works. With no MOTOR / ALLDATA / ShopKey connection, lookup uses a labeled web average (${escapeHtml2(WEB_ESTIMATE_LABEL)}) when search is configured \u2014 never as book time.</span></div></div>`;
     const form = canSave ? `<form id="labor-guide-connect-form" class="form-grid">
-        <label>Provider<select name="provider"><option value="motor" ${account.provider === "motor" ? "selected" : ""}>MOTOR (PartsTech)</option><option value="manual" ${!account.provider || account.provider === "manual" ? "selected" : ""}>Manual only</option></select></label>
-        <label class="toggle-field full"><input type="checkbox" name="viaPartstech" ${account.viaPartstech !== false ? "checked" : ""}/><span>Use the shop's PartsTech credentials for MOTOR labor</span></label>
+        <label>Provider<select name="provider">
+          <option value="motor" ${account.provider === "motor" ? "selected" : ""}>MOTOR (PartsTech)</option>
+          <option value="alldata" ${account.provider === "alldata" ? "selected" : ""}>ALLDATA</option>
+          <option value="shopkey" ${account.provider === "shopkey" ? "selected" : ""}>ShopKey</option>
+          <option value="manual" ${!account.provider || account.provider === "manual" ? "selected" : ""}>Manual only</option>
+        </select></label>
+        <label class="toggle-field full"><input type="checkbox" name="viaPartstech" ${account.viaPartstech !== false ? "checked" : ""}/><span>For MOTOR: use the shop's PartsTech credentials</span></label>
         <button class="primary" type="submit">${icon2("save", 14)} Save labor guide</button>
-        ${status.provider === "motor" && status.connected ? `<button class="secondary danger" type="button" id="labor-guide-disconnect">${icon2("log-out", 14)} Disconnect MOTOR</button>` : ""}
+        ${status.connected ? `<button class="secondary danger" type="button" id="labor-guide-disconnect">${icon2("log-out", 14)} Disconnect provider</button>` : ""}
       </form>` : '<p class="ops-note">Ask an owner or admin to connect a labor guide.</p>';
+    const searchEnabled = true;
     const search = `<form id="labor-guide-search-form" class="form-grid">
-      <label class="full">Operation keyword<input name="keyword" placeholder="front brake pads" ${status.connected && status.provider === "motor" ? "" : "disabled"}/></label>
-      <label>VIN<input name="vin" ${status.connected && status.provider === "motor" ? "" : "disabled"}/></label>
+      <label class="full">Operation keyword<input name="keyword" placeholder="front brake pads" ${searchEnabled ? "" : "disabled"}/></label>
+      <label>Year<input name="year" placeholder="2022"/></label>
+      <label>Make<input name="make" placeholder="Ford"/></label>
+      <label>Model<input name="model" placeholder="F-150"/></label>
+      <label>Engine<input name="engine" placeholder="5.0L"/></label>
+      <label>VIN<input name="vin"/></label>
       <label>Labor rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml2(account.defaultLaborRate || "")}"/></label>
-      <button class="primary" type="submit" ${status.connected && status.provider === "motor" ? "" : "disabled"}>${icon2("search", 14)} Look up MOTOR times</button>
+      <button class="primary" type="submit">${icon2("search", 14)} Look up labor times</button>
     </form>
+    <p class="ops-note">Connected book providers return guide times. Otherwise results are labeled <b>${escapeHtml2(WEB_ESTIMATE_LABEL)}</b> with source links, or \u201Cno estimate found\u201D.</p>
     <form id="manual-labor-form" class="form-grid">
       <label class="full">Manual labor description<input name="description" required placeholder="Diagnose noise"/></label>
       <label>Hours<input name="hours" type="number" step=".1" min="0" value="1" required/></label>
@@ -2038,16 +2100,24 @@
     </form>
     <div id="labor-guide-results" class="data-panel"></div>`;
     return `<section class="settings-panel labor-guide">
-    <div class="statement-head"><div><div class="eyebrow">Labor guide</div><h2>Times &amp; operations</h2><p>Pluggable labor guide with MOTOR adapter and manual entry. Unconfigured providers show not connected and refuse fake times.</p></div>${icon2("timer", 20)}</div>
+    <div class="statement-head"><div><div class="eyebrow">Labor guide</div><h2>Times &amp; operations</h2><p>Pluggable labor guide: MOTOR, ALLDATA, ShopKey, manual entry, and labeled web fallback when no book provider is connected.</p></div>${icon2("timer", 20)}</div>
     ${banner}
     ${form}
     ${search}
   </section>`;
   }
-  var LABOR_GUIDE_PROVIDERS;
+  var LABOR_GUIDE_PROVIDERS, BOOK_LABOR_PROVIDERS, WEB_ESTIMATE_LABEL, PROVIDER_LABELS;
   var init_labor_guide = __esm({
     "src/modules/labor-guide.js"() {
-      LABOR_GUIDE_PROVIDERS = Object.freeze(["manual", "motor"]);
+      LABOR_GUIDE_PROVIDERS = Object.freeze(["manual", "motor", "alldata", "shopkey"]);
+      BOOK_LABOR_PROVIDERS = Object.freeze(["motor", "alldata", "shopkey"]);
+      WEB_ESTIMATE_LABEL = "web estimate \u2014 not book time";
+      PROVIDER_LABELS = Object.freeze({
+        manual: "Manual labor entry",
+        motor: "MOTOR labor guide",
+        alldata: "ALLDATA labor guide",
+        shopkey: "ShopKey labor guide"
+      });
     }
   });
 
@@ -5861,8 +5931,19 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       if (panel) panel.innerHTML = "<p>Looking up\u2026</p>";
       try {
         const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
-        const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
-        if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+        if (result.provider === "web_estimate") {
+          if (!result.found) {
+            if (panel) panel.innerHTML = `<p class="login-error"><b>no estimate found</b> \u2014 ${escapeHtml(result.message || "web estimate unavailable")}. Manual entry stays available below.</p>`;
+            toast(result.message || "no estimate found");
+            return;
+          }
+          const sources = (result.sources || []).map((source) => `<li><a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.title || source.url)}</a></li>`).join("");
+          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+          if (panel) panel.innerHTML = `<div class="messaging-status idle"><div><strong>web estimate \u2014 not book time</strong><span>Average ${escapeHtml(String(result.averageHours))} hrs from ${escapeHtml(String(result.sourceCount || 0))} source(s). Not ALLDATA / MOTOR / ShopKey book time.</span></div></div><table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table><ol class="ops-note">${sources}</ol>`;
+        } else {
+          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+          if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+        }
         window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map((line) => [line.id, line]));
         document.querySelectorAll("[data-add-labor-line]").forEach((button) => {
           button.onclick = () => {

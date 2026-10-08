@@ -38,18 +38,20 @@ test('partstech quote fails closed when not connected', async () => {
   );
 });
 
-test('labor guide search fails closed without MOTOR', async () => {
+test('labor guide search without provider returns labeled web miss when search unset', async () => {
   const store = secretsStore();
   const handle = createLaborGuideHandlers({ ...store, requireRole });
   const context = { shopId: 'shop-1', role: 'service_writer', userId: 'u1' };
-  await assert.rejects(
-    () => handle(new Request('https://example/api/integrations/labor-guide/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vin: '1FT', keyword: 'brake' }),
-    }), {}, context, ['integrations', 'labor-guide', 'search']),
-    /not connected/i,
-  );
+  const response = await handle(new Request('https://example/api/integrations/labor-guide/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ year: 2022, make: 'Ford', model: 'F-150', keyword: 'brake' }),
+  }), {}, context, ['integrations', 'labor-guide', 'search']);
+  const body = await response.json();
+  assert.equal(body.provider, 'web_estimate');
+  assert.equal(body.found, false);
+  assert.equal(body.message, 'no estimate found');
+  assert.match(body.label, /not book time/i);
 });
 
 test('quickbooks sync fails closed when not connected', async () => {

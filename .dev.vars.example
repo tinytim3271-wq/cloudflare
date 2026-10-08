@@ -48,3 +48,9 @@ DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 # QUICKBOOKS_CLIENT_SECRET=replace-with-intuit-client-secret
 # QUICKBOOKS_REDIRECT_URI=http://127.0.0.1:8787/qbo/callback
 # QUICKBOOKS_SANDBOX=1
+
+# Labor web fallback (used only when no MOTOR/ALLDATA/ShopKey provider is connected).
+# Brave Search: https://brave.com/search/api/ — results are labeled "web estimate — not book time".
+# LABOR_WEB_SEARCH_PROVIDER=brave
+# LABOR_WEB_SEARCH_API_KEY=replace-with-brave-search-api-key
+# (alias also accepted: BRAVE_SEARCH_API_KEY)

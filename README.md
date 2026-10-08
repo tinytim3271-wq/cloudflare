@@ -94,7 +94,7 @@ Unconfigured integrations return **not connected** and fail closed — they neve
 | Integration | API routes | Secrets / signup |
 | --- | --- | --- |
 | PartsTech parts | `GET/POST/DELETE /api/integrations/partstech`, `POST .../quote`, `POST .../order` | Shop stores partner+user API keys in D1 after creating a PartsTech partner account |
-| MOTOR labor guide | `GET/POST/DELETE /api/integrations/labor-guide`, `POST .../search`, `POST .../manual` | Prefer “via PartsTech” (PartsTech MOTOR taxonomy labor). Manual labor entry always works |
+| Labor guide (MOTOR / ALLDATA / ShopKey) | `GET/POST/DELETE /api/integrations/labor-guide`, `POST .../search`, `POST .../manual` | Book providers when connected. If none connected, search auto-falls back to a labeled **web estimate — not book time** via `LABOR_WEB_SEARCH_API_KEY` (Brave). Manual entry always works. ALLDATA/ShopKey adapters are recognized but not live yet |
 | QuickBooks Online | `GET/DELETE /api/integrations/quickbooks`, `POST .../connect`, `POST .../callback`, `POST .../sync` | Create an Intuit Developer app; set `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` Worker secrets; shops complete OAuth |
 
 Repair-order flow helpers live in `src/modules/repair-order-flow.js` (inspection → estimate → customer approval link via existing `/api/document-links` + SMS/email messaging → RO → invoice → Stripe payment).
