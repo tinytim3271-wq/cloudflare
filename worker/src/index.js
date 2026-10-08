@@ -42,6 +42,7 @@ import {
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
+import { handleCustomerLookup } from './customer-search.mjs';
 import { recordPayment as recordPaymentToTarget } from './payments.mjs';
 import {
   approvalRecorder,
@@ -2500,6 +2501,9 @@ async function route(request, env, analytics) {
   analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
   if (path === '/auth/session') return handleAuthSession(request, context, analytics);
+  if (segments[0] === 'customers' && ['search', 'duplicates'].includes(segments[1])) {
+    return handleCustomerLookup(request, env, context, segments[1]);
+  }
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
   if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);

@@ -1980,6 +1980,58 @@
     }
   });
 
+  // src/modules/customer-intake.js
+  function normalizeCustomerSearch(value2) {
+    return String(value2 || "").trim().replace(/\s+/g, " ");
+  }
+  function shouldSearchCustomers(value2) {
+    return normalizeCustomerSearch(value2).length >= CUSTOMER_SEARCH_MIN_LENGTH;
+  }
+  function matchesName(name, query2) {
+    const source = String(name || "").toLocaleLowerCase();
+    return normalizeCustomerSearch(query2).toLocaleLowerCase().split(" ").every((token) => source.includes(token));
+  }
+  function vehicleLabel(vehicle) {
+    return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ") || vehicle.vehicle || vehicle.description || "Vehicle on file";
+  }
+  function enrichCustomer(customer, vehicles) {
+    const linkedVehicles = vehicles.filter((vehicle) => customer.id && vehicle.customerId === customer.id || String(vehicle.customer || "").toLocaleLowerCase() === String(customer.name || "").toLocaleLowerCase()).map((vehicle) => ({ ...vehicle, label: vehicleLabel(vehicle) }));
+    return {
+      ...customer,
+      id: String(customer.id || customer.name || ""),
+      vehicles: linkedVehicles,
+      vehicleCount: linkedVehicles.length || Number(customer.vehicles || 0),
+      recentVehicle: linkedVehicles[0] || null
+    };
+  }
+  function uniqueCustomers(customers2) {
+    const seen = /* @__PURE__ */ new Set();
+    return customers2.filter((customer) => {
+      const key = String(customer.id || customer.name || "").trim().toLocaleLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  function localCustomerMatches(query2, customers2 = [], vehicles = []) {
+    if (!shouldSearchCustomers(query2)) return [];
+    return uniqueCustomers(customers2).filter((customer) => matchesName(customer.name, query2)).sort((left, right) => String(left.name).localeCompare(String(right.name))).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
+  }
+  function likelyDuplicateCustomers({ phone = "", email = "" }, customers2 = [], vehicles = []) {
+    const phoneDigits = String(phone || "").replace(/\D/g, "");
+    const normalizedEmail = String(email || "").trim().toLocaleLowerCase();
+    if (!phoneDigits && !normalizedEmail) return [];
+    return uniqueCustomers(customers2).filter((customer) => phoneDigits && String(customer.phone || "").replace(/\D/g, "") === phoneDigits || normalizedEmail && String(customer.email || "").trim().toLocaleLowerCase() === normalizedEmail).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
+  }
+  var CUSTOMER_SEARCH_MIN_LENGTH, CUSTOMER_SEARCH_DEBOUNCE_MS, CUSTOMER_SEARCH_RESULT_LIMIT;
+  var init_customer_intake = __esm({
+    "src/modules/customer-intake.js"() {
+      CUSTOMER_SEARCH_MIN_LENGTH = 3;
+      CUSTOMER_SEARCH_DEBOUNCE_MS = 275;
+      CUSTOMER_SEARCH_RESULT_LIMIT = 8;
+    }
+  });
+
   // src/modules/filing/withholding.js
   function roundCents(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
@@ -4733,7 +4785,7 @@ button{margin-top:12px;padding:8px 14px}
   function customerOptions(selected = "") {
     return customersWithSelected(state.customers, selected).map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
   }
-  function vehicleLabel(vehicle) {
+  function vehicleLabel2(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
   }
   function getRelationshipDerived() {
@@ -4753,7 +4805,7 @@ button{margin-top:12px;padding:8px 14px}
       }
     }
     for (const vehicle of state.vehicles) {
-      const label2 = vehicleLabel(vehicle);
+      const label2 = vehicleLabel2(vehicle);
       if (vehicle.id) vehicleByLookup.set(vehicle.id, vehicle);
       if (label2) vehicleByLookup.set(label2, vehicle);
       if (vehicle.customer && vehicle.plate) vehicleByLookup.set(`${vehicle.customer}#${vehicle.plate}`, vehicle);
@@ -4763,18 +4815,18 @@ button{margin-top:12px;padding:8px 14px}
     return relationshipDerivedCache;
   }
   function linkedOrders(vehicle) {
-    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel(vehicle)) || [];
+    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel2(vehicle)) || [];
     return byVin.length && byLabel.length ? [.../* @__PURE__ */ new Set([...byVin, ...byLabel])] : byVin.length ? byVin : byLabel;
   }
   function operationsVehicles() {
     const rows = state.vehicles.map((vehicle) => {
       const history = linkedOrders(vehicle);
-      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
+      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel2(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
     }).join("");
     return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>`;
   }
   function catalogInspectionApp() {
-    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel, isLocalShell, save };
+    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel: vehicleLabel2, isLocalShell, save };
   }
   function openCatalogInspection(existing, catalogId) {
     presentCatalogInspection(catalogInspectionApp(), existing, catalogId);
@@ -4988,7 +5040,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
     };
   }
   function openInspectionForm(existing = null) {
-    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
+    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel2(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
     showModal(`<form class="modal wide" id="inspection-form"><div class="modal-head"><h2>${existing ? "Edit" : "New"} digital inspection</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Vehicle<select name="vehicleId" required>${vehicleOptions}</select></label><label>Work order<select name="workOrderId"><option value="">Unlinked</option>${state.orders.map((order) => `<option ${existing?.workOrderId === order.id ? "selected" : ""}>${order.id}</option>`).join("")}</select></label>${!existing ? `<label>Template<select name="templateId" id="template-picker">${templateOptions}</select></label>` : ""}</div><h3>Damage diagram</h3><div class="damage-zones">${zones.map((zone) => `<button type="button" class="damage-zone ${damage.has(zone) ? "marked" : ""}" data-damage-zone="${zone}">${icon(damage.has(zone) ? "alert-triangle" : "check", 13)} ${zone}</button>`).join("")}</div><h3 id="checklist-heading">${items.length}-point checklist</h3><div class="inspection-grid" id="inspection-checklist">${items.map((item, index) => `<article><b>${escapeHtml(item.name)}</b><select name="status-${index}"><option value="not_checked" ${item.status === "not_checked" ? "selected" : ""}>Not checked</option><option value="pass" ${item.status === "pass" ? "selected" : ""}>Pass</option><option value="attention" ${item.status === "attention" ? "selected" : ""}>Needs attention</option><option value="fail" ${item.status === "fail" ? "selected" : ""}>Fail</option></select><input name="note-${index}" value="${escapeHtml(item.note || "")}" placeholder="Reading or note"/></article>`).join("")}</div><label>Inspection photos<input name="photos" type="file" accept="image/*" multiple/></label>${existingPhotos ? `<div class="vehicle-photo-thumbs">${existingPhotos}</div>` : ""}<label>Recommendations<textarea name="recommendations">${escapeHtml(existing?.recommendations || "")}</textarea></label>${existing ? `<div class="inspection-report-actions"><button type="button" class="secondary" id="print-inspection">${icon("printer", 14)} Print report</button><button type="button" class="secondary" id="share-inspection">${icon("share-2", 14)} Share report</button><button type="button" class="secondary" id="approve-inspection">${icon("shield-check", 14)} Approval</button></div>${inspectionApprovalHistory(existing) ? `<h3>Approval history</h3>${inspectionApprovalHistory(existing)}` : ""}` : ""}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("save", 14)} Save inspection</button></div></form>`);
     document.querySelectorAll("[data-damage-zone]").forEach((button) => {
       button.onclick = () => {
@@ -5025,7 +5077,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
       try {
         const vehicle = state.vehicles.find((item) => item.id === form.elements.vehicleId.value), files = [...form.elements.photos.files], photoKeys = [];
         for (const file of files) photoKeys.push(await uploadFileToR2(file, "inspection", file.type || "image/jpeg"));
-        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
+        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel2(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
         await saveShopEntity("inspections", record);
         closeModal();
         toast("Digital inspection saved");
@@ -6150,7 +6202,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function vehicleOptionsForCustomer(customerName, selectedVin = "") {
     const vehicles = state.vehicles.filter((vehicle) => !customerName || vehicle.customer === customerName);
-    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
+    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel2(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel2(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
   }
   function bindNewOrderCustomerPickers() {
     const form = document.querySelector("#new-form");
@@ -6429,7 +6481,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const customer = state.customers.find((c) => c.name === name);
     if (!customer) return;
     const vehicles = state.vehicles.filter((v) => v.customer === name), orders2 = state.orders.filter((o) => o.customer === name), invs = state.invoices.filter((i) => i.customer === name), payments2 = state.payments.filter((p) => p.customer === name), balance = customerBalance(name);
-    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money3(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money3(i.amount)}</td><td>${money3(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money3(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
+    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money3(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel2(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money3(i.amount)}</td><td>${money3(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money3(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
     document.querySelector("#cd-message")?.addEventListener("click", () => {
       closeModal();
       openCustomerMessage(customer.name, customer.phone, customer.email);
@@ -6461,7 +6513,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const vehicle = state.vehicles.find((v) => v.id === id);
     if (!vehicle) return;
     const history = linkedOrders(vehicle), photos = vehicle.photoKeys || [];
-    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
+    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel2(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
     document.querySelector("#vd-edit")?.addEventListener("click", () => {
       closeModal();
       openVehicleForm(vehicle);
@@ -7207,6 +7259,185 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         toast(error.message || "Customer could not be saved");
       }
     };
+  }
+  function customerIntakeResultMarkup(result, index) {
+    const contact = [result.phone, result.email].filter(Boolean).join(" \xB7 ") || "No phone or email on file";
+    const vehicle = result.recentVehicle?.label || result.recentVehicle?.vehicle || "No vehicle on file";
+    return `<button class="customer-search-option" type="button" role="option" data-customer-result="${index}"><span><strong>${escapeHtml(result.name)}</strong><small>${escapeHtml(contact)}</small></span><span class="customer-search-vehicle">${escapeHtml(vehicle)}<small>${Number(result.vehicleCount || result.vehicles?.length || 0)} vehicle${Number(result.vehicleCount || result.vehicles?.length || 0) === 1 ? "" : "s"}</small></span></button>`;
+  }
+  function installCustomerIntakeFields(form) {
+    const oldSelect = form.elements.customerSelect;
+    const customerInput = form.elements.customer;
+    if (!oldSelect || !customerInput) return;
+    oldSelect.closest("label").hidden = true;
+    oldSelect.closest("label").style.display = "none";
+    customerInput.hidden = false;
+    customerInput.required = true;
+    customerInput.autocomplete = "off";
+    customerInput.placeholder = "Start typing a first or last name";
+    customerInput.setAttribute("role", "combobox");
+    customerInput.setAttribute("aria-autocomplete", "list");
+    customerInput.setAttribute("aria-controls", "customer-search-results");
+    customerInput.setAttribute("aria-expanded", "false");
+    customerInput.closest("label").firstChild.textContent = "Customer name *";
+    customerInput.closest("label").classList.add("customer-search-field", "full");
+    customerInput.closest("label").insertAdjacentHTML("beforeend", `<small class="customer-search-help">Type at least ${CUSTOMER_SEARCH_MIN_LENGTH} characters to search existing customers.</small>`);
+    customerInput.closest("label").insertAdjacentHTML("afterend", `<div class="customer-search-results full" id="customer-search-results" role="listbox" aria-label="Matching customers" hidden></div>`);
+    form.elements.phone.closest("label").insertAdjacentHTML("afterend", `<label>Email<input name="email" type="email" autocomplete="email"/></label><label class="full">Billing address<input name="billingAddress" autocomplete="street-address"/></label><input name="selectedCustomerId" type="hidden"/><div class="duplicate-customer-warning full" id="duplicate-customer-warning" role="alert" hidden></div>`);
+  }
+  function bindCustomerIntakeSearch(form) {
+    const input = form.elements.customer;
+    const resultsElement = document.querySelector("#customer-search-results");
+    const duplicateElement = document.querySelector("#duplicate-customer-warning");
+    if (!input || !resultsElement) return { selected: () => null, select: () => {
+    } };
+    let timer = null;
+    let requestSequence = 0;
+    let controller = null;
+    let results = [];
+    let selectedCustomer = null;
+    let dismissedQuery = "";
+    const hideResults = () => {
+      resultsElement.hidden = true;
+      resultsElement.innerHTML = "";
+      input.setAttribute("aria-expanded", "false");
+    };
+    const showStatus = (message) => {
+      resultsElement.hidden = false;
+      resultsElement.innerHTML = `<div class="customer-search-status">${escapeHtml(message)}</div>`;
+      input.setAttribute("aria-expanded", "true");
+    };
+    const showResults = (matches, source) => {
+      results = matches;
+      resultsElement.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+      resultsElement.innerHTML = `<div class="customer-search-head"><span>${matches.length ? `${matches.length} existing customer${matches.length === 1 ? "" : "s"} found${source === "local" ? " \xB7 saved on this device" : ""}` : "No matching customers found"}</span><button type="button" class="customer-search-dismiss">Dismiss</button></div>${matches.map(customerIntakeResultMarkup).join("")}`;
+      resultsElement.querySelector(".customer-search-dismiss").onclick = () => {
+        dismissedQuery = input.value.trim();
+        hideResults();
+        input.focus();
+      };
+      resultsElement.querySelectorAll("[data-customer-result]").forEach((button) => {
+        button.onclick = () => selectCustomer(results[Number(button.dataset.customerResult)]);
+        button.onkeydown = (event) => {
+          const options = [...resultsElement.querySelectorAll("[data-customer-result]")];
+          const index = options.indexOf(button);
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            (options[index + 1] || options[0])?.focus();
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            (options[index - 1] || options.at(-1))?.focus();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            hideResults();
+            input.focus();
+          }
+        };
+      });
+    };
+    const selectCustomer = (customer) => {
+      if (!customer) return;
+      selectedCustomer = customer;
+      form.elements.selectedCustomerId.value = customer.id;
+      input.value = customer.name || "";
+      form.elements.phone.value = customer.phone || "";
+      form.elements.email.value = customer.email || "";
+      form.elements.billingAddress.value = customer.billingAddress || "";
+      const localIndex = state.customers.findIndex((item) => item.id === customer.id || String(item.name || "").trim().toLowerCase() === String(customer.name || "").trim().toLowerCase());
+      const localRecord = { ...customer, vehicles: Number(customer.vehicleCount || customer.vehicles?.length || 0) };
+      if (localIndex >= 0) state.customers[localIndex] = { ...state.customers[localIndex], ...localRecord };
+      else state.customers.unshift(localRecord);
+      for (const vehicle of customer.vehicles || []) {
+        if (!state.vehicles.some((item) => item.id === vehicle.id)) {
+          state.vehicles.push({ ...vehicle, customer: customer.name, customerId: customer.id });
+        }
+      }
+      form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer(customer.name);
+      form.elements.vehicleSelect.value = "";
+      form.elements.vehicle.readOnly = false;
+      duplicateElement.hidden = true;
+      hideResults();
+      input.focus();
+    };
+    const runSearch = async () => {
+      const queryValue = input.value.trim();
+      if (!shouldSearchCustomers(queryValue) || queryValue === dismissedQuery) {
+        hideResults();
+        return;
+      }
+      const sequence = ++requestSequence;
+      controller?.abort();
+      controller = new AbortController();
+      showStatus("Searching customers\u2026");
+      try {
+        const response = await apiFetch(`/customers/search?q=${encodeURIComponent(queryValue)}`, { signal: controller.signal });
+        if (sequence !== requestSequence || input.value.trim() !== queryValue) return;
+        showResults(response.results || [], "cloud");
+      } catch (error) {
+        if (sequence !== requestSequence || error.name === "AbortError") return;
+        showResults(localCustomerMatches(queryValue, state.customers, state.vehicles), "local");
+      }
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      controller?.abort();
+      requestSequence += 1;
+      dismissedQuery = "";
+      duplicateElement.hidden = true;
+      if (selectedCustomer && input.value.trim() !== selectedCustomer.name) {
+        selectedCustomer = null;
+        form.elements.selectedCustomerId.value = "";
+        form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer("");
+      }
+      if (!shouldSearchCustomers(input.value)) {
+        hideResults();
+        return;
+      }
+      timer = setTimeout(runSearch, CUSTOMER_SEARCH_DEBOUNCE_MS);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" && !resultsElement.hidden) {
+        event.preventDefault();
+        resultsElement.querySelector("[data-customer-result]")?.focus();
+      } else if (event.key === "Escape") {
+        hideResults();
+      }
+    });
+    [form.elements.phone, form.elements.email].forEach((field) => field.addEventListener("input", () => {
+      form.dataset.duplicateConfirmed = "";
+      duplicateElement.hidden = true;
+    }));
+    input.focus();
+    return { selected: () => selectedCustomer, select: selectCustomer };
+  }
+  async function intakeDuplicateMatches(data) {
+    try {
+      const response = await apiFetch("/customers/duplicates", {
+        method: "POST",
+        body: JSON.stringify({ phone: data.phone, email: data.email })
+      });
+      return response.results || [];
+    } catch {
+      return likelyDuplicateCustomers(data, state.customers, state.vehicles);
+    }
+  }
+  function showIntakeDuplicateWarning(form, matches, picker, confirmationKey) {
+    const warning = document.querySelector("#duplicate-customer-warning");
+    warning.hidden = false;
+    warning.innerHTML = `<strong>Possible duplicate customer</strong><p>This phone or email matches an existing customer. Link this work order or explicitly continue:</p>${matches.map((match, index) => `<button type="button" class="duplicate-customer-use" data-duplicate-result="${index}">Use ${escapeHtml(match.name)} instead</button>`).join("")}<button type="button" class="duplicate-customer-continue">Create a new customer anyway</button>`;
+    warning.querySelectorAll("[data-duplicate-result]").forEach((button) => {
+      button.onclick = () => {
+        picker.select(matches[Number(button.dataset.duplicateResult)]);
+        form.requestSubmit();
+      };
+    });
+    warning.querySelector(".duplicate-customer-continue").onclick = () => {
+      form.dataset.duplicateConfirmed = confirmationKey;
+      warning.hidden = true;
+      form.requestSubmit();
+    };
+    warning.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   function expandedEstimateLines(estimate = {}) {
     return (estimate.lines || []).flatMap((line, index) => {
@@ -8314,6 +8545,7 @@ ${catRows}
       init_autozone_pro();
       init_file_upload();
       init_ai_workflow();
+      init_customer_intake();
       init_mileage();
       init_filing();
       init_customer_metrics();
@@ -9064,21 +9296,33 @@ ${catRows}
         openNewCore();
         const form = document.querySelector("#new-form");
         if (!form) return;
+        installCustomerIntakeFields(form);
+        const customerPicker = bindCustomerIntakeSearch(form);
         form.onsubmit = async (event) => {
           event.preventDefault();
           const data = Object.fromEntries(new FormData(form));
-          const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
+          const customerName = String(data.customer || "").trim();
           if (!customerName) return toast("Select or enter a customer name");
           const button = form.querySelector("button[type=submit], button:not([type])");
           button.disabled = true;
           try {
-            let customer = state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
+            const selectedCustomer = customerPicker.selected();
+            const duplicateKey = `${String(data.phone || "").replace(/\D/g, "")}|${String(data.email || "").trim().toLowerCase()}`;
+            if (!selectedCustomer && duplicateKey !== "|" && form.dataset.duplicateConfirmed !== duplicateKey) {
+              const duplicates = await intakeDuplicateMatches(data);
+              if (duplicates.length) {
+                button.disabled = false;
+                showIntakeDuplicateWarning(form, duplicates, customerPicker, duplicateKey);
+                return;
+              }
+            }
+            let customer = selectedCustomer || state.customers.find((item) => item.id === data.selectedCustomerId);
             if (!customer) {
               customer = await saveCustomerRecord(null, {
                 name: customerName,
                 phone: String(data.phone || ""),
-                email: "",
-                billingAddress: "",
+                email: String(data.email || ""),
+                billingAddress: String(data.billingAddress || ""),
                 billingNotes: ""
               });
             }
@@ -9086,8 +9330,9 @@ ${catRows}
             const id = `RO-${Math.max(1040, ...state.orders.map((item) => Number(item.id.split("-")[1]) || 0)) + 1}`;
             const order = {
               id,
+              customerId: customer.id,
               customer: customer.name,
-              phone: data.phone,
+              phone: data.phone || customer.phone,
               vehicle: data.vehicle,
               vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
               complaint: data.complaint,
