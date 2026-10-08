@@ -2051,6 +2051,31 @@
     }
   });
 
+  // src/modules/shop-ai-settings.js
+  function shopAiStatusLabel(status = {}) {
+    if (status.hasKey) return `Using Claude with your key ${status.maskedKey || MASK}`;
+    return "Using Cloudflare AI (included)";
+  }
+  function shopAiPanelHtml(status = {}, { canManage = false, escapeHtml: escapeHtml2 = (value2) => String(value2 ?? ""), icon: icon2 = () => "" } = {}) {
+    const loading = !status.loaded;
+    const keyError = Boolean(status.hasKey && status.status === "key_error");
+    const statusText = loading ? "Checking AI provider..." : shopAiStatusLabel(status);
+    const statusHtml = `<p class="shop-ai-status ${status.hasKey ? "is-claude" : "is-included"}" id="shop-ai-status">${icon2(status.hasKey ? "sparkles" : "cloud", 14)} <strong>${escapeHtml2(statusText)}</strong></p>`;
+    const errorHtml = keyError ? `<p class="form-help shop-ai-error" role="alert">${escapeHtml2(status.lastError || "Your Claude key stopped working.")} Answers use Cloudflare AI until the key is fixed or replaced.</p>` : "";
+    const unavailableHtml = status.unavailable ? '<p class="form-help">AI settings could not be loaded right now.</p>' : "";
+    const removeButton = status.hasKey ? `<button class="secondary" type="button" id="shop-ai-remove-key">${icon2("trash-2", 14)} Remove key</button>` : "";
+    const form = canManage ? `<form class="form-grid" id="shop-ai-key-form" autocomplete="off"><label class="full">Anthropic API key<input name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-..." required/></label><div class="full"><button class="primary" type="submit">${icon2("key-round", 14)} ${status.hasKey ? "Replace key" : "Save key"}</button>${removeButton}<small class="form-help">MechPro tests the key with a tiny request before saving. It is encrypted on the server and never shown again; only the last 4 characters are displayed.</small></div></form>` : '<p class="form-help">Only shop owners and admins can add or change the AI key.</p>';
+    return `<section class="settings-panel shop-ai-settings" id="shop-ai-settings"><div class="statement-head"><div><div class="eyebrow">AI</div><h2>MechPro AI provider</h2><p>${escapeHtml2(SHOP_AI_PROMPT)}</p><p><a href="${ANTHROPIC_CONSOLE_URL}" target="_blank" rel="noopener noreferrer">Get an Anthropic API key at console.anthropic.com</a></p></div>${icon2("sparkles", 20)}</div>${statusHtml}${errorHtml}${unavailableHtml}${form}</section>`;
+  }
+  var ANTHROPIC_CONSOLE_URL, SHOP_AI_PROMPT, MASK;
+  var init_shop_ai_settings = __esm({
+    "src/modules/shop-ai-settings.js"() {
+      ANTHROPIC_CONSOLE_URL = "https://console.anthropic.com/settings/keys";
+      SHOP_AI_PROMPT = "Want higher-quality AI answers? Add your own Anthropic (Claude) API key. Usage is billed by Anthropic to your account, usually just pennies to a few dollars a month.";
+      MASK = "\u2022\u2022\u2022\u2022";
+    }
+  });
+
   // src/modules/quickbooks.js
   function quickbooksConnectionStatus(record) {
     if (!record || typeof record !== "object") {
@@ -9059,7 +9084,20 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  function canManageShopAi() {
+    return ["admin", "owner"].includes(currentUser()?.role || "");
+  }
+  async function loadShopAiSettings(force = false) {
+    if (shopAiSettings.loading || shopAiSettings.loaded && !force) return;
+    shopAiSettings = { ...shopAiSettings, loading: true };
+    try {
+      shopAiSettings = { ...await apiFetch("/settings/ai"), loaded: true, loading: false };
+    } catch {
+      shopAiSettings = { hasKey: false, loaded: true, loading: false, unavailable: true };
+    }
+    if (state.route === "settings") render();
+  }
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -9074,6 +9112,7 @@ ${catRows}
       init_autozone_pro();
       init_partstech();
       init_labor_guide();
+      init_shop_ai_settings();
       init_quickbooks();
       init_repair_order_flow();
       init_file_upload();
@@ -10919,6 +10958,59 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
           return;
         }
         renderShopOsCore();
+      };
+      shopAiSettings = { loaded: false, loading: false };
+      settingsShopAiCore = settings;
+      settings = function() {
+        const page = settingsShopAiCore();
+        if (isOfflineDesktop()) return page;
+        return page.replace("</main>", `${shopAiPanelHtml(shopAiSettings, { canManage: canManageShopAi(), escapeHtml, icon })}</main>`);
+      };
+      bindShopAiCore = bind;
+      bind = function() {
+        bindShopAiCore();
+        if (state.route !== "settings" || !currentUser() || isOfflineDesktop()) return;
+        if (!shopAiSettings.loaded) void loadShopAiSettings();
+        document.querySelector("#shop-ai-key-form")?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = event.target, button = form.querySelector("button[type=submit]"), apiKey = String(new FormData(form).get("apiKey") || "").trim();
+          if (!apiKey) return;
+          button.disabled = true;
+          button.textContent = "Checking key...";
+          try {
+            const result = await apiFetch("/settings/ai", { method: "PUT", body: JSON.stringify({ apiKey }) });
+            form.reset();
+            shopAiSettings = { ...result, loaded: true, loading: false };
+            toast(result.warning ? `Claude key saved. ${result.warning}` : "Claude key saved. MechPro AI now uses Claude for this shop.");
+            render();
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = shopAiSettings.hasKey ? "Replace key" : "Save key";
+            toast(error.message || "Could not save the Anthropic key");
+          }
+        });
+        document.querySelector("#shop-ai-remove-key")?.addEventListener("click", async (event) => {
+          if (!confirm("Remove this shop's Anthropic key? MechPro AI will go back to Cloudflare AI (included).")) return;
+          event.currentTarget.disabled = true;
+          try {
+            const result = await apiFetch("/settings/ai", { method: "DELETE" });
+            shopAiSettings = { ...result, loaded: true, loading: false };
+            toast("Anthropic key removed. Using Cloudflare AI (included).");
+            render();
+          } catch (error) {
+            toast(error.message || "Could not remove the Anthropic key");
+            render();
+          }
+        });
+      };
+      apiFetchShopAiNoticeCore = apiFetch;
+      apiFetch = async function(path, options = {}) {
+        const result = await apiFetchShopAiNoticeCore(path, options);
+        if (String(path).startsWith("/ai/assistant") && result?.notice) {
+          toast(result.notice);
+          shopAiSettings = { ...shopAiSettings, loaded: false };
+        }
+        return result;
       };
       void startApp();
     }
