@@ -356,6 +356,16 @@
   function defaultMutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
+  function withOptimisticConcurrencyHeaders(options = {}, expectedUpdatedAt = null) {
+    if (!expectedUpdatedAt) return options;
+    return {
+      ...options,
+      headers: {
+        ...options.headers || {},
+        "If-Match": expectedUpdatedAt
+      }
+    };
+  }
   function prepareEntityMutation(path, options, createMutationId = defaultMutationId) {
     const method = String(options.method || "GET").toUpperCase();
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
@@ -575,6 +585,18 @@
         const providedNumber = cleanText(value(row, "number", "invoice", "invoice_number"), 40).toUpperCase();
         const status = normalizeStatus(value(row, "status")) || "sent";
         const date = isoDate(value(row, "date", "issued", "invoice_date")) || today;
+        const closeoutRaw = value(
+          row,
+          "closeout_date",
+          "closeout",
+          "closed_date",
+          "closed_at",
+          "paid_date",
+          "paid_at",
+          "completed_date",
+          "completed_at"
+        );
+        const closedAt = isoDate(closeoutRaw) || (closeoutRaw ? "" : date);
         const dueRaw = value(row, "due", "due_date");
         const due = isoDate(dueRaw) || (dueRaw ? "" : addDays(date, 14));
         const rateRaw = value(row, "tax_rate", "taxrate");
@@ -584,6 +606,7 @@
         if (!customer) error = "Customer is required";
         else if (!Number.isFinite(amount) || amount < 0) error = "A numeric invoice amount is required";
         else if (rateRaw !== "" && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = "Tax rate must be between 0 and 100";
+        else if (closeoutRaw && !closedAt) error = "Closeout date must be a real date";
         else if (dueRaw && !due) error = "Due date must be a real date";
         else if (!INVOICE_STATUSES.includes(status)) error = "Status must be sent, overdue, or paid";
         else if (providedNumber && seenInvoices.has(providedNumber.toLowerCase())) skipped += 1;
@@ -604,8 +627,11 @@
             taxRate,
             status,
             date,
+            closedAt,
+            closeoutSource: closeoutRaw ? "source_closeout_date" : "invoice_date",
             due,
             lines: [],
+            importSource: "csv",
             createdAt
           };
         }
@@ -701,9 +727,9 @@
         invoices: {
           title: "Invoices",
           icon: "receipt",
-          columns: "number, customer, ro, date, due, status, subtotal, tax_rate, tax, amount",
+          columns: "number, customer, ro, date, closeout_date, due, status, subtotal, tax_rate, tax, amount",
           required: "customer, amount",
-          sample: "number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-15,sent,100.00,8.25,8.25,108.25"
+          sample: "number,customer,ro,date,closeout_date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-01,2026-09-15,paid,100.00,8.25,8.25,108.25"
         },
         estimates: {
           title: "Estimates",
@@ -2388,6 +2414,17 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/customer-metrics.js
+  function customerLifetimeSpend(customer, invoices2 = []) {
+    const linked = invoices2.filter((invoice) => invoice.customer === customer?.name);
+    if (!linked.length) return Number(customer?.spend || 0);
+    return Math.round(linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0) * 100) / 100;
+  }
+  var init_customer_metrics = __esm({
+    "src/modules/customer-metrics.js"() {
+    }
+  });
+
   // src/modules/offline-desktop.js
   function escapeText(value2) {
     return String(value2 || "").replace(/[&<>"']/g, (char) => ({
@@ -2860,7 +2897,82 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/work-order-editor.js
+  function customersWithSelected(customers2 = [], selected = "") {
+    const records = Array.isArray(customers2) ? customers2 : [];
+    const selectedName = String(selected || "");
+    if (!selectedName || records.some((customer) => customer?.name === selectedName)) return records;
+    return [{ name: selectedName }, ...records];
+  }
+  function customLaborDraft(id, laborRate) {
+    return {
+      id,
+      type: "labor",
+      description: "",
+      descriptionPlaceholder: "Custom labor",
+      hours: 1,
+      laborRate: Number(laborRate) || 0
+    };
+  }
+  function estimateEditorDescription(line = {}, normalizedDescription = "") {
+    const placeholder = String(line.descriptionPlaceholder || "");
+    return {
+      value: placeholder ? String(line.description || "") : String(normalizedDescription || ""),
+      placeholder
+    };
+  }
+  function normalizedFeeText(value2) {
+    return String(value2 || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function isAfterMidnightFeeLine(line = {}) {
+    if (line.code === "after-midnight") return true;
+    const text = normalizedFeeText(`${line.description || line.service || ""} ${line.notes || line.explanation || ""}`);
+    const hasTime = /\bmidnight\b|\bovernight\b|\blate night\b|\bafter 12(?: 00)? a?m\b/.test(text);
+    const hasCharge = /\bfee\b|\bsurcharge\b|\bdifferen(?:tial|tail)\b|\bdifferentail\b/.test(text);
+    return line.type !== "part" && hasTime && hasCharge;
+  }
+  function isLegacyAfterMidnightLine(line = {}) {
+    return line.code !== "after-midnight" && line.type !== "fee" && isAfterMidnightFeeLine(line);
+  }
+  function afterMidnightFeeFingerprint(lines = []) {
+    return JSON.stringify((Array.isArray(lines) ? lines : []).filter(isAfterMidnightFeeLine).map((line) => ({
+      id: String(line.id || ""),
+      description: String(line.description || ""),
+      unitPrice: Number(line.unitPrice ?? line.amount) || 0
+    })).sort((left, right) => left.id.localeCompare(right.id)));
+  }
+  function terminalOrderChangesAfterMidnightFee(status, beforeLines = [], afterLines = []) {
+    if (!["completed", "invoiced"].includes(String(status || ""))) return false;
+    return afterMidnightFeeFingerprint(beforeLines) !== afterMidnightFeeFingerprint(afterLines);
+  }
+  function invoicePrintLineItems(invoice = {}) {
+    const lineItems = (Array.isArray(invoice.lines) ? invoice.lines : []).map((line) => {
+      const type = ["part", "fee"].includes(line?.type) ? line.type : "labor";
+      const amount = Math.max(0, Number(line?.total) || 0);
+      return {
+        type,
+        description: String(line?.description || line?.service || (type === "fee" ? "Fee" : type === "part" ? "Part" : "Labor")),
+        detail: type === "fee" ? "Flat fee" : type === "part" ? `${Math.max(0, Number(line?.quantity) || 0)} \xD7 ${Math.max(0, Number(line?.unitPrice) || 0).toFixed(2)}` : `${Math.max(0, Number(line?.hours) || 0).toFixed(2)} hr \xD7 ${Math.max(0, Number(line?.laborRate) || 0).toFixed(2)}`,
+        amount
+      };
+    });
+    const feeItems = (Array.isArray(invoice.fees) ? invoice.fees : []).map((fee) => ({
+      type: "fee",
+      description: String(fee?.description || "Fee"),
+      detail: "Fee",
+      amount: Math.max(0, Number(fee?.amount) || 0)
+    }));
+    return [...lineItems, ...feeItems];
+  }
+  var init_work_order_editor = __esm({
+    "src/modules/work-order-editor.js"() {
+    }
+  });
+
   // src/modules/estimate-workflow.js
+  function afterMidnightFeeLine(id = "fee-after-midnight") {
+    return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
+  }
   function isDeclinedEstimateLine(line) {
     return line?.approvalStatus === "declined";
   }
@@ -3060,13 +3172,21 @@ button{margin-top:12px;padding:8px 14px}
       revisedAt: editedAt
     };
   }
-  var roundMoney3, SHOP_SUPPLIES_RULES;
+  var roundMoney3, SHOP_SUPPLIES_RULES, AFTER_MIDNIGHT_FEE_PRESET;
   var init_estimate_workflow = __esm({
     "src/modules/estimate-workflow.js"() {
       roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       SHOP_SUPPLIES_RULES = Object.freeze({
         shopSuppliesRate: 3,
         shopSuppliesCap: 20
+      });
+      AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
+        code: "after-midnight",
+        type: "fee",
+        description: "a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.",
+        quantity: 1,
+        unitPrice: 200,
+        amount: 200
       });
     }
   });
@@ -3167,7 +3287,8 @@ button{margin-top:12px;padding:8px 14px}
       laborRate: resolvedLaborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
-    const totals = calculateShopEstimate([...partLines, ...laborLines], {
+    const feeLines = draft.afterMidnightFee ? [afterMidnightFeeLine("assistant-fee-after-midnight")] : [];
+    const totals = calculateShopEstimate([...partLines, ...laborLines, ...feeLines], {
       laborRate: resolvedLaborRate,
       taxRate,
       discountPercent: draft.discountPercent,
@@ -3768,7 +3889,7 @@ button{margin-top:12px;padding:8px 14px}
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 165), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 140), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
     const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]), { taxRate: state.taxSettings.rate });
     return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
@@ -4117,7 +4238,7 @@ button{margin-top:12px;padding:8px 14px}
         if (item.conflict) continue;
         let response;
         try {
-          response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} });
+          response = await authorizedApiRequest(item.path, withOptimisticConcurrencyHeaders({ method: item.method, body: item.body }, item.expectedUpdatedAt));
         } catch {
           break;
         }
@@ -4155,9 +4276,10 @@ button{margin-top:12px;padding:8px 14px}
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareMutation(path, options);
     try {
-      const response = await authorizedApiRequest(path, mutation.options);
+      const response = await authorizedApiRequest(path, withOptimisticConcurrencyHeaders(mutation.options, mutation.expectedUpdatedAt));
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`);
+        error.status = response.status;
         error.retryable = response.status >= 500;
         throw error;
       }
@@ -4223,13 +4345,6 @@ button{margin-top:12px;padding:8px 14px}
     } catch (error) {
       console.error("Failed to load orders from API; using local data", error);
       cloudSyncStatus = authSession() ? "offline" : "local";
-    }
-  }
-  async function pushInvoiceToApi(record) {
-    try {
-      await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(record) });
-    } catch (error) {
-      console.error("Failed to sync invoice to API", error);
     }
   }
   async function updateInvoiceInApi(record, { throwOnError = false } = {}) {
@@ -4616,7 +4731,7 @@ button{margin-top:12px;padding:8px 14px}
     return shell(`${heading("Relationships", "Customers", "Customer contact details, vehicles, and service value at a glance.")}<div class="customer-grid">${cards}</div>`);
   }
   function customerOptions(selected = "") {
-    return state.customers.map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
+    return customersWithSelected(state.customers, selected).map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
   }
   function vehicleLabel(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
@@ -6563,7 +6678,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     };
   }
   function paymentRecords() {
-    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
+    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.paidAt || invoice.closedAt || invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
     return [...legacy, ...state.payments.filter((payment) => payment.status === "completed")];
   }
   function finance() {
@@ -6655,40 +6770,56 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     link.click();
     URL.revokeObjectURL(link.href);
   }
-  function ensureImportedCustomer(record) {
-    const name = record?.customer;
-    if (!name || state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) return;
-    const created = { name, phone: record.phone || "", email: record.email || "Not provided", vehicles: 0, visits: 0, spend: 0 };
-    state.customers.push(created);
-    pushCustomerToApi(created);
+  async function ensureImportedCustomers(records) {
+    const existing = new Set(state.customers.map((item) => String(item.name || "").toLowerCase()));
+    const missing = [];
+    for (const record of records) {
+      const name = String(record?.customer || "").trim();
+      if (!name || existing.has(name.toLowerCase())) continue;
+      existing.add(name.toLowerCase());
+      missing.push({ id: mutationId(), name, phone: record.phone || "", email: record.email || "", vehicles: 0, visits: 0, spend: 0 });
+    }
+    if (!missing.length) return;
+    const saved = await Promise.all(missing.map((record) => apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) })));
+    state.customers.push(...saved.map((record, index) => record?.queued ? missing[index] : record || missing[index]));
   }
-  function applyImport() {
+  async function applyImport() {
     const p = importPreview;
     if (!p?.records.length) return;
     const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", invoices: "invoices", estimates: "estimates", expenses: "expenses" }[p.type];
     if (!collection || !Array.isArray(state[collection])) return;
-    state[collection].push(...p.records);
-    if (p.type === "customers") p.records.forEach(pushCustomerToApi);
-    if (p.type === "vehicles") p.records.forEach((vehicle) => {
-      const customer = state.customers.find((item) => item.name.toLowerCase() === vehicle.customer.toLowerCase());
-      if (customer) customer.vehicles += 1;
-    });
-    if (p.type === "orders") p.records.forEach((order) => {
-      pushOrderToApi(order);
-      ensureImportedCustomer(order);
-    });
-    if (p.type === "invoices") p.records.forEach((invoice) => {
-      pushInvoiceToApi(invoice);
-      ensureImportedCustomer(invoice);
-    });
-    if (p.type === "estimates") p.records.forEach((estimate) => {
-      pushEstimateToApi(estimate);
-      ensureImportedCustomer(estimate);
-    });
-    if (p.type === "expenses") p.records.forEach(pushExpenseToApi);
-    save();
-    toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
-    importPreview = null;
+    const button = document.querySelector("#confirm-import");
+    if (button) button.disabled = true;
+    try {
+      if (p.type !== "customers") await ensureImportedCustomers(p.records);
+      const saved = await Promise.all(p.records.map((record) => apiFetch(`/entities/${p.type}`, { method: "POST", body: JSON.stringify(record) })));
+      const resolved = saved.map((record, index) => record?.queued ? p.records[index] : record || p.records[index]);
+      state[collection].push(...resolved);
+      save();
+      toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
+      importPreview = null;
+      render();
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error.message || "Import could not be saved to this shop");
+    }
+  }
+  async function loadMeldedDataView(route) {
+    if (route === "customers") {
+      await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadShopEntities()]);
+    } else if (route === "shopops") {
+      await Promise.all([loadShopEntities(), loadCustomersFromApi(), loadOrdersFromApi()]);
+    } else if (route === "imports") {
+      await Promise.all([
+        loadCustomersFromApi(),
+        loadOrdersFromApi(),
+        loadInvoicesFromApi(),
+        loadPaymentsFromApi(),
+        loadExpensesFromApi(),
+        loadEstimatesFromApi(),
+        loadShopEntities()
+      ]);
+    }
     render();
   }
   function appearanceFieldset(profile = shopProfile()) {
@@ -7115,17 +7246,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money3(item.price)}</option>`).join("")}`;
   }
   function estimateEditorLine(line = {}, index = 0, removable = true) {
-    const item = normalizeEstimateLine(line, index), part = item.type === "part";
-    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
+    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-fee-code="${escapeAttr(item.code || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
-      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${money3(item.total)}</b></div>
   </article>`;
@@ -7148,7 +7279,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         laborRate: type === "labor" ? unitPrice : 0,
         inventoryId: inventory?.id || null,
         inventorySku: inventory?.sku || "",
-        committedQuantity: type === "part" && inventory ? quantity : 0
+        committedQuantity: type === "part" && inventory ? quantity : 0,
+        code: type === "fee" ? row.dataset.feeCode : "",
+        amount: type === "fee" ? unitPrice : 0
       }, index);
     }).filter((line) => line.description && line.quantity > 0);
     const fees = options.fees ?? (lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
@@ -7157,13 +7290,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function refreshEstimateEditor(root) {
     root.querySelectorAll(".job-estimate-line").forEach((row) => {
       const type = row.querySelector(".job-line-type").value;
-      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+      const quantityInput = row.querySelector(".job-line-quantity");
+      if (type === "fee") quantityInput.value = "1";
+      const quantity = Math.max(0, Number(quantityInput.value) || 0);
       const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
       row.querySelector(".job-inventory-field").hidden = type !== "part";
       row.querySelector(".job-part-number-field").hidden = type !== "part";
-      row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
-      row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
-      row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
+      row.querySelector(".job-line-quantity-field").hidden = type === "fee";
+      row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
+      row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
+      row.querySelector(".job-line-quantity").step = type === "labor" ? ".25" : "1";
       row.querySelector(".job-line-total b").textContent = money3(quantity * rate);
     });
     const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
@@ -7194,6 +7330,31 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     root._bindEstimateRows = bindRows;
     bindRows();
     refreshEstimateEditor(root);
+  }
+  function editorLineSnapshot(row) {
+    return {
+      id: row.dataset.lineId || "",
+      code: row.dataset.feeCode || "",
+      type: row.querySelector(".job-line-type")?.value || "labor",
+      description: row.querySelector(".job-line-description")?.value || "",
+      notes: row.querySelector(".job-line-notes")?.value || "",
+      unitPrice: Number(row.querySelector(".job-line-rate")?.value) || 0
+    };
+  }
+  function addAfterMidnightFeeToEditor(root, append) {
+    const rows = [...root.querySelectorAll(".job-estimate-line")];
+    if (rows.some((row) => row.dataset.feeCode === "after-midnight")) {
+      toast("The after-midnight fee is already on this work order");
+      return;
+    }
+    const legacyRows = rows.filter((row) => isLegacyAfterMidnightLine(editorLineSnapshot(row)));
+    if (legacyRows.length) {
+      const descriptions = legacyRows.map((row) => row.querySelector(".job-line-description")?.value.trim()).filter(Boolean).join(", ");
+      if (!confirm(`A likely legacy after-midnight charge already exists (${descriptions || "unnamed line"}). Adding another fee could double-charge the customer. Replace the legacy line with the standard $200 flat fee?`)) return;
+      legacyRows.forEach((row) => row.remove());
+    }
+    append(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`));
+    if (legacyRows.length) toast("Legacy after-midnight charge replaced with the standard $200 flat fee");
   }
   async function ensureCustomerDocumentLink(documentType, documentId) {
     return apiFetch("/document-links", {
@@ -8138,7 +8299,7 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -8155,11 +8316,13 @@ ${catRows}
       init_ai_workflow();
       init_mileage();
       init_filing();
+      init_customer_metrics();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
       init_mutation_queue_store();
       init_payments();
+      init_work_order_editor();
       init_estimate_workflow();
       init_estimate_templates();
       init_bay();
@@ -8464,13 +8627,20 @@ ${catRows}
           }
         });
       };
-      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 140, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
       });
       applyAppearance();
       importTypes = IMPORT_TYPES;
+      bindImportIntegrityCore = bindExpandedFeatures;
+      bindExpandedFeatures = function() {
+        bindImportIntegrityCore();
+        document.querySelectorAll('[data-route="customers"], [data-route="shopops"], [data-route="imports"]').forEach((link) => {
+          link.addEventListener("click", () => void loadMeldedDataView(link.dataset.route));
+        });
+      };
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
         const emptyCouponRows = '<tr><td colspan="4">No coupons configured.</td></tr>', vendorKindFields = kinds.map((kind) => "<label>" + kind + ' default<select name="vendor' + kind + '">' + vendorOptions(profile.defaultVendorByKind?.[kind] || "") + "</select></label>").join("");
@@ -8570,6 +8740,27 @@ ${catRows}
           toast("Estimate discount applied");
           render();
         };
+      };
+      printInvoice = function(number) {
+        const invoice = state.invoices.find((item) => item.number === number);
+        if (!invoice) return;
+        const profile = shopProfile();
+        const brand = printableBrand(profile);
+        const breakdown = invoiceTaxBreakdown(invoice);
+        const paid = invoicePaid(invoice);
+        const balance = invoiceBalance(invoice);
+        const customer = state.customers.find((item) => item.name === invoice.customer);
+        const order = state.orders.find((item) => item.id === invoice.ro);
+        const itemRows = invoicePrintLineItems(invoice).map((item) => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money3(item.amount)}</td></tr>`).join("");
+        const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money3(breakdown.subtotal)}</td></tr>`;
+        const paymentRows = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number).map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money3(Number(payment.amount || 0))}</td></tr>`).join("");
+        const win = window.open("", "_blank", "noopener");
+        if (!win) {
+          toast("Allow pop-ups to print the invoice");
+          return;
+        }
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money3(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money3(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money3(invoice.amount)}</b></p><p><span>Payments</span><b>-${money3(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money3(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+        win.document.close();
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
@@ -8861,7 +9052,10 @@ ${catRows}
         const q = query.toLowerCase();
         const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money3(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
+          const visitCount = state.orders.filter((order) => order.customer === item.name).length;
+          const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -9006,7 +9200,7 @@ ${catRows}
           }
         };
       };
-      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 165) }) {
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 140) }) {
         return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
       };
       readNewOrderEstimate = function() {
@@ -9020,7 +9214,7 @@ ${catRows}
         form.elements.status.value = "estimate";
         const toolbar2 = root.previousElementSibling;
         if (toolbar2 && !document.querySelector("#add-part-line")) {
-          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-after-midnight-fee" type="button">${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
         }
         const append = (line) => {
           root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
@@ -9032,7 +9226,7 @@ ${catRows}
           const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
           const generated = services.flatMap((service, index) => {
             const source = estimateLocal(vehicle, service).lines[0];
-            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 165) }, index);
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 140) }, index);
             const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
             return [labor, ...parts];
           });
@@ -9040,8 +9234,9 @@ ${catRows}
           bindEstimateEditor(root);
           toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
         };
-        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate || 165) });
+        document.querySelector("#add-estimate-line").onclick = () => append(customLaborDraft(`labor-${Date.now()}`, shopProfile().laborRate || 140));
         document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
+        document.querySelector("#add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(root, append);
         bindEstimateEditor(root);
       };
       ensureInvoiceForOrder = async function(order) {
@@ -9066,11 +9261,12 @@ ${catRows}
         const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
         const canApprove = ["owner", "admin", "service_writer"].includes(currentUser().role);
         const paidInvoice = invoice && invoicePaid(invoice) > 0;
+        const terminalOrder = ["completed", "invoiced"].includes(order.status);
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
         const canEditEstimate = canManage && (!wasApproved || canApprove);
-        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
+        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
         const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
-        const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money3(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
@@ -9080,16 +9276,23 @@ ${catRows}
         if (editorRoot) {
           bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
           document.querySelector("#job-add-labor").onclick = () => {
-            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length));
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length));
             bindEstimateEditor(editorRoot);
           };
           document.querySelector("#job-add-part").onclick = () => {
             editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length));
             bindEstimateEditor(editorRoot);
           };
+          document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, (line) => {
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
+            bindEstimateEditor(editorRoot);
+          });
           document.querySelector("#save-job-lines").onclick = async (event) => {
             const next = estimateFromEditor(editorRoot);
-            if (!next.lines.length) return toast("Add at least one labor or part line");
+            if (!next.lines.length) return toast("Add at least one labor, part, or fee line");
+            if (terminalOrderChangesAfterMidnightFee(order.status, estimate.lines, next.lines)) {
+              return toast("Reopen this work order before adding, replacing, or removing the after-midnight fee");
+            }
             if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
             event.currentTarget.disabled = true;
             const editedAt = now();
@@ -9237,16 +9440,16 @@ ${catRows}
         });
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
-        const item = normalizeEstimateLine(line, index), part = item.type === "part";
-        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+        const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}" data-fee-code="${escapeAttr(item.code || "")}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
+      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
-      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
+      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money3(item.total)}</b></div>
   </article>`;
@@ -9271,7 +9474,9 @@ ${catRows}
             committedQuantity: type === "part" && inventory ? quantity : 0,
             priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
-            technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
+            technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
+            code: type === "fee" ? row.dataset.feeCode : "",
+            amount: type === "fee" ? unitPrice : 0
           }, index);
         }).filter((line) => line.description && line.quantity > 0);
         const form = root.closest("form");
@@ -9290,19 +9495,22 @@ ${catRows}
       refreshEstimateEditor = function(root) {
         root.querySelectorAll(".job-estimate-line").forEach((row) => {
           const type = row.querySelector(".job-line-type").value;
-          const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
+          const quantityInput = row.querySelector(".job-line-quantity");
+          if (type === "fee") quantityInput.value = "1";
+          const quantity = Math.max(0, Number(quantityInput.value) || 0);
           const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
           const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
           row.dataset.priceStatus = priceStatus;
           row.querySelector(".job-inventory-field").hidden = type !== "part";
-          row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
-          row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
-          row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
+          row.querySelector(".job-line-quantity-field").hidden = type === "fee";
+          row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
+          row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
+          row.querySelector(".job-line-quantity").step = type === "labor" ? ".1" : "1";
           row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money3(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
-        if (summary) summary.innerHTML = `<span>Parts <b>${money3(estimate.parts)}</b></span><span>Labor <b>${money3(estimate.labor)}</b></span><span>Supplies <b>${money3(supplies)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Parts <b>${money3(estimate.parts)}</b></span><span>Labor <b>${money3(estimate.labor)}</b></span><span>Fees <b>${money3(estimate.lineFees)}</b></span><span>Supplies <b>${money3(supplies)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
       };
@@ -9442,9 +9650,9 @@ ${catRows}
         const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const summary = invoicePaymentSummary(invoice);
           const bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
         }).join("");
-        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
+        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Closeout</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="8">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
       openOrderPaymentCore = openOrder;
       openOrder = function(id) {

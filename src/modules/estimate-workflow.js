@@ -5,6 +5,19 @@ export const SHOP_SUPPLIES_RULES = Object.freeze({
   shopSuppliesCap: 20,
 });
 
+export const AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
+  code: 'after-midnight',
+  type: 'fee',
+  description: 'a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.',
+  quantity: 1,
+  unitPrice: 200,
+  amount: 200,
+});
+
+export function afterMidnightFeeLine(id = 'fee-after-midnight') {
+  return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
+}
+
 export function isDeclinedEstimateLine(line) {
   return line?.approvalStatus === 'declined';
 }

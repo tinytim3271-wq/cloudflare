@@ -194,9 +194,12 @@ test('customer estimate link renders and approves flat fee lines as fees', async
   const order = estimateOrder();
   order.estimate.lines.push({
     id: 'after-midnight',
+    code: 'after-midnight',
     type: 'fee',
     description: 'After-midnight service',
     amount: 200,
+    quantity: 1,
+    unitPrice: 200,
   });
   fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
   const link = await issueLink(fixture, 'estimate', 'RO-1100');
