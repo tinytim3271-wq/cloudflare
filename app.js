@@ -1926,6 +1926,550 @@
     }
   });
 
+  // src/modules/partstech.js
+  function partstechConnectionStatus(record) {
+    if (!record || typeof record !== "object") {
+      return { connected: false, status: "not_connected", label: "PartsTech not connected" };
+    }
+    const hasUser = Boolean(record.userId && record.userKey);
+    const hasPartner = Boolean(record.partnerId && record.partnerKey);
+    if (!hasUser || !hasPartner) {
+      return { connected: false, status: "not_connected", label: "PartsTech not connected" };
+    }
+    return {
+      connected: true,
+      status: "connected",
+      label: "PartsTech connected",
+      userId: record.userId,
+      partnerId: record.partnerId,
+      storeId: record.storeId || null,
+      connectedAt: record.connectedAt || null
+    };
+  }
+  function partstechPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+    const status = partstechConnectionStatus(account);
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>User ${escapeHtml2(status.userId || "")}${status.storeId ? ` \xB7 store ${escapeHtml2(status.storeId)}` : ""}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Connect PartsTech with partner and user API keys. Search, quote, and order stay server-side; unconfigured shops fail closed.</span></div></div>`;
+    const form = canSave ? `<form id="partstech-connect-form" class="form-grid">
+        <label>Partner ID<input name="partnerId" autocomplete="off" value="${escapeHtml2(account.partnerId || "")}" required/></label>
+        <label>Partner API key<input name="partnerKey" type="password" autocomplete="new-password" required/></label>
+        <label>User ID<input name="userId" autocomplete="off" value="${escapeHtml2(account.userId || "")}" required/></label>
+        <label>User API key<input name="userKey" type="password" autocomplete="new-password" required/></label>
+        <label>Default store ID<input name="storeId" value="${escapeHtml2(account.storeId || "")}" placeholder="Optional"/></label>
+        <button class="primary" type="submit">${icon2("save", 14)} Save PartsTech</button>
+        ${status.connected ? `<button class="secondary danger" type="button" id="partstech-disconnect">${icon2("log-out", 14)} Disconnect</button>` : ""}
+      </form>` : '<p class="ops-note">Ask an owner or admin to connect PartsTech.</p>';
+    const search = `<form id="partstech-search-form" class="form-grid">
+      <label class="full">Keyword or part number<input name="keyword" placeholder="brake pad" ${status.connected ? "" : "disabled"}/></label>
+      <label>VIN<input name="vin" placeholder="Optional VIN" ${status.connected ? "" : "disabled"}/></label>
+      <label>Store ID<input name="storeId" value="${escapeHtml2(account.storeId || "")}" ${status.connected ? "" : "disabled"}/></label>
+      <button class="primary" type="submit" ${status.connected ? "" : "disabled"}>${icon2("search", 14)} Quote parts</button>
+    </form>
+    <div id="partstech-results" class="data-panel"></div>`;
+    return `<section class="settings-panel partstech-ordering">
+    <div class="statement-head"><div><div class="eyebrow">Parts ordering</div><h2>PartsTech</h2><p>Search and quote parts through PartsTech, add lines to the estimate, then place the order. Credentials are encrypted in D1.</p></div>${icon2("package", 20)}</div>
+    ${banner}
+    ${form}
+    ${search}
+  </section>`;
+  }
+  var init_partstech = __esm({
+    "src/modules/partstech.js"() {
+    }
+  });
+
+  // src/modules/labor-guide.js
+  function laborGuideConnectionStatus(record) {
+    if (!record || typeof record !== "object") {
+      return { connected: false, provider: "manual", status: "not_connected", label: "Labor guide not connected" };
+    }
+    const provider = String(record.provider || "manual").toLowerCase();
+    if (provider === "motor") {
+      const ready = Boolean(
+        record.apiKey || record.userId && record.userKey && record.partnerId && record.partnerKey || record.viaPartstech === true
+      );
+      return ready ? { connected: true, provider: "motor", status: "connected", label: "MOTOR labor guide connected", connectedAt: record.connectedAt || null, viaPartstech: Boolean(record.viaPartstech) } : { connected: false, provider: "motor", status: "not_connected", label: "MOTOR labor guide not connected" };
+    }
+    return { connected: true, provider: "manual", status: "manual", label: "Manual labor entry" };
+  }
+  function createManualLaborEntry({
+    description = "Labor",
+    hours = 0,
+    laborRate = 0,
+    notes = "",
+    id = `labor-manual-${Date.now()}`
+  } = {}) {
+    const safeHours = Math.max(0, Number(hours) || 0);
+    const safeRate = Math.max(0, Number(laborRate) || 0);
+    return {
+      id: String(id),
+      type: "labor",
+      description: String(description || "Labor"),
+      notes: String(notes || ""),
+      hours: safeHours,
+      laborRate: safeRate,
+      quantity: safeHours,
+      unitPrice: safeRate,
+      total: Math.round(safeHours * safeRate * 100) / 100,
+      approvalStatus: "pending",
+      source: "manual",
+      laborGuide: { provider: "manual" }
+    };
+  }
+  function laborGuidePanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+    const status = laborGuideConnectionStatus(account);
+    const banner = status.connected && status.provider === "motor" ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>MOTOR times via PartsTech taxonomy labor API</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Manual labor entry always works. Connect MOTOR (PartsTech labor API) for guide times \u2014 never invents hours when disconnected.</span></div></div>`;
+    const form = canSave ? `<form id="labor-guide-connect-form" class="form-grid">
+        <label>Provider<select name="provider"><option value="motor" ${account.provider === "motor" ? "selected" : ""}>MOTOR (PartsTech)</option><option value="manual" ${!account.provider || account.provider === "manual" ? "selected" : ""}>Manual only</option></select></label>
+        <label class="toggle-field full"><input type="checkbox" name="viaPartstech" ${account.viaPartstech !== false ? "checked" : ""}/><span>Use the shop's PartsTech credentials for MOTOR labor</span></label>
+        <button class="primary" type="submit">${icon2("save", 14)} Save labor guide</button>
+        ${status.provider === "motor" && status.connected ? `<button class="secondary danger" type="button" id="labor-guide-disconnect">${icon2("log-out", 14)} Disconnect MOTOR</button>` : ""}
+      </form>` : '<p class="ops-note">Ask an owner or admin to connect a labor guide.</p>';
+    const search = `<form id="labor-guide-search-form" class="form-grid">
+      <label class="full">Operation keyword<input name="keyword" placeholder="front brake pads" ${status.connected && status.provider === "motor" ? "" : "disabled"}/></label>
+      <label>VIN<input name="vin" ${status.connected && status.provider === "motor" ? "" : "disabled"}/></label>
+      <label>Labor rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml2(account.defaultLaborRate || "")}"/></label>
+      <button class="primary" type="submit" ${status.connected && status.provider === "motor" ? "" : "disabled"}>${icon2("search", 14)} Look up MOTOR times</button>
+    </form>
+    <form id="manual-labor-form" class="form-grid">
+      <label class="full">Manual labor description<input name="description" required placeholder="Diagnose noise"/></label>
+      <label>Hours<input name="hours" type="number" step=".1" min="0" value="1" required/></label>
+      <label>Rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml2(account.defaultLaborRate || "165")}" required/></label>
+      <button class="secondary" type="submit">${icon2("plus", 14)} Add manual labor line</button>
+    </form>
+    <div id="labor-guide-results" class="data-panel"></div>`;
+    return `<section class="settings-panel labor-guide">
+    <div class="statement-head"><div><div class="eyebrow">Labor guide</div><h2>Times &amp; operations</h2><p>Pluggable labor guide with MOTOR adapter and manual entry. Unconfigured providers show not connected and refuse fake times.</p></div>${icon2("timer", 20)}</div>
+    ${banner}
+    ${form}
+    ${search}
+  </section>`;
+  }
+  var LABOR_GUIDE_PROVIDERS;
+  var init_labor_guide = __esm({
+    "src/modules/labor-guide.js"() {
+      LABOR_GUIDE_PROVIDERS = Object.freeze(["manual", "motor"]);
+    }
+  });
+
+  // src/modules/quickbooks.js
+  function quickbooksConnectionStatus(record) {
+    if (!record || typeof record !== "object") {
+      return { connected: false, status: "not_connected", label: "QuickBooks Online not connected" };
+    }
+    const connected = Boolean(record.realmId && (record.refreshToken || record.accessToken));
+    if (!connected) {
+      return { connected: false, status: "not_connected", label: "QuickBooks Online not connected" };
+    }
+    return {
+      connected: true,
+      status: "connected",
+      label: "QuickBooks Online connected",
+      realmId: record.realmId,
+      connectedAt: record.connectedAt || null,
+      tokenExpiresAt: record.tokenExpiresAt || null
+    };
+  }
+  function quickbooksPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+    const status = quickbooksConnectionStatus(account);
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Company ${escapeHtml2(status.realmId || "")}</span></div></div>` : `<div class="messaging-status idle">${icon2("landmark", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Connect QuickBooks Online with OAuth 2.0. Sync stays fail-closed until authorized.</span></div></div>`;
+    const actions = canSave ? `<div class="messaging-actions">
+        ${status.connected ? `<button class="secondary" type="button" id="qbo-sync-now">${icon2("refresh-cw", 14)} Sync customers / invoices / payments</button>
+             <button class="secondary danger" type="button" id="qbo-disconnect">${icon2("log-out", 14)} Disconnect QuickBooks</button>` : `<button class="primary" type="button" id="qbo-connect">${icon2("link", 14)} Connect QuickBooks Online</button>`}
+      </div>` : '<p class="ops-note">Ask an owner or admin to connect QuickBooks Online.</p>';
+    return `<section class="settings-panel quickbooks-panel">
+    <div class="statement-head"><div><div class="eyebrow">Accounting</div><h2>QuickBooks Online</h2><p>OAuth connect/disconnect and idempotent sync of customers, invoices, and payments.</p></div>${icon2("book", 20)}</div>
+    ${banner}
+    ${actions}
+    <div id="qbo-sync-status" class="ops-note"></div>
+  </section>`;
+  }
+  var init_quickbooks = __esm({
+    "src/modules/quickbooks.js"() {
+    }
+  });
+
+  // src/modules/estimate-workflow.js
+  function afterMidnightFeeLine(id = "fee-after-midnight") {
+    return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
+  }
+  function isDeclinedEstimateLine(line) {
+    return line?.approvalStatus === "declined";
+  }
+  function billableEstimateLines(lines = []) {
+    return lines.filter((line) => !isDeclinedEstimateLine(line));
+  }
+  function normalizeTechnicianIds(line = {}) {
+    const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
+    return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
+  }
+  function estimatePartPriceStatus(previousStatus, unitPrice) {
+    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
+  }
+  function normalizeEstimateLine(line = {}, index = 0) {
+    const type = ["part", "fee"].includes(line.type) ? line.type : "labor";
+    const quantity = type === "fee" ? 1 : Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
+    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : type === "fee" ? line.amount : line.laborRate)) || 0);
+    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
+    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
+    const total = type === "labor" ? roundMoney2(hours * laborRate) : roundMoney2(quantity * unitPrice);
+    return {
+      ...line,
+      id: String(line.id || `line-${index + 1}`),
+      type,
+      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : type === "fee" ? "Fee" : "Labor")),
+      notes: String(line.notes || line.explanation || ""),
+      partNumber: type === "part" ? String(line.partNumber || line.part_number || line.inventorySku || "") : "",
+      quantity,
+      unitPrice,
+      hours,
+      laborRate,
+      total,
+      technicianIds: type === "labor" ? normalizeTechnicianIds(line) : [],
+      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
+    };
+  }
+  function laborLinePrintRows(lines = [], technicians = []) {
+    const names = new Map(technicians.map((technician) => [
+      String(technician.id || ""),
+      String(technician.name || technician.techName || technician.id || "Technician unavailable")
+    ]));
+    return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
+      const technicianIds = normalizeTechnicianIds(line);
+      const assignments = !technicianIds.length ? [null] : technicianIds;
+      return assignments.map((technicianId, index) => ({
+        line,
+        technicianId,
+        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
+        lineTotal: index === 0 ? line.total : null
+      }));
+    });
+  }
+  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
+    const billableLines = billableEstimateLines(normalizedLines);
+    const normalizedFees = fees.map((fee) => ({
+      ...fee,
+      description: String(fee.description || "Fee"),
+      amount: roundMoney2(Math.max(0, Number(fee.amount) || 0))
+    }));
+    const labor = roundMoney2(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney2(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const lineFees = roundMoney2(billableLines.filter((line) => line.type === "fee").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney2(lineFees + normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const subtotal = roundMoney2(labor + parts + feeTotal);
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
+    const tax = roundMoney2(subtotal * safeTaxRate / 100);
+    return {
+      lines: normalizedLines,
+      fees: normalizedFees,
+      labor,
+      laborHours: roundMoney2(billableLines.reduce((sum, line) => sum + line.hours, 0)),
+      parts,
+      lineFees,
+      feeTotal,
+      subtotal,
+      taxRate: safeTaxRate,
+      tax,
+      total: roundMoney2(subtotal + tax)
+    };
+  }
+  function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+    const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
+    let fees = estimate.fees || [];
+    let totals = calculateEstimate(lines, taxRate, fees);
+    const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
+    if (repriceSupplies && hasSuppliesFee) {
+      const supplies = totals.labor > 0 ? roundMoney2(Math.min(
+        SHOP_SUPPLIES_RULES.shopSuppliesCap,
+        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
+      )) : 0;
+      fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
+      totals = calculateEstimate(lines, taxRate, fees);
+    }
+    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+    const discountAmount = roundMoney2(totals.subtotal * discountPercent / 100);
+    const subtotal = roundMoney2(totals.subtotal - discountAmount);
+    const tax = roundMoney2(subtotal * taxRate / 100);
+    return {
+      ...totals,
+      grossSubtotal: totals.subtotal,
+      discountPercent,
+      discountReason: String(estimate.discountReason || ""),
+      discountAmount,
+      subtotal,
+      tax,
+      total: roundMoney2(subtotal + tax)
+    };
+  }
+  function approvedEstimate(estimate = {}, decisions = {}) {
+    const lines = (estimate.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      return {
+        ...normalized,
+        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
+      };
+    });
+    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
+    const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
+    return {
+      ...estimate,
+      ...totals,
+      lines,
+      approvedLineCount: approvedLines.length,
+      declinedLineCount: lines.length - approvedLines.length
+    };
+  }
+  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
+    const source = order.estimate || {};
+    const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
+    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
+    const due = new Date(issuedAt);
+    due.setDate(due.getDate() + 14);
+    const amount = source.lines?.length ? estimate.total : roundMoney2(order.total ?? estimate.total);
+    return {
+      id: number,
+      number,
+      ro: order.id,
+      customer: order.customer,
+      vehicle: order.vehicle,
+      amount,
+      grossSubtotal: estimate.grossSubtotal,
+      subtotal: estimate.subtotal,
+      discountPercent: estimate.discountPercent,
+      discountAmount: estimate.discountAmount,
+      discountReason: estimate.discountReason,
+      fees: estimate.fees,
+      tax: estimate.tax,
+      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
+      status: "sent",
+      date: issuedAt.toISOString().slice(0, 10),
+      due: due.toISOString().slice(0, 10),
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
+      sourceEstimateApproval: order.estimateApproval || null,
+      createdAt: issuedAt.toISOString()
+    };
+  }
+  function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
+    const hadApproval = Boolean(
+      order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status)
+    );
+    return {
+      ...order,
+      estimate: {
+        ...estimate,
+        ...recalculated,
+        summary: estimate.summary || order.estimate?.summary || "",
+        generatedAt: estimate.generatedAt || order.estimate?.generatedAt || editedAt,
+        revisedAt: editedAt
+      },
+      labor: recalculated.labor,
+      laborHours: recalculated.laborHours,
+      parts: recalculated.parts,
+      tax: recalculated.tax,
+      total: recalculated.total,
+      estimateApproval: hadApproval ? null : order.estimateApproval,
+      linesLockedAt: hadApproval ? null : order.linesLockedAt,
+      estimateRevisionPending: hadApproval || Boolean(order.estimateRevisionPending),
+      estimateRevisionPreviousStatus: hadApproval ? order.status : order.estimateRevisionPreviousStatus,
+      updatedAt: order.updatedAt
+    };
+  }
+  function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const source = order.estimate || {};
+    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+    return {
+      ...invoice,
+      amount: estimate.total,
+      subtotal: estimate.subtotal,
+      tax: estimate.tax,
+      taxRate: estimate.taxRate,
+      fees: estimate.fees,
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
+      signature: null,
+      sourceEstimateApproval: null,
+      revisedAt: editedAt
+    };
+  }
+  var roundMoney2, SHOP_SUPPLIES_RULES, AFTER_MIDNIGHT_FEE_PRESET;
+  var init_estimate_workflow = __esm({
+    "src/modules/estimate-workflow.js"() {
+      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      SHOP_SUPPLIES_RULES = Object.freeze({
+        shopSuppliesRate: 3,
+        shopSuppliesCap: 20
+      });
+      AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
+        code: "after-midnight",
+        type: "fee",
+        description: "a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.",
+        quantity: 1,
+        unitPrice: 200,
+        amount: 200
+      });
+    }
+  });
+
+  // src/modules/repair-order-flow.js
+  function isoNow(value2) {
+    if (value2 instanceof Date) return value2.toISOString();
+    if (typeof value2 === "string" && Number.isFinite(Date.parse(value2))) return value2;
+    return (/* @__PURE__ */ new Date()).toISOString();
+  }
+  function normalizeFlowStatus(status) {
+    const value2 = String(status || "").trim().toLowerCase();
+    return REPAIR_FLOW_STATUSES.includes(value2) ? value2 : null;
+  }
+  function canTransitionRepairFlow(from, to) {
+    const current = normalizeFlowStatus(from) || "intake";
+    const next = normalizeFlowStatus(to);
+    if (!next) return false;
+    if (current === next) return true;
+    return (TRANSITIONS[current] || []).includes(next);
+  }
+  function appendFlowAuditEvent(order = {}, event = {}, at = /* @__PURE__ */ new Date()) {
+    const timestamp = isoNow(at);
+    const entry = {
+      at: timestamp,
+      type: String(event.type || "note").trim() || "note",
+      from: event.from ? String(event.from) : null,
+      to: event.to ? String(event.to) : null,
+      actorId: event.actorId ? String(event.actorId) : null,
+      actorName: event.actorName ? String(event.actorName) : null,
+      note: String(event.note || "").trim().slice(0, 500),
+      meta: event.meta && typeof event.meta === "object" ? event.meta : void 0
+    };
+    const flowAudit = [...order.flowAudit || [], entry].slice(-200);
+    return { ...order, flowAudit, updatedAt: timestamp };
+  }
+  function advanceRepairFlowStatus(order = {}, nextStatus, actor = {}, at = /* @__PURE__ */ new Date()) {
+    const current = normalizeFlowStatus(order.flowStatus || order.status) || "intake";
+    const next = normalizeFlowStatus(nextStatus);
+    if (!next) throw new Error("Unknown repair-flow status");
+    if (!canTransitionRepairFlow(current, next)) {
+      throw new Error(`Cannot move repair flow from ${current} to ${next}`);
+    }
+    const stamped = appendFlowAuditEvent(order, {
+      type: "status",
+      from: current,
+      to: next,
+      actorId: actor.id || actor.userId,
+      actorName: actor.name || actor.email,
+      note: actor.note || ""
+    }, at);
+    return {
+      ...stamped,
+      flowStatus: next,
+      status: next === "estimate_draft" ? "estimate" : next
+    };
+  }
+  function inspectionFindingsToEstimateLines(inspection = {}, options = {}) {
+    const laborRate = Math.max(0, Number(options.laborRate) || 0);
+    const items = Array.isArray(inspection.items) ? inspection.items : [];
+    const lines = [];
+    let index = 0;
+    for (const item of items) {
+      const status = String(item.status || "").toLowerCase();
+      if (!FINDING_STATUSES.has(status)) continue;
+      index += 1;
+      const label2 = String(item.label || item.name || `Finding ${index}`).trim();
+      const note = String(item.note || item.measurement || "").trim();
+      lines.push(normalizeEstimateLine({
+        id: `insp-${inspection.id || "dvi"}-${item.id || index}`,
+        type: "labor",
+        description: label2,
+        notes: [status, note].filter(Boolean).join(" \u2014 "),
+        hours: Number(item.suggestedHours) > 0 ? Number(item.suggestedHours) : 0,
+        laborRate,
+        source: "inspection",
+        inspectionItemId: item.id || null,
+        inspectionStatus: status,
+        photoKeys: Array.isArray(item.photoKeys) ? item.photoKeys : void 0
+      }, index - 1));
+    }
+    const photoKeys = Array.isArray(inspection.photoKeys) ? inspection.photoKeys.filter(Boolean) : [];
+    return {
+      lines,
+      photoKeys,
+      recommendations: String(inspection.recommendations || "").trim(),
+      inspectionId: inspection.id || null,
+      catalogId: inspection.catalogId || null
+    };
+  }
+  function estimateFromInspection(inspection = {}, options = {}, at = /* @__PURE__ */ new Date()) {
+    const built = inspectionFindingsToEstimateLines(inspection, options);
+    const taxRate = Math.max(0, Number(options.taxRate) || 0);
+    const estimate = calculateEstimate(built.lines, taxRate, options.fees || []);
+    return {
+      ...estimate,
+      summary: built.recommendations || options.summary || "",
+      generatedAt: isoNow(at),
+      sourceInspectionId: built.inspectionId,
+      sourceCatalogId: built.catalogId,
+      photoKeys: built.photoKeys
+    };
+  }
+  function applyEstimateFromInspection(order = {}, inspection = {}, options = {}, actor = {}, at = /* @__PURE__ */ new Date()) {
+    const estimate = estimateFromInspection(inspection, {
+      laborRate: options.laborRate ?? order.laborRate,
+      taxRate: options.taxRate ?? order.estimate?.taxRate,
+      fees: options.fees || order.estimate?.fees || [],
+      summary: options.summary
+    }, at);
+    let next = {
+      ...order,
+      estimate,
+      labor: estimate.labor,
+      laborHours: estimate.laborHours,
+      parts: estimate.parts,
+      tax: estimate.tax,
+      total: estimate.total,
+      inspectionId: inspection.id || order.inspectionId || null,
+      inspectionPhotoKeys: estimate.photoKeys
+    };
+    next = advanceRepairFlowStatus(next, "estimate_draft", actor, at);
+    return appendFlowAuditEvent(next, {
+      type: "estimate_from_inspection",
+      actorId: actor.id || actor.userId,
+      actorName: actor.name || actor.email,
+      note: `Built estimate from inspection ${inspection.id || ""}`.trim(),
+      meta: { inspectionId: inspection.id || null, lineCount: estimate.lines.length }
+    }, at);
+  }
+  var REPAIR_FLOW_STATUSES, TRANSITIONS, FINDING_STATUSES;
+  var init_repair_order_flow = __esm({
+    "src/modules/repair-order-flow.js"() {
+      init_estimate_workflow();
+      REPAIR_FLOW_STATUSES = Object.freeze([
+        "intake",
+        "inspecting",
+        "estimate_draft",
+        "awaiting_approval",
+        "approved",
+        "declined",
+        "in_progress",
+        "waiting_parts",
+        "completed",
+        "invoiced",
+        "paid"
+      ]);
+      TRANSITIONS = Object.freeze({
+        intake: ["inspecting", "estimate_draft"],
+        inspecting: ["estimate_draft", "awaiting_approval"],
+        estimate_draft: ["awaiting_approval", "declined"],
+        awaiting_approval: ["approved", "declined", "estimate_draft"],
+        approved: ["in_progress", "waiting_parts", "completed", "invoiced"],
+        declined: ["estimate_draft"],
+        in_progress: ["waiting_parts", "completed", "invoiced"],
+        waiting_parts: ["in_progress", "completed"],
+        completed: ["invoiced"],
+        invoiced: ["paid"],
+        paid: []
+      });
+      FINDING_STATUSES = /* @__PURE__ */ new Set(["soon", "critical", "attention", "fail", "monitor"]);
+    }
+  });
+
   // src/modules/file-upload.js
   async function uploadErrorMessage(response) {
     const fallback = `Upload to storage failed (${response.status})`;
@@ -2935,17 +3479,17 @@ button{margin-top:12px;padding:8px 14px}
     legacyPaid = false
   } = {}) {
     const history = paymentsForTarget(payments2, targetType, targetId, linkedTargetId);
-    const recordedPaid = roundMoney2(history.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-    const amount = roundMoney2(total);
+    const recordedPaid = roundMoney3(history.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+    const amount = roundMoney3(total);
     const paid = legacyPaid && recordedPaid === 0 ? amount : Math.min(amount, recordedPaid);
-    const balance = roundMoney2(Math.max(0, amount - paid));
+    const balance = roundMoney3(Math.max(0, amount - paid));
     const status = balance === 0 && amount > 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
     return { total: amount, paid, balance, status, history };
   }
-  var roundMoney2;
+  var roundMoney3;
   var init_payments = __esm({
     "src/modules/payments.js"() {
-      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
     }
   });
 
@@ -3018,228 +3562,6 @@ button{margin-top:12px;padding:8px 14px}
   }
   var init_work_order_editor = __esm({
     "src/modules/work-order-editor.js"() {
-    }
-  });
-
-  // src/modules/estimate-workflow.js
-  function afterMidnightFeeLine(id = "fee-after-midnight") {
-    return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
-  }
-  function isDeclinedEstimateLine(line) {
-    return line?.approvalStatus === "declined";
-  }
-  function billableEstimateLines(lines = []) {
-    return lines.filter((line) => !isDeclinedEstimateLine(line));
-  }
-  function normalizeTechnicianIds(line = {}) {
-    const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
-    return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
-  }
-  function estimatePartPriceStatus(previousStatus, unitPrice) {
-    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
-  }
-  function normalizeEstimateLine(line = {}, index = 0) {
-    const type = ["part", "fee"].includes(line.type) ? line.type : "labor";
-    const quantity = type === "fee" ? 1 : Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
-    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : type === "fee" ? line.amount : line.laborRate)) || 0);
-    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
-    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
-    const total = type === "labor" ? roundMoney3(hours * laborRate) : roundMoney3(quantity * unitPrice);
-    return {
-      ...line,
-      id: String(line.id || `line-${index + 1}`),
-      type,
-      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : type === "fee" ? "Fee" : "Labor")),
-      notes: String(line.notes || line.explanation || ""),
-      partNumber: type === "part" ? String(line.partNumber || line.part_number || line.inventorySku || "") : "",
-      quantity,
-      unitPrice,
-      hours,
-      laborRate,
-      total,
-      technicianIds: type === "labor" ? normalizeTechnicianIds(line) : [],
-      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
-    };
-  }
-  function laborLinePrintRows(lines = [], technicians = []) {
-    const names = new Map(technicians.map((technician) => [
-      String(technician.id || ""),
-      String(technician.name || technician.techName || technician.id || "Technician unavailable")
-    ]));
-    return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
-      const technicianIds = normalizeTechnicianIds(line);
-      const assignments = !technicianIds.length ? [null] : technicianIds;
-      return assignments.map((technicianId, index) => ({
-        line,
-        technicianId,
-        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
-        lineTotal: index === 0 ? line.total : null
-      }));
-    });
-  }
-  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
-    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
-    const billableLines = billableEstimateLines(normalizedLines);
-    const normalizedFees = fees.map((fee) => ({
-      ...fee,
-      description: String(fee.description || "Fee"),
-      amount: roundMoney3(Math.max(0, Number(fee.amount) || 0))
-    }));
-    const labor = roundMoney3(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
-    const parts = roundMoney3(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
-    const lineFees = roundMoney3(billableLines.filter((line) => line.type === "fee").reduce((sum, line) => sum + line.total, 0));
-    const feeTotal = roundMoney3(lineFees + normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
-    const subtotal = roundMoney3(labor + parts + feeTotal);
-    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
-    const tax = roundMoney3(subtotal * safeTaxRate / 100);
-    return {
-      lines: normalizedLines,
-      fees: normalizedFees,
-      labor,
-      laborHours: roundMoney3(billableLines.reduce((sum, line) => sum + line.hours, 0)),
-      parts,
-      lineFees,
-      feeTotal,
-      subtotal,
-      taxRate: safeTaxRate,
-      tax,
-      total: roundMoney3(subtotal + tax)
-    };
-  }
-  function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
-    const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
-    let fees = estimate.fees || [];
-    let totals = calculateEstimate(lines, taxRate, fees);
-    const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
-    if (repriceSupplies && hasSuppliesFee) {
-      const supplies = totals.labor > 0 ? roundMoney3(Math.min(
-        SHOP_SUPPLIES_RULES.shopSuppliesCap,
-        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
-      )) : 0;
-      fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
-      totals = calculateEstimate(lines, taxRate, fees);
-    }
-    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
-    const discountAmount = roundMoney3(totals.subtotal * discountPercent / 100);
-    const subtotal = roundMoney3(totals.subtotal - discountAmount);
-    const tax = roundMoney3(subtotal * taxRate / 100);
-    return {
-      ...totals,
-      grossSubtotal: totals.subtotal,
-      discountPercent,
-      discountReason: String(estimate.discountReason || ""),
-      discountAmount,
-      subtotal,
-      tax,
-      total: roundMoney3(subtotal + tax)
-    };
-  }
-  function approvedEstimate(estimate = {}, decisions = {}) {
-    const lines = (estimate.lines || []).map((line, index) => {
-      const normalized = normalizeEstimateLine(line, index);
-      return {
-        ...normalized,
-        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
-      };
-    });
-    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
-    const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
-    return {
-      ...estimate,
-      ...totals,
-      lines,
-      approvedLineCount: approvedLines.length,
-      declinedLineCount: lines.length - approvedLines.length
-    };
-  }
-  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
-    const source = order.estimate || {};
-    const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
-    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
-    const due = new Date(issuedAt);
-    due.setDate(due.getDate() + 14);
-    const amount = source.lines?.length ? estimate.total : roundMoney3(order.total ?? estimate.total);
-    return {
-      id: number,
-      number,
-      ro: order.id,
-      customer: order.customer,
-      vehicle: order.vehicle,
-      amount,
-      grossSubtotal: estimate.grossSubtotal,
-      subtotal: estimate.subtotal,
-      discountPercent: estimate.discountPercent,
-      discountAmount: estimate.discountAmount,
-      discountReason: estimate.discountReason,
-      fees: estimate.fees,
-      tax: estimate.tax,
-      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
-      status: "sent",
-      date: issuedAt.toISOString().slice(0, 10),
-      due: due.toISOString().slice(0, 10),
-      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
-      sourceEstimateApproval: order.estimateApproval || null,
-      createdAt: issuedAt.toISOString()
-    };
-  }
-  function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
-    const hadApproval = Boolean(
-      order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status)
-    );
-    return {
-      ...order,
-      estimate: {
-        ...estimate,
-        ...recalculated,
-        summary: estimate.summary || order.estimate?.summary || "",
-        generatedAt: estimate.generatedAt || order.estimate?.generatedAt || editedAt,
-        revisedAt: editedAt
-      },
-      labor: recalculated.labor,
-      laborHours: recalculated.laborHours,
-      parts: recalculated.parts,
-      tax: recalculated.tax,
-      total: recalculated.total,
-      estimateApproval: hadApproval ? null : order.estimateApproval,
-      linesLockedAt: hadApproval ? null : order.linesLockedAt,
-      estimateRevisionPending: hadApproval || Boolean(order.estimateRevisionPending),
-      estimateRevisionPreviousStatus: hadApproval ? order.status : order.estimateRevisionPreviousStatus,
-      updatedAt: order.updatedAt
-    };
-  }
-  function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const source = order.estimate || {};
-    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
-    return {
-      ...invoice,
-      amount: estimate.total,
-      subtotal: estimate.subtotal,
-      tax: estimate.tax,
-      taxRate: estimate.taxRate,
-      fees: estimate.fees,
-      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
-      signature: null,
-      sourceEstimateApproval: null,
-      revisedAt: editedAt
-    };
-  }
-  var roundMoney3, SHOP_SUPPLIES_RULES, AFTER_MIDNIGHT_FEE_PRESET;
-  var init_estimate_workflow = __esm({
-    "src/modules/estimate-workflow.js"() {
-      roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
-      SHOP_SUPPLIES_RULES = Object.freeze({
-        shopSuppliesRate: 3,
-        shopSuppliesCap: 20
-      });
-      AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
-        code: "after-midnight",
-        type: "fee",
-        description: "a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.",
-        quantity: 1,
-        unitPrice: 200,
-        amount: 200
-      });
     }
   });
 
@@ -4834,7 +5156,7 @@ button{margin-top:12px;padding:8px 14px}
   function operationsInspections() {
     const rows = [...state.inspections].reverse().map((item) => {
       const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge2 = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`;
-      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} \xB7 ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge2}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>`;
+      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} \xB7 ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge2}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button><button class="mini-action" data-estimate-from-inspection="${item.id}">${icon("file-text", 13)} Estimate</button></td></tr>`;
     }).join("");
     return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
@@ -4882,7 +5204,12 @@ button{margin-top:12px;padding:8px 14px}
   }
   function operationsOrdering() {
     const canSave = ["owner", "admin"].includes(currentUser()?.role);
-    return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon });
+    return [
+      orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }),
+      partstechPanelHtml(partstechAccount, { canSave, escapeHtml, icon }),
+      laborGuidePanelHtml(laborGuideAccount, { canSave, escapeHtml, icon }),
+      quickbooksPanelHtml(quickbooksAccount, { canSave, escapeHtml, icon })
+    ].join("");
   }
   async function loadAutozoneAccount(force = false) {
     if (autozoneAccount.loaded && !force) return;
@@ -4892,6 +5219,39 @@ button{margin-top:12px;padding:8px 14px}
       autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true };
     } catch {
       autozoneAccount = { connected: false, loaded: true, unavailable: true };
+    }
+    if (state.route === "shopops" && shopOpsTab === "ordering") render();
+  }
+  async function loadPartstechAccount(force = false) {
+    if (partstechAccount.loaded && !force) return;
+    partstechAccount = { ...partstechAccount, loaded: true };
+    try {
+      const account = await apiFetch("/integrations/partstech");
+      partstechAccount = { ...account, loaded: true };
+    } catch {
+      partstechAccount = { connected: false, loaded: true, unavailable: true };
+    }
+    if (state.route === "shopops" && shopOpsTab === "ordering") render();
+  }
+  async function loadLaborGuideAccount(force = false) {
+    if (laborGuideAccount.loaded && !force) return;
+    laborGuideAccount = { ...laborGuideAccount, loaded: true };
+    try {
+      const account = await apiFetch("/integrations/labor-guide");
+      laborGuideAccount = { ...account, loaded: true };
+    } catch {
+      laborGuideAccount = { connected: false, provider: "manual", loaded: true, unavailable: true };
+    }
+    if (state.route === "shopops" && shopOpsTab === "ordering") render();
+  }
+  async function loadQuickbooksAccount(force = false) {
+    if (quickbooksAccount.loaded && !force) return;
+    quickbooksAccount = { ...quickbooksAccount, loaded: true };
+    try {
+      const account = await apiFetch("/integrations/quickbooks");
+      quickbooksAccount = { ...account, loaded: true };
+    } catch {
+      quickbooksAccount = { connected: false, loaded: true, unavailable: true };
     }
     if (state.route === "shopops" && shopOpsTab === "ordering") render();
   }
@@ -5365,6 +5725,24 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       toast(error.message);
     }
   }
+  async function buildEstimateFromInspectionRecord(inspection) {
+    const orderId = inspection.workOrderId;
+    const order = state.orders?.find((item) => item.id === orderId) || {
+      id: orderId || `RO-${Date.now()}`,
+      customer: inspection.customer,
+      vehicle: inspection.vehicle,
+      status: "intake"
+    };
+    const next = applyEstimateFromInspection(order, inspection, {
+      laborRate: Number(shopProfile()?.laborRate) || 165,
+      taxRate: Number(state.taxSettings?.rate) || 0
+    }, currentUser() || { name: "Staff" });
+    await saveShopEntity("orders", next);
+    if (!state.orders.some((item) => item.id === next.id)) state.orders.push(next);
+    else state.orders = state.orders.map((item) => item.id === next.id ? next : item);
+    toast(`Estimate draft built from inspection (${next.estimate.lines.length} finding line(s))`);
+    return next;
+  }
   function bindShopOperations() {
     document.querySelector("#open-oem-programming")?.addEventListener("click", () => {
       state.route = "oem-diagnostics";
@@ -5402,7 +5780,142 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     document.querySelector("#autozone-open")?.addEventListener("click", () => {
       void openAutozoneOrder("");
     });
-    if (shopOpsTab === "ordering") void loadAutozoneAccount();
+    if (shopOpsTab === "ordering") {
+      void loadAutozoneAccount();
+      void loadPartstechAccount();
+      void loadLaborGuideAccount();
+      void loadQuickbooksAccount();
+    }
+    document.querySelector("#partstech-connect-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const data = Object.fromEntries(new FormData(event.target));
+        partstechAccount = { ...await apiFetch("/integrations/partstech", { method: "POST", body: JSON.stringify(data) }), loaded: true };
+        toast("PartsTech connected");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not connect PartsTech");
+      }
+    });
+    document.querySelector("#partstech-disconnect")?.addEventListener("click", async () => {
+      try {
+        await apiFetch("/integrations/partstech", { method: "DELETE" });
+        partstechAccount = { connected: false, loaded: true };
+        toast("PartsTech disconnected");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not disconnect PartsTech");
+      }
+    });
+    document.querySelector("#partstech-search-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const panel = document.querySelector("#partstech-results");
+      if (panel) panel.innerHTML = "<p>Quoting\u2026</p>";
+      try {
+        const result = await apiFetch("/integrations/partstech/quote", { method: "POST", body: JSON.stringify(data) });
+        const rows = (result.items || []).map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money3(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<table><thead><tr><th>Part</th><th>#</th><th>Price</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No quotes returned</td></tr>"}</tbody></table>`;
+        window.__MECHPRO_PARTSTECH_LINES__ = Object.fromEntries((result.items || []).map((item) => [item.id, item]));
+        document.querySelectorAll("[data-add-pt-line]").forEach((button) => {
+          button.onclick = () => {
+            const line = window.__MECHPRO_PARTSTECH_LINES__?.[button.dataset.addPtLine];
+            if (!line) return;
+            state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
+            toast(`Added ${line.description} to pending estimate lines`);
+          };
+        });
+      } catch (error) {
+        if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "PartsTech quote failed")}</p>`;
+        toast(error.message || "PartsTech quote failed");
+      }
+    });
+    document.querySelector("#labor-guide-connect-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const data = Object.fromEntries(new FormData(event.target));
+        laborGuideAccount = { ...await apiFetch("/integrations/labor-guide", {
+          method: "POST",
+          body: JSON.stringify({ provider: data.provider, viaPartstech: data.viaPartstech === "on" })
+        }), loaded: true };
+        toast("Labor guide saved");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not save labor guide");
+      }
+    });
+    document.querySelector("#labor-guide-disconnect")?.addEventListener("click", async () => {
+      try {
+        await apiFetch("/integrations/labor-guide", { method: "DELETE" });
+        laborGuideAccount = { connected: false, provider: "manual", loaded: true };
+        toast("MOTOR disconnected");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not disconnect labor guide");
+      }
+    });
+    document.querySelector("#labor-guide-search-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const panel = document.querySelector("#labor-guide-results");
+      if (panel) panel.innerHTML = "<p>Looking up\u2026</p>";
+      try {
+        const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
+        const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+        window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map((line) => [line.id, line]));
+        document.querySelectorAll("[data-add-labor-line]").forEach((button) => {
+          button.onclick = () => {
+            const line = window.__MECHPRO_LABOR_LINES__?.[button.dataset.addLaborLine];
+            if (!line) return;
+            state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
+            toast(`Added ${line.description}`);
+          };
+        });
+      } catch (error) {
+        if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "Labor guide search failed")}</p>`;
+        toast(error.message || "Labor guide search failed");
+      }
+    });
+    document.querySelector("#manual-labor-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const line = createManualLaborEntry({
+        description: data.description,
+        hours: data.hours,
+        laborRate: data.laborRate
+      });
+      state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
+      toast(`Added manual labor: ${line.description}`);
+    });
+    document.querySelector("#qbo-connect")?.addEventListener("click", async () => {
+      try {
+        const redirectUri = `${location.origin}/qbo/callback`;
+        const result = await apiFetch("/integrations/quickbooks/connect", {
+          method: "POST",
+          body: JSON.stringify({ redirectUri })
+        });
+        if (result.authorizeUrl) location.href = result.authorizeUrl;
+        else toast("QuickBooks authorize URL missing");
+      } catch (error) {
+        toast(error.message || "Could not start QuickBooks connect");
+      }
+    });
+    document.querySelector("#qbo-disconnect")?.addEventListener("click", async () => {
+      try {
+        await apiFetch("/integrations/quickbooks", { method: "DELETE" });
+        quickbooksAccount = { connected: false, loaded: true };
+        toast("QuickBooks disconnected");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not disconnect QuickBooks");
+      }
+    });
+    document.querySelector("#qbo-sync-now")?.addEventListener("click", async () => {
+      const status = document.querySelector("#qbo-sync-status");
+      if (status) status.textContent = "Sync uses per-record POST /integrations/quickbooks/sync from invoices and customers.";
+      toast("Open a customer or invoice and sync from there, or call the sync API with entityType/localId");
+    });
     document.querySelectorAll("[data-ops-tab]").forEach((button) => button.onclick = () => {
       shopOpsTab = button.dataset.opsTab;
       render();
@@ -5415,6 +5928,17 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       const inspection = state.inspections.find((item) => item.id === button.dataset.editInspection);
       if (inspection?.catalogId) openCatalogInspection(inspection);
       else openInspectionForm(inspection);
+    });
+    document.querySelectorAll("[data-estimate-from-inspection]").forEach((button) => button.onclick = async (event) => {
+      event.stopPropagation();
+      const inspection = state.inspections.find((item) => item.id === button.dataset.estimateFromInspection);
+      if (!inspection) return toast("Inspection not found");
+      try {
+        await buildEstimateFromInspectionRecord(inspection);
+        render();
+      } catch (error) {
+        toast(error.message || "Could not build estimate from inspection");
+      }
     });
     document.querySelectorAll("[data-edit-template]").forEach((button) => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find((t) => t.id === button.dataset.editTemplate)));
     document.querySelectorAll("[data-edit-vehicle]").forEach((row) => row.onclick = () => openVehicleDetail(row.dataset.editVehicle));
@@ -8530,7 +9054,7 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -8543,6 +9067,10 @@ ${catRows}
       init_repair_guide();
       init_shop_inspections();
       init_autozone_pro();
+      init_partstech();
+      init_labor_guide();
+      init_quickbooks();
+      init_repair_order_flow();
       init_file_upload();
       init_ai_workflow();
       init_customer_intake();
@@ -8692,6 +9220,9 @@ ${catRows}
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
       autozoneAccount = { connected: false, loaded: false };
+      partstechAccount = { connected: false, loaded: false };
+      laborGuideAccount = { connected: false, provider: "manual", loaded: false };
+      quickbooksAccount = { connected: false, loaded: false };
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
       financeDerivedCache = null;
       baseShopOperations = shopOperations;

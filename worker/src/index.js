@@ -23,6 +23,9 @@ import {
   verifyAccessJwt,
   verifyGoogleIdToken,
 } from './security.mjs';
+import { createPartstechHandlers } from './integrations/partstech.mjs';
+import { createLaborGuideHandlers } from './integrations/labor-guide.mjs';
+import { createQuickbooksHandlers } from './integrations/quickbooks.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
@@ -2509,6 +2512,33 @@ async function route(request, env, analytics) {
   if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
   if (segments[0] === 'ordering') return handleOrdering(request, env, context, segments);
+  if (segments[0] === 'integrations' && segments[1] === 'partstech') {
+    return createPartstechHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'labor-guide') {
+    return createLaborGuideHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'quickbooks') {
+    return createQuickbooksHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);

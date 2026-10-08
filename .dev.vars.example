@@ -36,3 +36,15 @@ DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 # http://127.0.0.1:8787/api/auth/google/callback
 # GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 # GOOGLE_CLIENT_SECRET=replace-with-your-google-client-secret
+
+# PartsTech / MOTOR labor (per-shop credentials are stored encrypted in D1;
+# these optional overrides are only for local stubbing of the API base URL).
+# PARTSTECH_API_BASE=https://api.partstech.com
+
+# QuickBooks Online OAuth app (Intuit Developer). Per-shop tokens are encrypted in D1.
+# Register redirect: https://www.yourcarguy806.com/api/integrations/quickbooks/callback
+# (local: http://127.0.0.1:8787/api/integrations/quickbooks/callback — the SPA posts code/state/realmId)
+# QUICKBOOKS_CLIENT_ID=replace-with-intuit-client-id
+# QUICKBOOKS_CLIENT_SECRET=replace-with-intuit-client-secret
+# QUICKBOOKS_REDIRECT_URI=http://127.0.0.1:8787/qbo/callback
+# QUICKBOOKS_SANDBOX=1

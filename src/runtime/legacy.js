@@ -9,6 +9,10 @@ import { CANNED_MENU, cannedServiceGroups, estimateLineFromService, missingCanne
 import { buildRepairGuide, repairDiagram, safeVideoUrl, stepText } from '../modules/repair-guide.js';
 import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
+import { partstechPanelHtml } from '../modules/partstech.js';
+import { laborGuidePanelHtml, createManualLaborEntry } from '../modules/labor-guide.js';
+import { quickbooksPanelHtml } from '../modules/quickbooks.js';
+import { applyEstimateFromInspection } from '../modules/repair-order-flow.js';
 import { uploadFailureMessage, uploadFileToStorage } from '../modules/file-upload.js';
 import { applyAiWorkflowEstimate } from '../modules/ai-workflow.js';
 import {
@@ -349,7 +353,7 @@ function linkedOrders(vehicle) { const { ordersByVin, ordersByVehicleLabel } = g
 function operationsVehicles() { const rows = state.vehicles.map(vehicle => { const history = linkedOrders(vehicle); return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} · ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>` }).join(""); return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>` }
 function catalogInspectionApp() { return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig, render, vehicleLabel, isLocalShell, save } }
 function openCatalogInspection(existing, catalogId) { presentCatalogInspection(catalogInspectionApp(), existing, catalogId) }
-function operationsInspections() { const rows = [...state.inspections].reverse().map(item => { const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`; return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} · ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>` }
+function operationsInspections() { const rows = [...state.inspections].reverse().map(item => { const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`; return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} · ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button><button class="mini-action" data-estimate-from-inspection="${item.id}">${icon("file-text", 13)} Estimate</button></td></tr>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>` }
 function operationsInventory() { const rows = state.inventory.map(item => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} · ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join(""); return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter(item => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>` }
 function visibleCannedServices() { const ids = new Set(CANNED_MENU.map(item => item.id)); if (state.services.some(item => ids.has(item.id))) return state.services; const names = new Set(state.services.map(item => String(item.name || "").trim().toLowerCase())); return [...state.services, ...CANNED_MENU.filter(item => !names.has(item.name.toLowerCase()))] }
 function operationsServices() { const groups = cannedServiceGroups(visibleCannedServices()), tables = groups.map(group => { const rows = group.items.map(item => { const price = Number(item.menuPrice ?? item.partsPrice ?? 0), discount = Number(item.discount || 0); return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>` }).join(""); return `<h3>${escapeHtml(group.label)}</h3><div class="data-panel"><table><thead><tr><th>Service</th><th>Menu price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Starter menu prices. Edit any job for this shop. The shop note stays off the customer estimate.</span><button class="primary" id="add-service">${icon("list-plus", 14)} Canned service</button></div>${tables || `<div class="data-panel"><table><tbody><tr><td>No canned services yet.</td></tr></tbody></table></div>`}` }
@@ -358,8 +362,50 @@ function reminderStatus(item) { if (item.sentAt) return "sent"; const today = ne
 function operationsReminders() { const filters = [["all", "All"], ["due", "Due"], ["overdue", "Overdue"], ["sent", "Sent"]], items = [...state.reminders].sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).filter(item => reminderFilter === "all" || reminderStatus(item) === reminderFilter), rows = items.map(item => { const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate"; return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` · current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>` }).join(""); return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value, text]) => `<button class="tab ${reminderFilter === value ? "active" : ""}" data-reminder-filter="${value}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>` }
 function operationsDiagnostics() { const output = state.elmOutput || "Connect an ELM327 for generic OBD-II data. OEM programming, module coding, and bidirectional controls are in OEM diagnostics.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : ""; return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop · compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button><button class="primary" id="open-oem-programming" type="button">${icon("radio-tower", 14)} OEM programming, coding, and bidirectional</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>` }
 let autozoneAccount = { connected: false, loaded: false };
-function operationsOrdering() { const canSave = ["owner", "admin"].includes(currentUser()?.role); return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }) }
+let partstechAccount = { connected: false, loaded: false };
+let laborGuideAccount = { connected: false, provider: "manual", loaded: false };
+let quickbooksAccount = { connected: false, loaded: false };
+function operationsOrdering() { const canSave = ["owner", "admin"].includes(currentUser()?.role); return [
+  orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }),
+  partstechPanelHtml(partstechAccount, { canSave, escapeHtml, icon }),
+  laborGuidePanelHtml(laborGuideAccount, { canSave, escapeHtml, icon }),
+  quickbooksPanelHtml(quickbooksAccount, { canSave, escapeHtml, icon }),
+].join("") }
 async function loadAutozoneAccount(force = false) { if (autozoneAccount.loaded && !force) return; autozoneAccount = { ...autozoneAccount, loaded: true }; try { const account = await apiFetch("/ordering/autozone"); autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true } } catch { autozoneAccount = { connected: false, loaded: true, unavailable: true } } if (state.route === "shopops" && shopOpsTab === "ordering") render() }
+
+async function loadPartstechAccount(force = false) {
+  if (partstechAccount.loaded && !force) return;
+  partstechAccount = { ...partstechAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/partstech");
+    partstechAccount = { ...account, loaded: true };
+  } catch {
+    partstechAccount = { connected: false, loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
+async function loadLaborGuideAccount(force = false) {
+  if (laborGuideAccount.loaded && !force) return;
+  laborGuideAccount = { ...laborGuideAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/labor-guide");
+    laborGuideAccount = { ...account, loaded: true };
+  } catch {
+    laborGuideAccount = { connected: false, provider: "manual", loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
+async function loadQuickbooksAccount(force = false) {
+  if (quickbooksAccount.loaded && !force) return;
+  quickbooksAccount = { ...quickbooksAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/quickbooks");
+    quickbooksAccount = { ...account, loaded: true };
+  } catch {
+    quickbooksAccount = { connected: false, loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
 async function openAutozoneOrder(keyword) { const url = autozoneProLoginUrl(keyword); const opened = window.open(url, "_blank", "noopener,noreferrer"); if (!opened) { toast("Allow pop-ups to open AutoZone Pro."); return } if (!autozoneAccount.connected) { toast("AutoZone Pro opened. Save the shop login on Ordering to copy the password next time."); return } try { const detail = await apiFetch("/ordering/autozone?reveal=1"); if (detail?.password && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(detail.password); toast(`AutoZone Pro opened for ${detail.username}. Password copied — paste it on their sign-in page.`); return } toast(`AutoZone Pro opened. Sign in as ${detail?.username || "the saved user"}.`) } catch (error) { toast(error.message || "AutoZone Pro opened. The saved password could not be copied.") } }
 async function saveAutozoneLogin(form) { const data = Object.fromEntries(new FormData(form)); const account = await apiFetch("/ordering/autozone", { method: "POST", body: JSON.stringify({ username: data.username, password: data.password }) }); autozoneAccount = { connected: true, username: account.username, connectedAt: account.connectedAt, loaded: true }; toast("AutoZone Pro login saved"); render() }
 function shopOperations() { const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["ordering", "Ordering"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, ordering: operationsOrdering, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab]; return shell(`${heading("Connected workflow", "Shop operations", "Linked vehicles, inspections, stock, service templates, reminders, vendors, and basic OBD-II tools.", false)}<div class="accounting-tabs ops-tabs">${tabs.map(tab => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${view()}`) }
@@ -422,7 +468,157 @@ globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, fo
 async function elmCommand(command) { if (!elmPort?.readable || !elmPort?.writable) throw new Error("Adapter is not connected"); const writer = elmPort.writable.getWriter(), reader = elmPort.readable.getReader(), decoder = new TextDecoder(); try { await writer.write(new TextEncoder().encode(`${command}\r`)); let output = "", done = false; while (!done && !output.includes(">")) { const pending = reader.read(), result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 1800))]); if (result.timeout) { await reader.cancel(); break } done = result.done; output += decoder.decode(result.value || new Uint8Array()) } return output.trim() } finally { writer.releaseLock(); reader.releaseLock() } }
 async function connectElm() { if (elmPort) { await elmPort.close(); elmPort = null; state.elmOutput = "Adapter disconnected."; save(); return render() } if (!navigator.serial) return toast("Web Serial requires desktop Chrome or Edge"); try { elmPort = await navigator.serial.requestPort(); await elmPort.open({ baudRate: 38400 }); for (const command of ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elmCommand(command); state.elmOutput = "ELM327 initialized. Vehicle ignition should be on."; save(); render() } catch (error) { elmPort = null; toast(`Adapter connection failed: ${error.message}`) } }
 async function runElm(action) { try { if (action === "clear" && !confirm("Clear stored diagnostic trouble codes? This may reset readiness monitors and should only be done after repairs are verified.")) return; const commands = action === "live" ? [["RPM", "010C"], ["Speed", "010D"], ["Coolant", "0105"]] : action === "dtc" ? [["Stored DTCs", "03"]] : [["Clear response", "04"]], lines = [], rawResponses = []; for (const [label, command] of commands) { const raw = await elmCommand(command); lines.push(formatElmResult(label, command, raw)); rawResponses.push(`${command}\n${raw}`) } state.elmOutput = { friendly: `${new Date().toLocaleString()}\n${lines.join("\n")}`, raw: rawResponses.join("\n\n") }; save(); render() } catch (error) { toast(error.message) } }
-function bindShopOperations() { document.querySelector("#open-oem-programming")?.addEventListener("click", () => { state.route = "oem-diagnostics"; save(); render() }); document.querySelectorAll("[data-order-autozone]").forEach(button => { button.onclick = () => { const item = state.inventory.find(row => row.id === button.dataset.orderAutozone); void openAutozoneOrder(item?.name || "") } }); document.querySelector("#autozone-login-form")?.addEventListener("submit", async event => { event.preventDefault(); try { await saveAutozoneLogin(event.target) } catch (error) { toast(error.message || "Could not save the AutoZone Pro login") } }); document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => { try { await apiFetch("/ordering/autozone", { method: "DELETE" }); autozoneAccount = { connected: false, loaded: true }; toast("AutoZone Pro login removed"); render() } catch (error) { toast(error.message || "Could not remove the AutoZone Pro login") } }); document.querySelector("#autozone-search-form")?.addEventListener("submit", event => { event.preventDefault(); void openAutozoneOrder(new FormData(event.target).get("keyword")) }); document.querySelector("#autozone-open")?.addEventListener("click", () => { void openAutozoneOrder("") }); if (shopOpsTab === "ordering") void loadAutozoneAccount(); document.querySelectorAll("[data-ops-tab]").forEach(button => button.onclick = () => { shopOpsTab = button.dataset.opsTab; render() }); document.querySelector("#add-vehicle")?.addEventListener("click", () => openVehicleForm()); document.querySelector("#add-inspection")?.addEventListener("click", () => openInspectionForm()); document.querySelectorAll("[data-start-inspection]").forEach(button => button.onclick = () => openCatalogInspection(null, button.dataset.startInspection)); document.querySelector("#manage-templates")?.addEventListener("click", openManageTemplates); document.querySelectorAll("[data-edit-inspection]").forEach(button => button.onclick = () => { const inspection = state.inspections.find(item => item.id === button.dataset.editInspection); if (inspection?.catalogId) openCatalogInspection(inspection); else openInspectionForm(inspection) }); document.querySelectorAll("[data-edit-template]").forEach(button => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find(t => t.id === button.dataset.editTemplate))); document.querySelectorAll("[data-edit-vehicle]").forEach(row => row.onclick = () => openVehicleDetail(row.dataset.editVehicle)); document.querySelector("#add-inventory")?.addEventListener("click", addInventory); document.querySelector("#add-vendor")?.addEventListener("click", addVendor); document.querySelector("#add-service")?.addEventListener("click", addService); document.querySelectorAll("[data-edit-service]").forEach(button => button.onclick = event => { event.stopPropagation(); openServiceForm(state.services.find(item => item.id === button.dataset.editService)) }); document.querySelector("#add-reminder")?.addEventListener("click", addReminder); document.querySelectorAll("[data-reminder-filter]").forEach(button => button.onclick = () => { reminderFilter = button.dataset.reminderFilter; render() }); document.querySelectorAll("[data-edit-reminder]").forEach(row => row.onclick = () => openReminderForm(state.reminders.find(item => item.id === row.dataset.editReminder))); document.querySelectorAll("[data-edit-reminder-button]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(state.reminders.find(item => item.id === button.dataset.editReminderButton)) }); document.querySelectorAll("[data-follow-up-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(null, state.reminders.find(item => item.id === button.dataset.followUpReminder)) }); document.querySelectorAll("[data-receive-stock]").forEach(button => button.onclick = () => receiveStock(button.dataset.receiveStock)); document.querySelectorAll("[data-send-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); sendReminder(button.dataset.sendReminder) }); document.querySelector("#elm-connect")?.addEventListener("click", connectElm); document.querySelectorAll("[data-elm-command]").forEach(button => button.onclick = () => runElm(button.dataset.elmCommand)) }
+
+async function buildEstimateFromInspectionRecord(inspection) {
+  const orderId = inspection.workOrderId;
+  const order = state.orders?.find(item => item.id === orderId) || {
+    id: orderId || `RO-${Date.now()}`,
+    customer: inspection.customer,
+    vehicle: inspection.vehicle,
+    status: "intake",
+  };
+  const next = applyEstimateFromInspection(order, inspection, {
+    laborRate: Number(shopProfile()?.laborRate) || 165,
+    taxRate: Number(state.taxSettings?.rate) || 0,
+  }, currentUser() || { name: "Staff" });
+  await saveShopEntity("orders", next);
+  if (!state.orders.some(item => item.id === next.id)) state.orders.push(next);
+  else state.orders = state.orders.map(item => item.id === next.id ? next : item);
+  toast(`Estimate draft built from inspection (${next.estimate.lines.length} finding line(s))`);
+  return next;
+}
+function bindShopOperations() { document.querySelector("#open-oem-programming")?.addEventListener("click", () => { state.route = "oem-diagnostics"; save(); render() }); document.querySelectorAll("[data-order-autozone]").forEach(button => { button.onclick = () => { const item = state.inventory.find(row => row.id === button.dataset.orderAutozone); void openAutozoneOrder(item?.name || "") } }); document.querySelector("#autozone-login-form")?.addEventListener("submit", async event => { event.preventDefault(); try { await saveAutozoneLogin(event.target) } catch (error) { toast(error.message || "Could not save the AutoZone Pro login") } }); document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => { try { await apiFetch("/ordering/autozone", { method: "DELETE" }); autozoneAccount = { connected: false, loaded: true }; toast("AutoZone Pro login removed"); render() } catch (error) { toast(error.message || "Could not remove the AutoZone Pro login") } }); document.querySelector("#autozone-search-form")?.addEventListener("submit", event => { event.preventDefault(); void openAutozoneOrder(new FormData(event.target).get("keyword")) }); document.querySelector("#autozone-open")?.addEventListener("click", () => { void openAutozoneOrder("") }); if (shopOpsTab === "ordering") {
+    void loadAutozoneAccount();
+    void loadPartstechAccount();
+    void loadLaborGuideAccount();
+    void loadQuickbooksAccount();
+  }
+  document.querySelector("#partstech-connect-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      const data = Object.fromEntries(new FormData(event.target));
+      partstechAccount = { ...(await apiFetch("/integrations/partstech", { method: "POST", body: JSON.stringify(data) })), loaded: true };
+      toast("PartsTech connected");
+      render();
+    } catch (error) { toast(error.message || "Could not connect PartsTech"); }
+  });
+  document.querySelector("#partstech-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/partstech", { method: "DELETE" });
+      partstechAccount = { connected: false, loaded: true };
+      toast("PartsTech disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect PartsTech"); }
+  });
+  document.querySelector("#partstech-search-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const panel = document.querySelector("#partstech-results");
+    if (panel) panel.innerHTML = "<p>Quoting…</p>";
+    try {
+      const result = await apiFetch("/integrations/partstech/quote", { method: "POST", body: JSON.stringify(data) });
+      const rows = (result.items || []).map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
+      if (panel) panel.innerHTML = `<table><thead><tr><th>Part</th><th>#</th><th>Price</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No quotes returned</td></tr>"}</tbody></table>`;
+      window.__MECHPRO_PARTSTECH_LINES__ = Object.fromEntries((result.items || []).map(item => [item.id, item]));
+      document.querySelectorAll("[data-add-pt-line]").forEach(button => {
+        button.onclick = () => {
+          const line = window.__MECHPRO_PARTSTECH_LINES__?.[button.dataset.addPtLine];
+          if (!line) return;
+          state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+          toast(`Added ${line.description} to pending estimate lines`);
+        };
+      });
+    } catch (error) {
+      if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "PartsTech quote failed")}</p>`;
+      toast(error.message || "PartsTech quote failed");
+    }
+  });
+  document.querySelector("#labor-guide-connect-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      const data = Object.fromEntries(new FormData(event.target));
+      laborGuideAccount = { ...(await apiFetch("/integrations/labor-guide", {
+        method: "POST",
+        body: JSON.stringify({ provider: data.provider, viaPartstech: data.viaPartstech === "on" }),
+      })), loaded: true };
+      toast("Labor guide saved");
+      render();
+    } catch (error) { toast(error.message || "Could not save labor guide"); }
+  });
+  document.querySelector("#labor-guide-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/labor-guide", { method: "DELETE" });
+      laborGuideAccount = { connected: false, provider: "manual", loaded: true };
+      toast("MOTOR disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect labor guide"); }
+  });
+  document.querySelector("#labor-guide-search-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const panel = document.querySelector("#labor-guide-results");
+    if (panel) panel.innerHTML = "<p>Looking up…</p>";
+    try {
+      const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
+      const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+      if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+      window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map(line => [line.id, line]));
+      document.querySelectorAll("[data-add-labor-line]").forEach(button => {
+        button.onclick = () => {
+          const line = window.__MECHPRO_LABOR_LINES__?.[button.dataset.addLaborLine];
+          if (!line) return;
+          state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+          toast(`Added ${line.description}`);
+        };
+      });
+    } catch (error) {
+      if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "Labor guide search failed")}</p>`;
+      toast(error.message || "Labor guide search failed");
+    }
+  });
+  document.querySelector("#manual-labor-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const line = createManualLaborEntry({
+      description: data.description,
+      hours: data.hours,
+      laborRate: data.laborRate,
+    });
+    state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+    toast(`Added manual labor: ${line.description}`);
+  });
+  document.querySelector("#qbo-connect")?.addEventListener("click", async () => {
+    try {
+      const redirectUri = `${location.origin}/qbo/callback`;
+      const result = await apiFetch("/integrations/quickbooks/connect", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
+      if (result.authorizeUrl) location.href = result.authorizeUrl;
+      else toast("QuickBooks authorize URL missing");
+    } catch (error) { toast(error.message || "Could not start QuickBooks connect"); }
+  });
+  document.querySelector("#qbo-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/quickbooks", { method: "DELETE" });
+      quickbooksAccount = { connected: false, loaded: true };
+      toast("QuickBooks disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect QuickBooks"); }
+  });
+  document.querySelector("#qbo-sync-now")?.addEventListener("click", async () => {
+    const status = document.querySelector("#qbo-sync-status");
+    if (status) status.textContent = "Sync uses per-record POST /integrations/quickbooks/sync from invoices and customers.";
+    toast("Open a customer or invoice and sync from there, or call the sync API with entityType/localId");
+  });
+ document.querySelectorAll("[data-ops-tab]").forEach(button => button.onclick = () => { shopOpsTab = button.dataset.opsTab; render() }); document.querySelector("#add-vehicle")?.addEventListener("click", () => openVehicleForm()); document.querySelector("#add-inspection")?.addEventListener("click", () => openInspectionForm()); document.querySelectorAll("[data-start-inspection]").forEach(button => button.onclick = () => openCatalogInspection(null, button.dataset.startInspection)); document.querySelector("#manage-templates")?.addEventListener("click", openManageTemplates); document.querySelectorAll("[data-edit-inspection]").forEach(button => button.onclick = () => { const inspection = state.inspections.find(item => item.id === button.dataset.editInspection); if (inspection?.catalogId) openCatalogInspection(inspection); else openInspectionForm(inspection) });
+  document.querySelectorAll("[data-estimate-from-inspection]").forEach(button => button.onclick = async event => {
+    event.stopPropagation();
+    const inspection = state.inspections.find(item => item.id === button.dataset.estimateFromInspection);
+    if (!inspection) return toast("Inspection not found");
+    try { await buildEstimateFromInspectionRecord(inspection); render(); }
+    catch (error) { toast(error.message || "Could not build estimate from inspection"); }
+  }); document.querySelectorAll("[data-edit-template]").forEach(button => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find(t => t.id === button.dataset.editTemplate))); document.querySelectorAll("[data-edit-vehicle]").forEach(row => row.onclick = () => openVehicleDetail(row.dataset.editVehicle)); document.querySelector("#add-inventory")?.addEventListener("click", addInventory); document.querySelector("#add-vendor")?.addEventListener("click", addVendor); document.querySelector("#add-service")?.addEventListener("click", addService); document.querySelectorAll("[data-edit-service]").forEach(button => button.onclick = event => { event.stopPropagation(); openServiceForm(state.services.find(item => item.id === button.dataset.editService)) }); document.querySelector("#add-reminder")?.addEventListener("click", addReminder); document.querySelectorAll("[data-reminder-filter]").forEach(button => button.onclick = () => { reminderFilter = button.dataset.reminderFilter; render() }); document.querySelectorAll("[data-edit-reminder]").forEach(row => row.onclick = () => openReminderForm(state.reminders.find(item => item.id === row.dataset.editReminder))); document.querySelectorAll("[data-edit-reminder-button]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(state.reminders.find(item => item.id === button.dataset.editReminderButton)) }); document.querySelectorAll("[data-follow-up-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(null, state.reminders.find(item => item.id === button.dataset.followUpReminder)) }); document.querySelectorAll("[data-receive-stock]").forEach(button => button.onclick = () => receiveStock(button.dataset.receiveStock)); document.querySelectorAll("[data-send-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); sendReminder(button.dataset.sendReminder) }); document.querySelector("#elm-connect")?.addEventListener("click", connectElm); document.querySelectorAll("[data-elm-command]").forEach(button => button.onclick = () => runElm(button.dataset.elmCommand)) }
 function openCustomerMessage(name, phone, email) { showModal(`<form class="modal" id="customer-message-form"><div class="modal-head"><h2>Message ${name}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${phone || "No phone"} · ${email || "No email"}</span><strong>Your Car Guy</strong></div><label>Delivery method<select name="channel"><option value="sms" ${phone ? "" : "disabled"}>Text message</option><option value="email" ${email ? "" : "disabled"}>Email</option></select></label><label>Subject<input name="subject" value="Update from Your Car Guy"/></label><label>Message *<textarea name="message" required>Hello ${name}, this is Your Car Guy with an update regarding your vehicle.</textarea></label><p class="ai-disclaimer">This opens the device's configured messaging or email app. The app does not transmit messages through an outside service.</p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("send", 14)} Open device app</button></div></form>`); document.querySelector("#customer-message-form").onsubmit = event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), body = encodeURIComponent(data.message); if (data.channel === "email") { window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(data.subject)}&body=${body}` } else { window.location.href = `sms:${String(phone).replace(/[^0-9+]/g, "")}?body=${body}` } state.messageLog ??= []; state.messageLog.push({ id: `message-${Date.now()}`, customer: name, channel: data.channel, subject: data.subject, body: data.message, createdAt: now() }); save(); toast(`Opened ${data.channel === "email" ? "email" : "messaging"} app for ${name}`); closeModal() } }
 let financeDerivedCache=null;
 function getFinanceDerived(){const key=[state.invoices.length,state.payments.length,state.invoices.at(-1)?.number||"",state.payments.at(-1)?.id||state.payments.at(-1)?.invoiceNumber||""].join("|");if(financeDerivedCache?.key===key)return financeDerivedCache;const completedPaidByInvoice=new Map();for(const payment of state.payments){if(payment.status!=="completed")continue;const number=String(payment.invoiceNumber||"");if(!number)continue;completedPaidByInvoice.set(number,(completedPaidByInvoice.get(number)||0)+Number(payment.amount||0))}const invoiceByNumber=new Map();const balanceByCustomer=new Map();for(const invoice of state.invoices){invoiceByNumber.set(invoice.number,invoice);const paid=completedPaidByInvoice.get(invoice.number)||0;const effectivePaid=paid||((invoice.status==="paid")?Number(invoice.amount||0):0);const balance=Math.max(0,Math.round((Number(invoice.amount||0)-effectivePaid)*100)/100);balanceByCustomer.set(invoice.customer,(balanceByCustomer.get(invoice.customer)||0)+balance)}financeDerivedCache={key,completedPaidByInvoice,invoiceByNumber,balanceByCustomer};return financeDerivedCache}

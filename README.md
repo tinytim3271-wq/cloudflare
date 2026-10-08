@@ -86,6 +86,33 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ACCESS_ADMIN_EMAILS` | Cloudflare Access/admin bootstrap for internal surfaces | Worker secrets / `.dev.vars` for local development |
 | `DEV_AUTH_BYPASS` | Local-only auth bypass for `wrangler dev`; never production | `.dev.vars` local only |
 
+## Shop integrations (PartsTech, MOTOR labor, QuickBooks)
+
+Per-shop credentials are encrypted at rest in D1 (`integration_secrets` + `INTEGRATION_ENCRYPTION_KEY`).
+Unconfigured integrations return **not connected** and fail closed — they never invent parts, labor times, or accounting responses.
+
+| Integration | API routes | Secrets / signup |
+| --- | --- | --- |
+| PartsTech parts | `GET/POST/DELETE /api/integrations/partstech`, `POST .../quote`, `POST .../order` | Shop stores partner+user API keys in D1 after creating a PartsTech partner account |
+| MOTOR labor guide | `GET/POST/DELETE /api/integrations/labor-guide`, `POST .../search`, `POST .../manual` | Prefer “via PartsTech” (PartsTech MOTOR taxonomy labor). Manual labor entry always works |
+| QuickBooks Online | `GET/DELETE /api/integrations/quickbooks`, `POST .../connect`, `POST .../callback`, `POST .../sync` | Create an Intuit Developer app; set `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` Worker secrets; shops complete OAuth |
+
+Repair-order flow helpers live in `src/modules/repair-order-flow.js` (inspection → estimate → customer approval link via existing `/api/document-links` + SMS/email messaging → RO → invoice → Stripe payment).
+
+### Apply D1 migrations (when you are ready to deploy)
+
+```bash
+# Local only (does not touch production):
+npm run db:migrate:local
+
+# Production (owner action — not run by this branch work):
+# npm run db:migrate:remote
+# npm run deploy:worker
+# npm run deploy:pages
+```
+
+Migration `worker/migrations/0008_repair_flow_integrations.sql` adds `oauth_states` and `integration_sync_log` for QuickBooks idempotency.
+
 ## Release Process
 
 1. Merge reviewed PRs to `main`.
