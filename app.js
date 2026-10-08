@@ -3600,6 +3600,107 @@ button{margin-top:12px;padding:8px 14px}
     const config = state.messagingSettings;
     return shell(`${heading("Delivery infrastructure", "Messaging service", "Connect this shop's own secure delivery service for automatic email and SMS.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "circle-alert", 17)}<div><strong>${config.enabled ? "Shop messaging service active" : "Native device messaging is active"}</strong><span>${config.enabled ? "Estimate and customer messages will post to the configured shop endpoint." : "Messages currently open the device email or SMS app."}</span></div></div><div class="service-contract"><h2>Shop-managed delivery endpoint</h2><p>Configure a secure endpoint owned by the subscribing shop. It stores SMTP and SMS provider credentials server-side; MechPro never stores or exposes those credentials in the browser.</p><code>POST /messages<br>{ channel: "email" | "sms", to, subject, body, metadata }</code></div><form class="form-grid" id="messaging-form"><label class="full">Secure service endpoint *<input name="endpoint" type="url" value="${config.endpoint}" placeholder="https://messaging.yourshop.com/messages"/></label><label>Sender email<input name="senderEmail" type="email" value="${config.senderEmail}" placeholder="service@yourshop.com"/></label><label>Sender phone<input name="senderPhone" type="tel" value="${config.senderPhone}" placeholder="+18065550100"/></label><label class="full">Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this endpoint for customer email and SMS delivery</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="test-messaging">${icon("send", 14)} Test configuration</button><button class="primary" type="submit">${icon("save", 14)} Save messaging service</button></div></form></section>`);
   }
+  async function loadIntegrationStatus() {
+    try {
+      integrationStatus = await apiFetch("/integrations/status");
+    } catch (error) {
+      integrationStatus = { error: error.message };
+    }
+  }
+  function integrationState(name, configured) {
+    return `<div class="messaging-status ${configured ? "ready" : "idle"}">${icon(configured ? "circle-check" : "circle-alert", 17)}<div><strong>${escapeHtml(name)}</strong><span>${configured ? "Configured and available" : "Not configured \u2014 this feature stays disabled until credentials are added"}</span></div></div>`;
+  }
+  function integrations() {
+    if (!integrationStatus) void loadIntegrationStatus().then(render);
+    const status = integrationStatus || {};
+    const labor = status.labor || {}, parts = status.parts || {}, qbo = status.quickbooks || {};
+    const laborRows = laborLookupResults.map((item) => `<tr><td>${escapeHtml(item.description || "Labor operation")}</td><td><b>${item.hours == null ? "Enter manually" : `${Number(item.hours).toFixed(2)} h`}</b></td><td>${escapeHtml(item.source)}</td><td><span class="badge ${item.verified ? "paid" : "estimate"}">${item.verified ? "Verified" : "Unverified"}</span></td></tr>`).join("");
+    const partsOutput = partsLookupResult ? `<pre class="service-contract">${escapeHtml(JSON.stringify(partsLookupResult, null, 2))}</pre>` : "";
+    return shell(`${heading("Connected services", "Integrations", "Licensed labor, supplier ordering, accounting, and messaging connections.", false)}
+    <section class="messaging-panel"><h2>Licensed labor guide</h2>${integrationState("MOTOR", labor.motor?.configured)}${integrationState("ALLDATA", labor.alldata?.configured)}
+      <form class="form-grid" id="labor-lookup-form"><label>VIN<input name="vin" maxlength="17"/></label><label>Year<input name="year" type="number" min="1886" max="2200"/></label><label>Make<input name="make"/></label><label>Model<input name="model"/></label><label class="full">Operation<input name="query" required placeholder="Front brake pads and rotors"/></label><div class="full"><button class="primary" type="submit">${icon("search", 14)} Find labor time</button></div></form>
+      ${laborRows ? `<div class="data-panel"><table><thead><tr><th>Operation</th><th>Hours</th><th>Source</th><th>Status</th></tr></thead><tbody>${laborRows}</tbody></table></div>` : ""}</section>
+    <section class="messaging-panel"><h2>Parts ordering</h2>${integrationState("PartsTech", parts.partstech?.configured || parts.partstech?.hasPunchout)}${integrationState("Nexpart", parts.nexpart?.configured || parts.nexpart?.hasPunchout)}
+      <form class="form-grid" id="parts-search-form"><label>Provider<select name="provider"><option value="partstech">PartsTech</option><option value="nexpart">Nexpart</option></select></label><label>Action<select name="operation"><option value="search">Search</option><option value="quote">Quote</option><option value="order">Place order</option></select></label><label>Part / keyword or quote ID<input name="query" required/></label><label>VIN<input name="vin" maxlength="17"/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("send", 14)} Send to provider</button><button class="secondary" type="button" id="parts-punchout">${icon("external-link", 14)} Open punch-out</button></div></form>${partsOutput}</section>
+    <section class="messaging-panel"><h2>QuickBooks Online</h2>${integrationState("Intuit app", qbo.configured)}<p>Connect an administrator-approved Intuit app, then sync customers, invoices, and payments one way from MechPro.</p><button class="primary" id="quickbooks-connect" ${qbo.configured ? "" : "disabled"}>${icon("plug-zap", 14)} Connect QuickBooks</button><form class="form-grid" id="quickbooks-sync-form"><label>Record type<select name="entityType"><option value="customer">Customer</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></label><label>MechPro record ID<input name="entityId" required placeholder="customer-123 or INV-2041"/></label><div class="full"><button class="secondary" type="submit">${icon("refresh-cw", 14)} Sync to QuickBooks</button></div></form></section>`);
+  }
+  function support() {
+    if (!integrationStatus) void loadIntegrationStatus().then(render);
+    const statusUrl = integrationStatus?.support?.statusPageUrl;
+    return shell(`${heading("Help", "Help & support", "Self-service answers and a direct ticket path for shop-impacting issues.", false)}
+    <section class="messaging-panel"><div class="statement-head"><div><div class="eyebrow">Help center</div><h2>Common questions</h2></div>${icon("life-buoy", 20)}</div>
+      <details><summary>Why does a labor time say unverified?</summary><p>MOTOR or ALLDATA has not returned a licensed operation. Confirm the vehicle and operation, then enter shop time manually.</p></details>
+      <details><summary>Why is texting unavailable?</summary><p>The platform Twilio number, webhook, and A2P 10DLC campaign must be configured. Customers who text STOP remain blocked until they text START.</p></details>
+      <details><summary>How do I connect accounting?</summary><p>An admin opens Integrations, connects the approved Intuit app, and syncs MechPro records one way to QuickBooks Online.</p></details>
+      <details><summary>How do I import existing shop data?</summary><p>Use Import data for supported CSV files. Request assisted migration below for mapping, validation, and reconciliation.</p></details>
+      ${statusUrl ? `<p><a class="secondary" href="${escapeAttr(statusUrl)}" target="_blank" rel="noopener noreferrer">${icon("activity", 14)} Service status</a></p>` : ""}</section>
+    <section class="messaging-panel"><h2>Contact support</h2><form class="form-grid" id="support-ticket-form"><label>Category<select name="category"><option value="technical">Technical issue</option><option value="billing">Billing</option><option value="onboarding">Onboarding</option><option value="data_migration">Data migration</option><option value="feedback">Feedback</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="urgent">Urgent \u2014 shop blocked</option></select></label><label class="full">Subject<input name="subject" maxlength="160" required/></label><label class="full">What happened?<textarea name="description" maxlength="8000" required placeholder="Include the affected work order, expected result, and exact error. Do not include passwords or card data."></textarea></label><div class="full"><button class="primary" type="submit">${icon("send", 14)} Submit ticket</button></div></form></section>`);
+  }
+  function bindIntegrations() {
+    document.querySelector("#labor-lookup-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      try {
+        const result = await apiFetch("/labor-times/search", { method: "POST", body: JSON.stringify(data) });
+        laborLookupResults = result.results || [];
+        render();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    document.querySelector("#parts-search-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      if (data.operation === "order" && !confirm(`Place this ${data.provider} order? The supplier may charge the connected account.`)) return;
+      try {
+        partsLookupResult = await apiFetch(`/parts/${encodeURIComponent(data.provider)}/${encodeURIComponent(data.operation)}`, { method: "POST", body: JSON.stringify({ query: data.query, quoteId: data.query, vin: data.vin }) });
+        render();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    document.querySelector("#parts-punchout")?.addEventListener("click", async () => {
+      const provider = document.querySelector("#parts-search-form [name=provider]").value;
+      try {
+        const result = await apiFetch(`/parts/${encodeURIComponent(provider)}/punchout`);
+        window.open(result.url, "_blank", "noopener,noreferrer");
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    document.querySelector("#quickbooks-connect")?.addEventListener("click", async () => {
+      try {
+        const result = await apiFetch("/quickbooks/connect", { method: "POST", body: "{}" });
+        window.location.assign(result.authorizationUrl);
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    document.querySelector("#quickbooks-sync-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      try {
+        const result = await apiFetch("/quickbooks/sync", { method: "POST", body: JSON.stringify(data) });
+        toast(`Synced as QuickBooks ID ${result.syncMetadata?.quickBooksId || "created"}`);
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    document.querySelector("#support-ticket-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]"), data = Object.fromEntries(new FormData(event.target));
+      button.disabled = true;
+      try {
+        const result = await apiFetch("/support", { method: "POST", body: JSON.stringify(data) });
+        toast(`Support ticket ${result.id} submitted`);
+        event.target.reset();
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
   function openGlobalAssistant() {
     showModal(`<div class="modal wide global-assistant-modal"><div class="modal-head"><h2>MechPro Assistant</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">${liveAssistant()}</div></div>`);
     bindLiveAssistant();
@@ -3710,6 +3811,15 @@ button{margin-top:12px;padding:8px 14px}
   }
   async function deliverShopMessage({ channel, to, subject, body, metadata }) {
     const config = state.messagingSettings;
+    if (channel === "sms" && !integrationStatus) await loadIntegrationStatus();
+    if (channel === "sms" && integrationStatus?.sms?.enabled) {
+      try {
+        await apiFetch("/messaging/send", { method: "POST", body: JSON.stringify({ to, body, customerId: metadata?.customerId, workOrderId: metadata?.workOrderId, messageType: metadata?.type || "message" }) });
+        return { mode: "mechpro_sms" };
+      } catch (error) {
+        toast(error.message || "Built-in SMS was unavailable. Opening the device app instead.");
+      }
+    }
     if (config.enabled && config.endpoint) {
       try {
         const response = await fetch(config.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, to, subject, body, metadata, from: channel === "email" ? config.senderEmail : config.senderPhone, shopName: config.shopName }) });
@@ -5250,7 +5360,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function invoices() {
     const q = query.toLowerCase(), rows = state.invoices.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x);
-      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money3(x.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money3(paid)} \xB7 Balance ${money3(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money3(x.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money3(paid)} \xB7 Balance ${money3(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${x.number}">${icon("message-square", 13)} Text to pay</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
     }).join("");
     return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
@@ -5281,14 +5391,14 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       render();
     };
   }
-  async function startInvoiceCheckout(number) {
+  async function startInvoiceCheckout(number, textToPay = false) {
     const invoice = state.invoices.find((item) => item.number === number), config = state.billingSettings;
     if (!invoice) return;
     if (!config.enabled) {
       toast("This shop has not connected online card payments yet");
       return;
     }
-    const checkoutWindow = window.open("", "_blank");
+    const checkoutWindow = textToPay ? null : window.open("", "_blank");
     try {
       const data = await apiFetch("/payments/checkout-session", { method: "POST", body: JSON.stringify({ invoiceNumber: invoice.number, successUrl: `${location.origin}${location.pathname}#payment-success`, cancelUrl: `${location.origin}${location.pathname}#payment-cancel` }) });
       if (!data.url) throw new Error("Checkout service did not return a payment URL");
@@ -5296,9 +5406,14 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       invoice.checkoutCreatedAt = now();
       updateInvoiceInApi(invoice);
       save();
-      if (checkoutWindow) checkoutWindow.location = data.url;
+      if (textToPay) {
+        const customer = state.customers.find((item) => item.id === invoice.customerId || item.name === invoice.customer), phone = invoice.phone || customer?.phone;
+        if (!phone) throw new Error("Add a customer phone number before sending text-to-pay");
+        const result = await deliverShopMessage({ channel: "sms", to: phone, subject: "", body: `${state.messagingSettings.shopName || "Your shop"} invoice ${invoice.number}: pay securely at ${data.url}`, metadata: { type: "text_to_pay", customerId: customer?.id, invoiceNumber: invoice.number } });
+        toast(result.mode === "mechpro_sms" ? `Text-to-pay sent for ${invoice.number}` : `Text-to-pay opened in the device messaging app`);
+      } else if (checkoutWindow) checkoutWindow.location = data.url;
       else window.location.assign(data.url);
-      toast(`Opened secure card checkout for ${invoice.number}`);
+      if (!textToPay) toast(`Opened secure card checkout for ${invoice.number}`);
     } catch (error) {
       checkoutWindow?.close();
       toast(error.message || "The shop payment service could not create a checkout link");
@@ -5323,13 +5438,13 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   }
   async function upgradeShopPlan() {
     const plans = [["shop", "Shop \xB7 $139/mo"], ["solo", "Solo \xB7 $69/mo"], ["shop_pro", "Shop Pro \xB7 $279/mo"], ["enterprise", "Enterprise \xB7 $559/mo"]];
-    showModal(`<form class="modal" id="upgrade-plan-form"><div class="modal-head"><h2>Choose a plan</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Plan<select name="planId">${plans.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select></label><p>Unlimited users on every plan. Annual prepay is 2 months free once billing is connected. Live OEM programming is Shop Pro and Enterprise.</p><p class="login-error" id="upgrade-plan-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Continue</button></div></form>`);
+    showModal(`<form class="modal" id="upgrade-plan-form"><div class="modal-head"><h2>Choose a plan</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Plan<select name="planId">${plans.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select></label><label>Billing<select name="interval"><option value="monthly">Monthly</option><option value="annual">Annual \xB7 2 months free</option></select></label><p>Unlimited users on every plan. Live OEM programming is Shop Pro and Enterprise.</p><p class="login-error" id="upgrade-plan-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Continue</button></div></form>`);
     document.querySelector("#upgrade-plan-form").onsubmit = async (event) => {
       event.preventDefault();
-      const planId = new FormData(event.target).get("planId"), error = document.querySelector("#upgrade-plan-error");
+      const data = Object.fromEntries(new FormData(event.target)), error = document.querySelector("#upgrade-plan-error");
       try {
-        const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
-        toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
+        const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: data.planId, interval: data.interval, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+        toast("Opening secure subscription checkout");
         if (result.url && (String(result.url).startsWith("http") || String(result.url).startsWith("/"))) location.assign(result.url);
       } catch (requestError) {
         error.textContent = requestError.message || "Could not start upgrade";
@@ -5497,7 +5612,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return;
     }
     if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0];
-    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, reports, settings };
+    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, integrations, support, reports, settings };
     if (typeof accounting === "function") views.accounting = accounting;
     if (typeof payroll === "function") views.payroll = payroll;
     if (typeof imports === "function") views.imports = imports;
@@ -5516,6 +5631,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
+    bindIntegrations();
     document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan);
     bindEstimateActions();
     bindMessagingService();
@@ -5644,6 +5760,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       };
     });
     document.querySelectorAll("[data-pay-invoice]").forEach((button) => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice));
+    document.querySelectorAll("[data-text-pay]").forEach((button) => button.onclick = () => startInvoiceCheckout(button.dataset.textPay, true));
     document.querySelectorAll("[data-record-payment]").forEach((button) => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method));
     document.querySelectorAll("[data-edit-tax]").forEach((button) => button.onclick = () => openInvoiceTax(button.dataset.editTax));
   }
@@ -5842,7 +5959,8 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     document.querySelector("#modal-root")?.remove();
   }
   function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) {
-    return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money3(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
+    const verified = Boolean(line.laborVerified), source = line.laborSource || "Unverified shop estimate";
+    return `<article class="new-estimate-line" data-labor-source="${escapeAttr(source)}" data-labor-verified="${verified ? "1" : "0"}"><div class="estimate-line-head"><strong>Service line</strong><div><button class="mini-action lookup-labor-time" type="button">${icon("badge-check", 13)} Labor guide</button><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><small class="labor-source"><span class="badge ${verified ? "paid" : "estimate"}">${verified ? "Verified" : "Unverified"}</span> ${escapeHtml(source)}</small><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money3(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
   }
   function newOrderServiceExplanation(service, fallback) {
     const source = aiKeywords(service);
@@ -5854,7 +5972,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function readNewOrderEstimate() {
     const lines = [...document.querySelectorAll(".new-estimate-line")].map((row) => {
       const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts2 = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), labor2 = Math.round(hours * 165 * 100) / 100;
-      return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor: labor2, parts: parts2, total: Math.round((labor2 + parts2) * 100) / 100 };
+      return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor: labor2, parts: parts2, laborSource: row.dataset.laborSource || "Unverified shop estimate", laborVerified: row.dataset.laborVerified === "1", total: Math.round((labor2 + parts2) * 100) / 100 };
     }).filter((line) => line.service);
     const labor = lines.reduce((sum, line) => sum + line.labor, 0), laborHours = lines.reduce((sum, line) => sum + line.hours, 0), parts = lines.reduce((sum, line) => sum + line.parts, 0), shopSupplies = lines.length ? 12 : 0, subtotal = Math.round((labor + parts + shopSupplies) * 100) / 100, tax = Math.round(subtotal * 0.0825 * 100) / 100, total = Math.round((subtotal + tax) * 100) / 100;
     return { lines, labor, laborHours, parts, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: 8.25, total };
@@ -5879,6 +5997,24 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         button.closest(".new-estimate-line").remove();
         refreshNewOrderEstimate();
       });
+      lines.querySelectorAll(".lookup-labor-time").forEach((button) => button.onclick = async () => {
+        const row = button.closest(".new-estimate-line"), query2 = row.querySelector(".estimate-service").value.trim(), vehicle = form.elements.vehicle.value.trim();
+        button.disabled = true;
+        try {
+          const result = await apiFetch("/labor-times/search", { method: "POST", body: JSON.stringify({ vin: form.elements.vin?.value || "", query: query2, model: vehicle }) }), labor = (result.results || [])[0];
+          if (!labor) throw new Error("No labor operation returned");
+          if (labor.hours != null) row.querySelector(".estimate-hours").value = labor.hours;
+          row.dataset.laborSource = labor.source || "Unverified shop estimate";
+          row.dataset.laborVerified = labor.verified ? "1" : "0";
+          row.querySelector(".labor-source").innerHTML = `<span class="badge ${labor.verified ? "paid" : "estimate"}">${labor.verified ? "Verified" : "Unverified"}</span> ${escapeHtml(row.dataset.laborSource)}`;
+          refreshNewOrderEstimate();
+          toast(labor.verified ? `Verified ${labor.provider} labor time applied` : "No licensed result; keeping the shop estimate unverified");
+        } catch (error) {
+          toast(error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
     };
     document.querySelector("#generate-new-estimate").onclick = () => {
       const vehicle = form.elements.vehicle.value.trim(), complaint = form.elements.complaint.value.trim(), requested = form.elements.requestedServices.value.trim();
@@ -5888,7 +6024,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       }
       const services = (requested || complaint).split(/\n|,|;/).map((item) => item.trim()).filter(Boolean), generated = services.map((service) => {
         const line = estimateLocal(vehicle, service).lines[0];
-        return { ...line, notes: newOrderServiceExplanation(service, line.notes) };
+        return { ...line, laborSource: "Unverified shop estimate", laborVerified: false, notes: newOrderServiceExplanation(service, line.notes) };
       });
       lines.innerHTML = generated.map(newOrderEstimateRow).join("");
       bindRows();
@@ -7254,7 +7390,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const pending = line.priceStatus === "pending";
     const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money3(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money3(line.laborRate)}`;
     const assigned = line.type === "labor" ? normalizeTechnicianIds(line).map(technicianName) : [];
-    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money3(line.total)}</b></article>`;
+    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small><span class="badge ${line.laborVerified ? "paid" : "estimate"}">${line.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(line.laborSource || "Shop estimate")}</small><small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money3(line.total)}</b></article>`;
   }
   function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
     const { customer, vehicle } = estimateParty(estimate, record);
@@ -7981,7 +8117,7 @@ ${catRows}
       }
     });
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, integrationStatus, laborLookupResults, partsLookupResult, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -8009,6 +8145,9 @@ ${catRows}
       init_bay();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
+      integrationStatus = null;
+      laborLookupResults = [];
+      partsLookupResult = null;
       assistantConversation = [];
       assistantPaused = false;
       assistantSessionId = "";
@@ -8134,7 +8273,7 @@ ${catRows}
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai"] };
+      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "integrations", "support", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll", "integrations", "support"], office: ["customers", "shopops", "chat", "invoices", "accounting", "messaging", "integrations", "support"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "messaging", "integrations", "support"] };
       attentionDismissBound = false;
       userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
@@ -9089,7 +9228,7 @@ ${catRows}
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
         const item = normalizeEstimateLine(line, index), part = item.type === "part";
-        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-labor-verified="${item.laborVerified ? "1" : "0"}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
     <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
       <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
@@ -9122,6 +9261,7 @@ ${catRows}
             committedQuantity: type === "part" && inventory ? quantity : 0,
             priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
+            laborVerified: row.dataset.laborVerified === "1",
             technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
           }, index);
         }).filter((line) => line.description && line.quantity > 0);
@@ -10033,6 +10173,8 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         { route: "imports", icon: "file-up", label: "Import data" },
         { route: "messaging", icon: "message-square-more", label: "Messaging" },
         { route: "payments", icon: "credit-card", label: "Payments" },
+        { route: "integrations", icon: "plug-zap", label: "Integrations" },
+        { route: "support", icon: "life-buoy", label: "Help & support" },
         { route: "settings", icon: "settings", label: "Settings" }
       ]
     }
