@@ -31,10 +31,18 @@ function mockEnvironment() {
                     data_json: JSON.stringify(fixture.staleEntitySnapshot),
                     created_by: 'writer-1',
                     created_at: fixture.staleEntitySnapshot.createdAt,
+                    updated_at: fixture.staleEntitySnapshot.updatedAt || fixture.staleEntitySnapshot.createdAt,
                   };
                 }
                 const record = entities.get(key(args[0], args[1], args[2]));
-                return record ? { data_json: JSON.stringify(record), created_by: 'writer-1', created_at: record.createdAt } : null;
+                return record
+                  ? {
+                    data_json: JSON.stringify(record),
+                    created_by: 'writer-1',
+                    created_at: record.createdAt,
+                    updated_at: record.updatedAt || record.createdAt,
+                  }
+                  : null;
               }
               if (/FROM customer_document_links/i.test(sql)) {
                 return links.find(link => link.token_hash === args[0]) || null;
@@ -60,6 +68,13 @@ function mockEnvironment() {
                 const existing = entities.get(key(args[2], args[3], args[4]));
                 if (/json_extract/i.test(sql) && existing && isEstimateLocked(existing)) {
                   return { success: true, meta: { changes: 0 } };
+                }
+                if (/AND updated_at = \?/i.test(sql) && existing) {
+                  const expectedUpdatedAt = args[5];
+                  const currentUpdatedAt = existing.updatedAt || existing.createdAt;
+                  if (expectedUpdatedAt && currentUpdatedAt && expectedUpdatedAt !== currentUpdatedAt) {
+                    return { success: true, meta: { changes: 0 } };
+                  }
                 }
                 entities.set(key(args[2], args[3], args[4]), JSON.parse(args[0]));
                 return { success: true, meta: { changes: 1 } };
@@ -455,6 +470,46 @@ test('remote decline-all marks every line declined, zeros money, and locks the e
     () => issueLink(fixture, 'estimate', 'RO-1100'),
     error => error.status === 409 && /already locked/i.test(error.message),
   );
+});
+
+test('customer approval CAS rejects when staff advanced updated_at after the link loaded', async () => {
+  const fixture = mockEnvironment();
+  const order = estimateOrder();
+  order.updatedAt = '2026-10-02T10:00:00.000Z';
+  fixture.entities.set(fixture.key('shop-1', 'orders', 'RO-1100'), order);
+  const link = await issueLink(fixture, 'estimate', 'RO-1100');
+  const token = new URL(link.url).pathname.split('/').pop();
+
+  // Simulate the customer reading the unlocked estimate, then staff saving a newer revision.
+  fixture.staleEntitySnapshot = structuredClone(order);
+  fixture.staleEntityReads = 1;
+  order.updatedAt = '2026-10-02T11:00:00.000Z';
+  order.estimate.lines.push({
+    id: 'labor-2',
+    type: 'labor',
+    description: 'Additional repair',
+    hours: 2,
+    laborRate: 165,
+  });
+
+  await assert.rejects(
+    () => handleCustomerDocument(new Request(link.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sign',
+        authorizationName: 'Pat Customer',
+        signatureDataUrl: `data:image/png;base64,${Buffer.from('png-signature').toString('base64')}`,
+        decisions: { labor: 'approved', part: 'declined' },
+      }),
+    }), fixture.env, token),
+    error => error.status === 409 && /already been approved or declined/i.test(error.message),
+  );
+
+  const saved = fixture.entities.get(fixture.key('shop-1', 'orders', 'RO-1100'));
+  assert.equal(saved.updatedAt, '2026-10-02T11:00:00.000Z');
+  assert.equal(saved.estimate.lines.length, 3);
+  assert.equal(saved.estimateApproval, undefined);
 });
 
 test('email and SMS estimate links cannot race to overwrite each other', async () => {

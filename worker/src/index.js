@@ -445,16 +445,39 @@ export async function putEntity(
     updatedAt: now,
   };
   if (requireUnlockedEstimate) {
-    const outcome = await env.DB.prepare(`
+    // CAS on updated_at inside the same UPDATE as the unlock guard. The early
+    // If-Match check above is not atomic with this write, so a concurrent staff
+    // line edit can otherwise slip in and be overwritten by a stale approval.
+    const casToken = expectedUpdatedAt || existing?.updated_at || null;
+    let sql = `
       UPDATE entities
       SET data_json = ?, updated_at = ?
       WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
         AND COALESCE(json_extract(data_json, '$.linesLockedAt'), '') = ''
         AND COALESCE(json_extract(data_json, '$.estimateApproval.status'), '')
           NOT IN ('approved', 'declined')
-    `).bind(JSON.stringify(record), now, context.shopId, type, id).run();
+    `;
+    const binds = [JSON.stringify(record), now, context.shopId, type, id];
+    if (casToken) {
+      sql += ' AND updated_at = ?';
+      binds.push(casToken);
+    }
+    const outcome = await env.DB.prepare(sql).bind(...binds).run();
     if (!outcome?.meta?.changes) {
-      throw new HttpError(409, 'This estimate has already been approved or declined');
+      const current = await env.DB.prepare(`
+        SELECT updated_at,
+          json_extract(data_json, '$.linesLockedAt') AS lines_locked_at,
+          json_extract(data_json, '$.estimateApproval.status') AS approval_status
+        FROM entities
+        WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
+      `).bind(context.shopId, type, id).first();
+      if (current && (
+        String(current.lines_locked_at || '')
+        || ['approved', 'declined'].includes(String(current.approval_status || ''))
+      )) {
+        throw new HttpError(409, 'This estimate has already been approved or declined');
+      }
+      throw new HttpError(409, 'Record was updated elsewhere. Reload before saving again.');
     }
     return record;
   }
