@@ -569,8 +569,19 @@ function bindShopOperations() { document.querySelector("#open-oem-programming")?
     if (panel) panel.innerHTML = "<p>Looking up…</p>";
     try {
       const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
-      const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
-      if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+      if (result.provider === "web_estimate") {
+        if (!result.found) {
+          if (panel) panel.innerHTML = `<p class="login-error"><b>no estimate found</b> — ${escapeHtml(result.message || "web estimate unavailable")}. Manual entry stays available below.</p>`;
+          toast(result.message || "no estimate found");
+          return;
+        }
+        const sources = (result.sources || []).map(source => `<li><a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.title || source.url)}</a></li>`).join("");
+        const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<div class="messaging-status idle"><div><strong>web estimate — not book time</strong><span>Average ${escapeHtml(String(result.averageHours))} hrs from ${escapeHtml(String(result.sourceCount || 0))} source(s). Not ALLDATA / MOTOR / ShopKey book time.</span></div></div><table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table><ol class="ops-note">${sources}</ol>`;
+      } else {
+        const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+      }
       window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map(line => [line.id, line]));
       document.querySelectorAll("[data-add-labor-line]").forEach(button => {
         button.onclick = () => {
