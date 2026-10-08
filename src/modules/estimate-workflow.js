@@ -28,6 +28,9 @@ export function orderHasTechnician(order = {}, technician = {}) {
   const names = [technician.name, technician.techName].filter(Boolean);
   if (order.tech && names.includes(order.tech)) return true;
   const id = String(technician.id || '');
+  if (Array.isArray(order.assignments) && order.assignments.some(item => (
+    (id && item.employeeId === id) || names.includes(item.name)
+  ))) return true;
   return Boolean(id && (order.estimate?.lines || []).some(line => (
     line.type === 'labor' && normalizeTechnicianIds(line).includes(id)
   )));

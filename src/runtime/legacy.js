@@ -18,6 +18,29 @@ import { presentCatalogInspection, printCatalogInspection } from './catalog-insp
 import { applyQueuedEntityMutations } from './entity-persistence.js';
 import { createMutationQueueStore } from './mutation-queue-store.js';
 import { paymentSummary } from '../modules/payments.js';
+import { cardTerminalModel, recoveryWriteup } from '../modules/card-terminal.js';
+import { syncHelp } from '../modules/help-menu.js';
+import {
+  applyAssignments,
+  assignmentSummary,
+  attributeClockHours,
+  classificationFor,
+  clockedHours,
+  orderIncludesTechnician,
+  payrollLinesForOrder,
+  PAY_PLANS,
+  EMPLOYEE_CLASSIFICATIONS,
+  technicianTrackerHtml,
+  technicianPerformance,
+} from '../modules/technician-assignment.js';
+import {
+  INTAKE_STORAGE_KEY,
+  emptyIntakeDraft,
+  intakeOrderPayload,
+  localDiagnosticChecklist,
+  mountIntakeWizard,
+  serializableIntake,
+} from '../modules/intake-wizard.js';
 import {
   approvedEstimate,
   billableEstimateLines,
@@ -89,7 +112,57 @@ async function loadChatFromApi() { try { const [conversations, messages] = await
 async function sendChatMessage(conversationId, body) { const record = await apiFetch("/entities/chatmessages", { method: "POST", body: JSON.stringify({ id: `chatmessage-${Date.now()}`, conversationId, body, createdAt: now() }) }); state.chatMessages.push(record); markChatRead(conversationId); return record }
 function scheduleChatRefresh() { clearTimeout(chatRefreshTimer); if (state.route !== "chat") return; chatRefreshTimer = setTimeout(async () => { if (state.route !== "chat") return; await loadChatFromApi(); render() }, 10000) }
 function bindTeamChat() { document.querySelector("#new-direct-chat")?.addEventListener("click", openDirectChat); document.querySelector("#empty-new-direct")?.addEventListener("click", openDirectChat); document.querySelector("#new-group-chat")?.addEventListener("click", () => openGroupChat()); document.querySelector("#manage-chat-group")?.addEventListener("click", () => openGroupChat(state.conversations.find(item => item.id === chatConversationId))); document.querySelector("#refresh-chat")?.addEventListener("click", async () => { await loadChatFromApi(); toast("Team chat refreshed"); render() }); document.querySelectorAll("[data-chat-thread]").forEach(button => button.onclick = () => { chatConversationId = button.dataset.chatThread; markChatRead(chatConversationId); render() }); document.querySelector("#chat-message-form")?.addEventListener("submit", async event => { event.preventDefault(); const body = String(new FormData(event.target).get("body") || "").trim(), button = event.target.querySelector("button"); if (!body) return; button.disabled = true; try { await sendChatMessage(chatConversationId, body); render() } catch (error) { toast("Message could not be sent"); button.disabled = false } }) }
-function payments() { const config = state.billingSettings; return shell(`${heading("Online payments", "Payment service", "Enable shops to accept customer credit and debit card payments through a connected processing account.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "credit-card", 17)}<div><strong>${config.enabled ? "Online card payments active" : "Online card payments not connected"}</strong><span>${config.enabled ? `Connected account: ${config.accountLabel || "Stripe Connect"}` : "Connect the shop account through Stripe's hosted onboarding flow."}</span></div></div><div class="service-contract"><h2>Stripe Connect hosted onboarding</h2><p>The subscribing shop completes card-processing onboarding on a Stripe-hosted page. The platform endpoint keeps Stripe secret keys server-side, creates checkout sessions, and returns a hosted payment URL. MechPro never handles raw card data.</p><code>POST /checkout-sessions<br>{ invoiceId, amount, customer, description, successUrl, cancelUrl }<br>Response: { url: "https://checkout.stripe.com/..." }</code></div><form class="form-grid" id="billing-form"><label class="full">Stripe Connect onboarding URL *<input name="onboardingUrl" type="url" value="${config.onboardingUrl}" placeholder="https://connect.stripe.com/setup/..."/></label><label class="full">Secure checkout-session endpoint *<input name="checkoutEndpoint" type="url" value="${config.checkoutEndpoint}" placeholder="https://billing.yourshop.com/checkout-sessions"/></label><label>Connected account label<input name="accountLabel" value="${config.accountLabel}" placeholder="e.g. acct_... or Main Shop Stripe"/></label><label>Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this service to create hosted debit and credit card checkout links</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="open-stripe-onboarding">${icon("external-link", 14)} Connect Stripe account</button><button class="primary" type="submit">${icon("save", 14)} Save payment service</button></div></form></section>`) }
+function payments() {
+  const config = state.billingSettings;
+  const status = stripePaymentStatus;
+  const configured = Boolean(status?.configured || config.enabled);
+  const shopId = status?.shopId || sessionClaimShopId(authSession()?.claims) || "";
+  const webhookUrl = status?.webhookUrl || (shopId ? `${location.origin}${cloudflareConfig.apiUrl}/payments/webhook/${encodeURIComponent(shopId)}` : "");
+  const statusLabel = configured
+    ? `Connected${config.accountLabel ? ` · ${escapeHtml(config.accountLabel)}` : ""}`
+    : "Stripe keys not saved yet";
+  return shell(`${heading("Online payments", "Payment service", "Connect this shop's Stripe account so customers can pay invoices online with a hosted Checkout link.", false)}<section class="messaging-panel"><div class="messaging-status ${configured ? "ready" : "idle"}">${icon(configured ? "circle-check" : "credit-card", 17)}<div><strong>${configured ? "Online card payments ready" : "Online card payments not connected"}</strong><span>${statusLabel}. Secrets stay encrypted on the Worker — the browser never stores them.</span></div></div><div class="service-contract"><h2>Stripe Checkout for invoices</h2><p>Paste your Stripe secret key and webhook signing secret. MechPro creates Checkout Sessions through <code>POST /payments/checkout-session</code> and records payments when Stripe posts <code>checkout.session.completed</code> to your shop webhook.</p><label class="full">Webhook endpoint (Stripe Dashboard → Developers → Webhooks)<input id="stripe-webhook-url" readonly value="${escapeAttr(webhookUrl)}" placeholder="Sign in to load the shop webhook URL"/><div class="messaging-actions"><button class="secondary" type="button" id="copy-stripe-webhook" ${webhookUrl ? "" : "disabled"}>${icon("copy", 14)} Copy webhook URL</button></div></label><p class="ai-disclaimer">Subscribe the webhook to event <b>checkout.session.completed</b> only. Use test keys (<code>sk_test_</code>) until you are ready for live cards.</p></div><form class="form-grid" id="billing-form"><label class="full">Stripe secret key *<input name="secretKey" type="password" autocomplete="off" placeholder="sk_test_… or sk_live_…" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved key. Enter a new key only to replace it." : "Required. Starts with sk_test_ or sk_live_."}</small></label><label class="full">Webhook signing secret *<input name="webhookSecret" type="password" autocomplete="off" placeholder="whsec_…" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved signing secret." : "From the Stripe webhook endpoint details."}</small></label><label class="full">Stripe publishable key<input name="publishableKey" autocomplete="off" placeholder="pk_test_… or pk_live_…"/><small>${status?.hasPublishableKey ? "Saved. Enter a new key only to replace it. Required for phone orders." : "Starts with pk_test_ or pk_live_. Required before the office can type a card for a phone order."}</small></label><label>Account label<input name="accountLabel" value="${escapeAttr(config.accountLabel || "")}" placeholder="e.g. Main shop Stripe"/></label><label>Shop name on receipts<input name="shopName" value="${escapeAttr(config.shopName || "Your Car Guy")}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled || configured ? "checked" : ""}/><span>Enable Pay online on open invoices</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="refresh-stripe-status">${icon("refresh-cw", 14)} Refresh status</button><button class="primary" type="submit">${icon("save", 14)} Save Stripe keys</button></div></form></section>`);
+}
+let posReaders = null;
+let posConfigured = false;
+let posCharge = null;
+let posPollTimer = 0;
+let posSelectedId = "";
+let posMode = "reader";
+let posPhoneEntry = false;
+let posStripe = null;
+function cardTerminal() {
+  const model = cardTerminalModel({
+    orders: state.orders || [],
+    invoices: state.invoices || [],
+    payments: state.payments || [],
+    selectedId: posSelectedId,
+    readers: posReaders || [],
+    configured: posConfigured,
+    paymentSummary,
+  });
+  const selected = model.selected;
+  if (selected) posSelectedId = selected.targetId;
+  const options = model.choices.map(choice => `<option value="${escapeAttr(choice.targetId)}" ${selected?.targetId === choice.targetId ? "selected" : ""}>${escapeHtml(choice.label)} · due ${money(choice.balance)}</option>`).join("");
+  const readerOptions = model.readers.map(reader => `<option value="${escapeAttr(reader.id)}">${escapeHtml(reader.label)} · ${escapeHtml(reader.status)}</option>`).join("");
+  const writeup = selected ? recoveryWriteup({ customer: selected.customer, vehicle: selected.vehicle }) : recoveryWriteup({});
+  const chargeNote = posCharge ? `<p class="pos-status" data-phase="${escapeAttr(posCharge.phase || "")}">${escapeHtml(posCharge.message || "")}</p>` : "";
+  const connection = posReaders === null
+    ? "Checking the shop Stripe account…"
+    : model.configured
+      ? (model.readers.length ? `${model.readers.length} reader${model.readers.length === 1 ? "" : "s"} online in this Stripe account.` : "Stripe is connected. No card reader is registered yet. Add one in the Stripe Dashboard under Terminal, then refresh.")
+      : "Stripe is not connected. An owner saves the shop keys on the Payments page before this counter can take a card.";
+  const identity = `<div class="full pos-identity"><span>Customer</span><strong>${escapeHtml(selected?.customer || "Select a work order")}</strong><span>Vehicle</span><strong>${escapeHtml(selected?.vehicle || "Vehicle comes from the work order")}</strong></div>`;
+  const amountField = `<label>Amount<input name="amount" id="pos-amount" type="number" min="0.50" step="0.01" value="${selected && selected.balance >= 0.5 ? selected.balance.toFixed(2) : ""}" required/></label>`;
+  const orderField = `<label class="full">Work order<select name="orderId" id="pos-order" required>${options || `<option value="">No work orders</option>`}</select></label>`;
+  const phoneNotice = posPhoneEntry
+    ? "Type the card number, expiration, security code, and postal code from the phone call. Stripe collects the card. MechPro stores the approval on the work order."
+    : "Add the Stripe publishable key on the Payments page first. It starts with pk_test_ or pk_live_ and must belong to the same account as the secret key.";
+  const counter = posMode === "phone"
+    ? `<form class="form-grid" id="pos-phone-form">${orderField}${identity}${amountField}<div class="full" id="pos-card-element"></div><p class="ai-disclaimer">${escapeHtml(phoneNotice)}</p><div class="full messaging-actions"><button class="primary" type="submit" id="pos-phone-prepare" ${!selected || selected.balance < 0.5 || !posPhoneEntry ? "disabled" : ""}>${icon("credit-card", 14)} Enter card</button><button class="primary" type="button" id="pos-phone-charge" hidden>${icon("check", 14)} Charge card</button></div><p class="pos-status" id="pos-phone-status" hidden></p></form>`
+    : `<form class="form-grid" id="pos-form">${orderField}${identity}${amountField}<label>Reader<select name="readerId" id="pos-reader" required>${readerOptions || `<option value="">No reader</option>`}</select></label><div class="full messaging-actions"><button class="secondary" type="button" id="pos-refresh">${icon("refresh-cw", 14)} Refresh readers</button><button class="secondary" type="button" id="pos-cancel" ${posCharge ? "" : "disabled"}>${icon("x", 14)} Cancel on reader</button><button class="primary" type="submit" id="pos-charge" ${!selected || selected.balance < 0.5 || !model.readers.length ? "disabled" : ""}>${icon("credit-card", 14)} Charge card</button></div>${chargeNote}</form>`;
+  return shell(`${heading("Front counter", "Card terminal", "Take a card on the reader, or type a card for a purchase made over the phone.", false)}<section class="messaging-panel pos-terminal"><div class="messaging-status ${model.configured ? "ready" : "idle"}">${icon("credit-card", 17)}<div><strong>${posMode === "phone" ? "Phone order" : model.configured ? "Card reader ready" : "Card reader not connected"}</strong><span>${escapeHtml(posMode === "phone" ? phoneNotice : connection)}</span></div></div><div class="accounting-tabs"><button class="tab ${posMode === "reader" ? "active" : ""}" type="button" data-pos-mode="reader">Card reader</button><button class="tab ${posMode === "phone" ? "active" : ""}" type="button" data-pos-mode="phone">Phone order</button></div>${counter}<section class="pos-writeup"><h2>Technician write-up</h2><p>The recovery note uses the customer and vehicle on the selected work order.</p><pre id="pos-writeup">${escapeHtml(writeup.ready ? writeup.text : "Select a work order that has both a customer name and a vehicle. Those details are written into the note. They are not filled in from memory.")}</pre><button class="secondary" type="button" id="pos-save-writeup" ${writeup.ready ? "" : "disabled"}>${icon("save", 14)} Save on work order</button></section></section>`);
+}
 function messaging() { const config = state.messagingSettings; return shell(`${heading("Delivery infrastructure", "Messaging service", "Connect this shop's own secure delivery service for automatic email and SMS.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "circle-alert", 17)}<div><strong>${config.enabled ? "Shop messaging service active" : "Native device messaging is active"}</strong><span>${config.enabled ? "Estimate and customer messages will post to the configured shop endpoint." : "Messages currently open the device email or SMS app."}</span></div></div><div class="service-contract"><h2>Shop-managed delivery endpoint</h2><p>Configure a secure endpoint owned by the subscribing shop. It stores SMTP and SMS provider credentials server-side; MechPro never stores or exposes those credentials in the browser.</p><code>POST /messages<br>{ channel: "email" | "sms", to, subject, body, metadata }</code></div><form class="form-grid" id="messaging-form"><label class="full">Secure service endpoint *<input name="endpoint" type="url" value="${config.endpoint}" placeholder="https://messaging.yourshop.com/messages"/></label><label>Sender email<input name="senderEmail" type="email" value="${config.senderEmail}" placeholder="service@yourshop.com"/></label><label>Sender phone<input name="senderPhone" type="tel" value="${config.senderPhone}" placeholder="+18065550100"/></label><label class="full">Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this endpoint for customer email and SMS delivery</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="test-messaging">${icon("send", 14)} Test configuration</button><button class="primary" type="submit">${icon("save", 14)} Save messaging service</button></div></form></section>`) }
 let assistantConversation = [], assistantPaused = false, assistantSessionId = "";
 function openGlobalAssistant() { showModal(`<div class="modal wide global-assistant-modal"><div class="modal-head"><h2>MechPro Assistant</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">${liveAssistant()}</div></div>`); bindLiveAssistant(); }
@@ -179,7 +252,7 @@ const seed = {
   estimates: [],
   // Default messaging settings – replace with your real service endpoint to enable email/SMS delivery.
   messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
-  billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
+  billingSettings: { enabled: false, provider: "stripe", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy", shopId: "", webhookUrl: "" },
   payments: [],
   taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly", ein: "", texasTaxpayerNumber: "", webfileNumber: "", jurisdictions: null },
   chartOfAccounts: [
@@ -198,6 +271,7 @@ const seed = {
   ]
 };
 const LOCAL_PREFERENCES_VERSION = 2;
+let stripePaymentStatus = null;
 let state = load(), filter = "active", query = "", importPreview = null, accountingTab = "overview", payrollPeriodKey = null, taxPackageRange = null, filingCenterOpen = false, shopOpsTab = "vehicles", reminderFilter = "all", aiTab = "workflow", aiResult = null, taxReportResult = null, chatConversationId = null, chatRefreshTimer = null, platformAccounts = null, platformAccountsLoading = false, elmPort = null, pendingAuthProfile = null;
 const usStates = [{ code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" }, { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" }, { code: "CT", name: "Connecticut" }, { code: "DE", name: "Delaware" }, { code: "DC", name: "District of Columbia" }, { code: "FL", name: "Florida" }, { code: "GA", name: "Georgia" }, { code: "HI", name: "Hawaii" }, { code: "ID", name: "Idaho" }, { code: "IL", name: "Illinois" }, { code: "IN", name: "Indiana" }, { code: "IA", name: "Iowa" }, { code: "KS", name: "Kansas" }, { code: "KY", name: "Kentucky" }, { code: "LA", name: "Louisiana" }, { code: "ME", name: "Maine" }, { code: "MD", name: "Maryland" }, { code: "MA", name: "Massachusetts" }, { code: "MI", name: "Michigan" }, { code: "MN", name: "Minnesota" }, { code: "MS", name: "Mississippi" }, { code: "MO", name: "Missouri" }, { code: "MT", name: "Montana" }, { code: "NE", name: "Nebraska" }, { code: "NV", name: "Nevada" }, { code: "NH", name: "New Hampshire" }, { code: "NJ", name: "New Jersey" }, { code: "NM", name: "New Mexico" }, { code: "NY", name: "New York" }, { code: "NC", name: "North Carolina" }, { code: "ND", name: "North Dakota" }, { code: "OH", name: "Ohio" }, { code: "OK", name: "Oklahoma" }, { code: "OR", name: "Oregon" }, { code: "PA", name: "Pennsylvania" }, { code: "RI", name: "Rhode Island" }, { code: "SC", name: "South Carolina" }, { code: "SD", name: "South Dakota" }, { code: "TN", name: "Tennessee" }, { code: "TX", name: "Texas" }, { code: "UT", name: "Utah" }, { code: "VT", name: "Vermont" }, { code: "VA", name: "Virginia" }, { code: "WA", name: "Washington" }, { code: "WV", name: "West Virginia" }, { code: "WI", name: "Wisconsin" }, { code: "WY", name: "Wyoming" }];
 function sanitizeUsers(users) { return users.map(({ password, ...user }) => user) }
@@ -274,15 +348,15 @@ function icon(name, size = 18) { return `<i data-lucide="${name}" style="width:$
 function money(value) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value) }
 function initials(name) { return name.split(/\s+/).map(x => x[0]).slice(0, 2).join("").toUpperCase() }
 const roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai"] };
+const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "pos", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai"] };
 function currentUser() { const session = authSession(); if (!session || !desktopEntitlementVerified) return null; const email = String(session.claims.email || "").trim().toLowerCase(); const profile = state.users.find(user => user.id === state.currentUserId && user.active && user.email.toLowerCase() === email) || null; if (!profile) return null; const jwtRole = sessionClaimRole(session.claims); return jwtRole && jwtRole !== profile.role ? { ...profile, role: jwtRole } : profile }
 function canAccess(route) { return !!currentUser() && roleRoutes[currentUser().role].includes(route) }
-function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => order.tech === user.techName) : state.orders }
+function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => orderIncludesTechnician(order, user, state.users)) : state.orders }
 function weekPeriod(date = new Date()) { const day = date.getDay(), monday = new Date(date); monday.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); monday.setHours(0, 0, 0, 0); const friday = new Date(monday); friday.setDate(monday.getDate() + 4); return { key: monday.toISOString().slice(0, 10), start: monday.toLocaleDateString("en-US", { month: "short", day: "numeric" }), end: friday.toLocaleDateString("en-US", { month: "short", day: "numeric" }) } }
 function shopDayLabel(date = new Date()) { return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) }
 function relativePromiseHint() { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); return `Tomorrow, ${tomorrow.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }
 function employeeByTech(name) { return state.users.find(user => user.techName === name && user.active) }
-function syncPayroll(order) { if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return; const employee = employeeByTech(order.tech); if (!employee) return; const hours = Number(order.laborHours ?? (Number(order.labor || 0) / 165)); if (!hours) return; const period = weekPeriod(), entry = state.payrollEntries.find(item => item.workOrderId === order.id); const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() }; if (entry) { Object.assign(entry, line); updatePayrollEntryInApi(entry) } else { state.payrollEntries.push(line); pushPayrollEntryToApi(line) } }
+function syncPayroll(order) { const period = weekPeriod(); const lines = payrollLinesForOrder({ order, users: state.users, clocks: state.jobClockEntries, periodKey: period.key, nowIso: now() }); lines.forEach(line => { const entry = state.payrollEntries.find(item => item.id === line.id || (item.workOrderId === line.workOrderId && item.employeeId === line.employeeId && item.periodKey === line.periodKey)); if (entry) { Object.assign(entry, line); updatePayrollEntryInApi(entry) } else { state.payrollEntries.push(line); pushPayrollEntryToApi(line) } }) }
 function syncAllPayroll() { state.orders.forEach(syncPayroll); save() }
 function now() { return new Date().toISOString() }
 function openShift(userId = currentUser()?.id) { return state.shiftEntries.find(entry => entry.userId === userId && !entry.clockOut) }
@@ -292,8 +366,8 @@ function formatTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "
 function formatHours(hours) { return `${Number(hours || 0).toFixed(2)} hr` }
 function jobTrackedHours(workOrderId) { return state.jobClockEntries.filter(entry => entry.workOrderId === workOrderId && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }
 function toggleShift() { const user = currentUser(), shift = openShift(user.id); if (shift) { shift.clockOut = now(); shift.hours = hoursBetween(shift.clockIn, shift.clockOut); updateShiftEntryInApi(shift); toast(`Shift clocked out: ${formatHours(shift.hours)}`) } else { const entry = { id: `shift-${Date.now()}`, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.shiftEntries.push(entry); pushShiftEntryToApi(entry); toast("Shift clocked in") }; save(); render() }
-function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || order.tech !== user.techName) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
-function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
+function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || !orderIncludesTechnician(order, user, state.users)) { toast("Only an assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
+function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); const tracked = attributeClockHours(order, currentUser()?.id, state.jobClockEntries, state.users); order.assignments = tracked.assignments; order.tech = tracked.tech; order.laborHours = tracked.laborHours; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
 function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
 function toast(message) { const node = document.createElement("div"); node.className = "toast"; node.textContent = message; document.querySelector("#toast-region").append(node); setTimeout(() => node.remove(), 2600) }
@@ -407,7 +481,55 @@ function openInvoiceTax(number) { const invoice = state.invoices.find(item => it
 function taxReport(fromDate, toDate) { const from = new Date(fromDate), to = new Date(toDate), invoices = getFinanceDerived().invoiceByNumber; to.setHours(23, 59, 59, 999); const rows = paymentRecords().filter(payment => { const d = new Date(payment.receivedAt); return d >= from && d <= to }).map(payment => { const invoice = invoices.get(payment.invoiceNumber), bd = invoiceTaxBreakdown(invoice), ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0; return { date: payment.receivedAt, invoiceNumber: payment.invoiceNumber, customer: payment.customer, gross: payment.amount, taxable: Math.round(bd.subtotal * ratio * 100) / 100, tax: Math.round(bd.tax * ratio * 100) / 100 } }).sort((a, b) => String(a.date).localeCompare(String(b.date))); const totals = rows.reduce((acc, row) => ({ gross: acc.gross + row.gross, taxable: acc.taxable + row.taxable, tax: acc.tax + row.tax }), { gross: 0, taxable: 0, tax: 0 }); return { from: fromDate, to: toDate, rows, totals } }
 function invoices() { const q = query.toLowerCase(), rows = state.invoices.filter(x => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map(x => { const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x); return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money(x.amount)}</b><small>Subtotal ${money(bd.subtotal)} · Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} · Balance ${money(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>` }).join(""); return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`) }
 function recordPayment(invoiceNumber, method) { const invoice = state.invoices.find(item => item.number === invoiceNumber); if (!invoice) return; const balance = invoiceBalance(invoice); showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} · ${escapeHtml(invoice.customer)}</span><strong>Balance ${money(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`); document.querySelector("#payment-form").onsubmit = event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), amount = Number(data.amount); if (!Number.isFinite(amount) || amount <= 0 || amount > balance) { toast("Enter a payment amount within the open balance"); return } const paymentRecord = { id: `payment-${Date.now()}`, invoiceNumber, customer: invoice.customer, amount, method, receivedAt: data.receivedAt, reference: data.reference.trim(), note: data.note.trim(), status: "completed", recordedBy: currentUser().id }; state.payments.push(paymentRecord); pushPaymentToApi(paymentRecord); const newBalance = invoiceBalance(invoice); if (newBalance === 0) { invoice.status = "paid"; invoice.due = `Paid ${data.receivedAt}` } else invoice.status = "sent"; updateInvoiceInApi(invoice); save(); closeModal(); toast(`${money(amount)} ${method} payment recorded for ${invoice.number}`); render() } }
-async function startInvoiceCheckout(number) { const invoice = state.invoices.find(item => item.number === number), config = state.billingSettings; if (!invoice) return; if (!config.enabled) { toast("This shop has not connected online card payments yet"); return } const checkoutWindow = window.open("", "_blank"); try { const data = await apiFetch("/payments/checkout-session", { method: "POST", body: JSON.stringify({ invoiceNumber: invoice.number, successUrl: `${location.origin}${location.pathname}#payment-success`, cancelUrl: `${location.origin}${location.pathname}#payment-cancel` }) }); if (!data.url) throw new Error("Checkout service did not return a payment URL"); invoice.checkoutUrl = data.url; invoice.checkoutCreatedAt = now(); updateInvoiceInApi(invoice); save(); if (checkoutWindow) checkoutWindow.location = data.url; else window.location.assign(data.url); toast(`Opened secure card checkout for ${invoice.number}`) } catch (error) { checkoutWindow?.close(); toast(error.message || "The shop payment service could not create a checkout link") } }
+async function startInvoiceCheckout(number) {
+  const invoice = state.invoices.find(item => item.number === number);
+  if (!invoice) return;
+  const ensureStripeReady = async () => {
+    if (state.billingSettings.enabled) return true;
+    try {
+      const status = await apiFetch("/payments/stripe/status");
+      stripePaymentStatus = status;
+      if (status?.configured) {
+        state.billingSettings = {
+          ...state.billingSettings,
+          enabled: true,
+          provider: "stripe",
+          shopId: status.shopId || state.billingSettings.shopId || "",
+          webhookUrl: status.webhookUrl || state.billingSettings.webhookUrl || "",
+        };
+        save();
+        return true;
+      }
+    } catch (error) {
+      console.error("Could not load Stripe payment status", error);
+    }
+    toast("Configure Stripe on the Payments page before creating a checkout link");
+    return false;
+  };
+  if (!await ensureStripeReady()) return;
+  const checkoutWindow = window.open("", "_blank");
+  try {
+    const data = await apiFetch("/payments/checkout-session", {
+      method: "POST",
+      body: JSON.stringify({
+        invoiceNumber: invoice.number,
+        successUrl: `${location.origin}${location.pathname}#payment-success`,
+        cancelUrl: `${location.origin}${location.pathname}#payment-cancel`,
+      }),
+    });
+    if (!data.url) throw new Error("Checkout service did not return a payment URL");
+    invoice.checkoutUrl = data.url;
+    invoice.checkoutCreatedAt = now();
+    updateInvoiceInApi(invoice);
+    save();
+    if (checkoutWindow) checkoutWindow.location = data.url;
+    else window.location.assign(data.url);
+    toast(`Opened secure card checkout for ${invoice.number}`);
+  } catch (error) {
+    checkoutWindow?.close();
+    toast(error.message || "The shop payment service could not create a checkout link");
+  }
+}
 function reports() { const t = state.taxSettings, stateName = usStates.find(s => s.code === t.state)?.name || t.state, result = taxReportResult; return shell(`${heading("Performance", "Reports", "A concise operational snapshot and state tax filing report based on current shop records.", false)}${stats()}<section class="messaging-panel"><div class="messaging-status ready">${icon("landmark", 17)}<div><strong>Tax filing report — ${stateName}</strong><span>Sales tax collected, formatted for ${stateName}'s ${t.filingFrequency.toLowerCase()} filing. Change the subscribing state in Shop settings.</span></div></div><form class="form-grid" id="tax-report-form"><label>From date *<input type="date" name="from" value="${result?.from || "2026-08-01"}" required/></label><label>To date *<input type="date" name="to" value="${result?.to || "2026-08-14"}" required/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("file-text", 14)} Generate report</button>${result ? `<button class="secondary" type="button" id="print-tax-report">${icon("printer", 14)} Print report</button>` : ""}</div></form>${result ? taxReportView(result, stateName, t) : ""}</section>`) }
 function taxReportView(result, stateName, settings) { const rows = result.rows.map(row => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money(row.gross)}</td><td>${money(row.taxable)}</td><td><b>${money(row.tax)}</b></td></tr>`).join(""); return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings.taxId || "Not set"} · Filing frequency: ${settings.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>` }
 function settings() { const t = state.taxSettings, stateOptions = usStates.map(s => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""); return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`) }
@@ -458,14 +580,129 @@ function openFreeTerm(shopId, shopName) { showModal(`<form class="modal" id="fre
 function bindPlatformAdmin() { document.querySelector("#refresh-platform")?.addEventListener("click", () => { platformAccounts = null; render() }); document.querySelector("#new-customer-account")?.addEventListener("click", openCustomerAccount); document.querySelectorAll("[data-credit-shop]").forEach(button => button.onclick = () => openAccountCredit(button.dataset.creditShop, button.dataset.shopName)); document.querySelectorAll("[data-convert-shop]").forEach(button => button.onclick = () => openConvertPaid(button.dataset.convertShop, button.dataset.shopName)); document.querySelectorAll("[data-trial-shop]").forEach(button => button.onclick = () => openFreeTerm(button.dataset.trialShop, button.dataset.shopName)); document.querySelectorAll("[data-account-status]").forEach(button => button.onclick = async () => { const suspended = button.dataset.suspended === "true", action = suspended ? "suspend" : "reactivate"; if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}?`)) return; button.disabled = true; try { await platformApi(`/admin/accounts/${encodeURIComponent(button.dataset.accountStatus)}/status`, { method: "POST", body: JSON.stringify({ suspended }) }); platformAccounts = null; toast(`${button.dataset.shopName} ${suspended ? "suspended" : "reactivated"}`); render() } catch (error) { toast(error.message); button.disabled = false } }) }
 
 function openPasswordReset() { showModal(`<div class="modal"><div class="modal-head"><h2>Password and MFA</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><p>MechPro authentication is managed by Cloudflare Access and your organization identity provider. Use your identity provider's account-recovery flow or contact your administrator.</p></div><div class="modal-actions"><button type="button" class="primary" data-close>Close</button></div></div>`) }
-function render() { const root = document.querySelector("#root"); if (!currentUser()) { root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen(); lucide.createIcons(); bind(); return } if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0]; const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, reports, settings }; if (typeof accounting === "function") views.accounting = accounting; if (typeof payroll === "function") views.payroll = payroll; if (typeof imports === "function") views.imports = imports; if (typeof employees === "function") views.employees = employees; if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView; root.innerHTML = (views[state.route] || views.home || views.dispatch)(); const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0); if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) { const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav"); chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || "")) } if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) { const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav"); floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics")) } lucide.createIcons(); bind(); bindPlatformAdmin(); document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan); bindEstimateActions(); bindMessagingService(); bindPaymentService(); bindTeamChat(); if (typeof bindOemDiagnostics === "function") bindOemDiagnostics(); root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => { await loadChatFromApi(); render() }); scheduleChatRefresh() }
+function render() { const root = document.querySelector("#root"); if (!currentUser()) { root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen(); lucide.createIcons(); bind(); return } if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0]; const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, pos: cardTerminal, ai: aiWorkbench, messaging, payments, reports, settings }; if (typeof accounting === "function") views.accounting = accounting; if (typeof payroll === "function") views.payroll = payroll; if (typeof imports === "function") views.imports = imports; if (typeof employees === "function") views.employees = employees; if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView; root.innerHTML = (views[state.route] || views.home || views.dispatch)(); const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0); if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) { const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav"); chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || "")) } if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) { const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav"); floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics")) } lucide.createIcons(); bind(); bindPlatformAdmin(); document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan); bindEstimateActions(); bindMessagingService(); bindPaymentService(); if (state.route === "payments") void loadStripePaymentStatus(); bindTeamChat(); if (typeof bindOemDiagnostics === "function") bindOemDiagnostics(); root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => { await loadChatFromApi(); render() }); scheduleChatRefresh() }
 function bindMessagingService() { document.querySelector("#messaging-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.messagingSettings = { enabled: data.enabled === "on", endpoint: data.endpoint.trim(), senderEmail: data.senderEmail.trim(), senderPhone: data.senderPhone.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.messagingSettings.enabled && !state.messagingSettings.endpoint) { toast("A secure service endpoint is required before enabling delivery"); return } save(); toast("Shop messaging service saved"); render() }); document.querySelector("#test-messaging")?.addEventListener("click", () => { const config = state.messagingSettings; if (!config.endpoint) { toast("Save a secure endpoint before testing"); return } toast("Endpoint saved. Use your shop service test endpoint to verify SMTP and SMS credentials.") }) }
-function bindPaymentService() { document.querySelector("#billing-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.billingSettings = { enabled: data.enabled === "on", provider: "stripe_connect", checkoutEndpoint: data.checkoutEndpoint.trim(), onboardingUrl: data.onboardingUrl.trim(), accountLabel: data.accountLabel.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.billingSettings.enabled && (!state.billingSettings.checkoutEndpoint || !state.billingSettings.onboardingUrl)) { toast("Stripe onboarding and checkout endpoints are required before enabling payments"); return } save(); toast("Stripe payment service saved"); render() }); document.querySelector("#open-stripe-onboarding")?.addEventListener("click", () => { const url = document.querySelector("#billing-form [name=onboardingUrl]").value; if (!url) { toast("Enter the Stripe Connect onboarding URL first"); return } window.open(url, "_blank", "noopener") }) }
+async function loadStripePaymentStatus() {
+  if (!canAccess("payments")) return;
+  try {
+    stripePaymentStatus = await apiFetch("/payments/stripe/status");
+    if (stripePaymentStatus?.configured && !state.billingSettings.enabled) {
+      state.billingSettings = {
+        ...state.billingSettings,
+        enabled: true,
+        provider: "stripe",
+        shopId: stripePaymentStatus.shopId || state.billingSettings.shopId || "",
+        webhookUrl: stripePaymentStatus.webhookUrl || state.billingSettings.webhookUrl || "",
+      };
+      save();
+    }
+  } catch (error) {
+    console.error("Failed to load Stripe payment status", error);
+  }
+}
+function bindPaymentService() {
+  document.querySelector("#billing-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const secretKey = String(data.secretKey || "").trim();
+    const webhookSecret = String(data.webhookSecret || "").trim();
+    const publishableKey = String(data.publishableKey || "").trim();
+    const button = form.querySelector("button[type=submit]");
+    const alreadyConfigured = Boolean(stripePaymentStatus?.configured);
+    if ((!secretKey || !webhookSecret) && !alreadyConfigured) {
+      toast("Enter both the Stripe secret key and webhook signing secret");
+      return;
+    }
+    if ((secretKey && !webhookSecret) || (!secretKey && webhookSecret)) {
+      toast("Provide both keys together when updating Stripe credentials");
+      return;
+    }
+    if (publishableKey && !/^pk_(test|live)_/.test(publishableKey)) {
+      toast("Publishable key must start with pk_test_ or pk_live_");
+      return;
+    }
+    if (button) button.disabled = true;
+    try {
+      if ((secretKey && webhookSecret) || publishableKey) {
+        const result = await apiFetch("/payments/stripe/configure", {
+          method: "POST",
+          body: JSON.stringify({
+            ...(secretKey && webhookSecret ? { secretKey, webhookSecret } : {}),
+            ...(publishableKey ? { publishableKey } : {}),
+          }),
+        });
+        stripePaymentStatus = { ...stripePaymentStatus, ...result, configured: true, hasPublishableKey: Boolean(publishableKey) || Boolean(stripePaymentStatus?.hasPublishableKey) };
+      } else {
+        stripePaymentStatus = await apiFetch("/payments/stripe/status");
+      }
+      state.billingSettings = {
+        enabled: data.enabled === "on" || Boolean(stripePaymentStatus?.configured),
+        provider: "stripe",
+        accountLabel: String(data.accountLabel || "").trim(),
+        shopName: String(data.shopName || "").trim() || "Your Car Guy",
+        shopId: stripePaymentStatus?.shopId || state.billingSettings.shopId || "",
+        webhookUrl: stripePaymentStatus?.webhookUrl || state.billingSettings.webhookUrl || "",
+        checkoutEndpoint: "",
+        onboardingUrl: "",
+      };
+      save();
+      toast(secretKey ? "Stripe keys saved securely" : "Payment settings saved");
+      render();
+    } catch (error) {
+      toast(error.message || "Could not save Stripe payment settings");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+  document.querySelector("#copy-stripe-webhook")?.addEventListener("click", async () => {
+    const input = document.querySelector("#stripe-webhook-url");
+    const value = input?.value?.trim();
+    if (!value) return toast("Webhook URL is not available yet");
+    try {
+      await navigator.clipboard.writeText(value);
+      toast("Webhook URL copied");
+    } catch {
+      input.select();
+      document.execCommand("copy");
+      toast("Webhook URL copied");
+    }
+  });
+  document.querySelector("#refresh-stripe-status")?.addEventListener("click", async () => {
+    try {
+      stripePaymentStatus = await apiFetch("/payments/stripe/status");
+      if (stripePaymentStatus?.configured) {
+        state.billingSettings = {
+          ...state.billingSettings,
+          enabled: state.billingSettings.enabled || true,
+          provider: "stripe",
+          shopId: stripePaymentStatus.shopId || "",
+          webhookUrl: stripePaymentStatus.webhookUrl || "",
+        };
+        save();
+      }
+      toast(stripePaymentStatus?.configured ? "Stripe is connected" : "Stripe is not configured yet");
+      render();
+    } catch (error) {
+      toast(error.message || "Could not refresh Stripe status");
+    }
+  });
+}
 function bindLiveAssistant() { const form = document.querySelector("#assistant-form"); if (!form) return; const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), append = (role, content) => { assistantConversation.push({ role, content }); const list = document.querySelector("#assistant-messages"); list.innerHTML = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); list.scrollTop = list.scrollHeight }; form.onsubmit = async event => { event.preventDefault(); if (assistantPaused) return; const message = String(input.value || "").trim(); if (!message) return; input.value = ""; sendButton.disabled = true; append("user", message); try { const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) }); assistantSessionId = result.sessionId || assistantSessionId; const answer = result.message || "I could not answer that right now."; append("assistant", answer); if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) } } catch (error) { append("assistant", error.message || "The live assistant is unavailable.") } finally { sendButton.disabled = assistantPaused } }; document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel()); document.querySelector("#assistant-mic")?.addEventListener("click", () => { if (assistantPaused) return; const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition; if (!Recognition) { toast("Voice input is not supported in this browser"); return } const recognition = new Recognition(); recognition.lang = "en-US"; recognition.interimResults = false; recognition.onstart = () => toast("Listening..."); recognition.onerror = () => toast("Microphone input could not be captured"); recognition.onresult = event => { input.value = event.results[0][0].transcript; form.requestSubmit() }; recognition.start() }) }
 function bindEstimateActions() { bindLiveAssistant(); document.querySelector("#save-ai-estimate")?.addEventListener("click", makeEstimate); document.querySelectorAll("[data-send-estimate]").forEach(button => button.onclick = () => sendEstimate(button.dataset.sendEstimate, button.dataset.channel)); document.querySelectorAll("[data-sign-estimate]").forEach(button => button.onclick = () => openSignature(button.dataset.signEstimate)); document.querySelectorAll("[data-message-customer]").forEach(button => button.onclick = event => { event.stopPropagation(); openCustomerMessage(decodeURIComponent(button.dataset.messageCustomer), decodeURIComponent(button.dataset.messagePhone), decodeURIComponent(button.dataset.messageEmail)) }); document.querySelectorAll("[data-open-customer]").forEach(el => { if (el.tagName === "BUTTON") el.onclick = event => { event.stopPropagation(); openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) }; else el.onclick = event => { if (event.target.closest("[data-message-customer]")) return; openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) } }); document.querySelectorAll("[data-pay-invoice]").forEach(button => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice)); document.querySelectorAll("[data-record-payment]").forEach(button => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method)); document.querySelectorAll("[data-edit-tax]").forEach(button => button.onclick = () => openInvoiceTax(button.dataset.editTax)) }
-function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate }); order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#user-menu-toggle")?.addEventListener("click", event => { event.stopPropagation(); const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle"); if (!panel || !toggle) return; const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }); document.querySelector("#user-menu-settings")?.addEventListener("click", () => { state.route = "settings"; save(); render() }); document.querySelector("#sign-out")?.addEventListener("click", () => { void signOutEverywhere() }); if (!userMenuDismissBound) { userMenuDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle"); if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) } document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
+function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "payments") { await loadStripePaymentStatus(); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate }); order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#user-menu-toggle")?.addEventListener("click", event => { event.stopPropagation(); const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle"); if (!panel || !toggle) return; const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }); document.querySelector("#user-menu-settings")?.addEventListener("click", () => { state.route = "settings"; save(); render() }); document.querySelector("#sign-out")?.addEventListener("click", () => { void signOutEverywhere() }); if (!userMenuDismissBound) { userMenuDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle"); if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) } document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
+let modalAutosaveFlush = null;
+function setModalAutosave(flushFn) { modalAutosaveFlush = typeof flushFn === "function" ? flushFn : null }
 function showModal(html) { closeModal(); const root = document.createElement("div"); root.id = "modal-root"; root.className = "modal-backdrop"; root.innerHTML = html; root.onclick = e => { if (e.target === root) closeModal() }; document.body.append(root); lucide.createIcons(); root.querySelectorAll("[data-close]").forEach(x => { if (!x.textContent.trim() && !x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close"); if (!x.getAttribute("title") && !x.textContent.trim()) x.setAttribute("title", "Close"); x.onclick = closeModal }); root.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) }) }
-function closeModal() { document.querySelector("#modal-root")?.remove() }
+function closeModal() {
+  const root = document.querySelector("#modal-root");
+  const flush = modalAutosaveFlush;
+  modalAutosaveFlush = null;
+  if (flush && root) {
+    try { flush({ reason: "close", root }) } catch (error) { console.error("Modal autosave failed", error) }
+  }
+  root?.remove();
+}
 function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) { return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>` }
 function newOrderServiceExplanation(service, fallback) { const source = aiKeywords(service); if (/brake|rotor|pad/.test(source)) return "Includes wheel removal, brake friction and hardware inspection, pad and rotor replacement where quoted, approved lubrication, fastener and wheel torque verification, brake bedding, and a final road test."; if (/oil|lube/.test(source)) return "Includes draining the engine oil, replacing the oil filter, refilling with the specified grade and quantity, checking for leaks and final level, resetting the maintenance reminder when applicable, and a multipoint fluid and safety inspection."; if (/a\/c|air.?condition/.test(source)) return "Includes confirming vent temperature and airflow, scanning HVAC-related modules, inspecting fan and condenser operation, recording system pressures with approved equipment, and reporting the verified fault before additional repair parts are authorized."; return `${fallback || "Includes initial inspection and standard service labor."} The technician will verify the concern, perform the quoted service using current manufacturer information, document findings, and complete a post-service quality-control check.` }
 function readNewOrderEstimate() { const lines = [...document.querySelectorAll(".new-estimate-line")].map(row => { const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), labor = Math.round(hours * 165 * 100) / 100; return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor, parts, total: Math.round((labor + parts) * 100) / 100 } }).filter(line => line.service); const labor = lines.reduce((sum, line) => sum + line.labor, 0), laborHours = lines.reduce((sum, line) => sum + line.hours, 0), parts = lines.reduce((sum, line) => sum + line.parts, 0), shopSupplies = lines.length ? 12 : 0, subtotal = Math.round((labor + parts + shopSupplies) * 100) / 100, tax = Math.round(subtotal * .0825 * 100) / 100, total = Math.round((subtotal + tax) * 100) / 100; return { lines, labor, laborHours, parts, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: 8.25, total } }
@@ -681,7 +918,7 @@ if ("serviceWorker" in navigator && isSecureContext && !isDesktopApp) { window.a
 
 ["admin", "technician", "office", "service_writer"].forEach(role => { if (roleRoutes[role] && !roleRoutes[role].includes("home")) roleRoutes[role] = ["home", ...roleRoutes[role]] });
 const shellWithHome = shell;
-function homeQuickAction(route, iconName, labelText) { if (route && !canAccess(route)) return ""; return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"}>${icon(iconName, 16)}<span>${labelText}</span></button>` }
+function homeQuickAction(route, iconName, labelText, extra = "") { if (route && !canAccess(route)) return ""; return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"} ${extra}>${icon(iconName, 16)}<span>${labelText}</span></button>` }
 function homeDashboard() {
   const user = currentUser();
   const model = buildHomeModel({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments, now: new Date() });
@@ -695,10 +932,112 @@ function homeDashboard() {
   const appointments = model.todaysAppointments.map(item => `<article class="home-appointment"><strong>${escapeHtml(item.time)} · ${escapeHtml(item.customer)}</strong><small>${escapeHtml(item.service)} · ${escapeHtml(item.bay || "Unassigned")}</small></article>`).join("");
   const activity = model.activity.map(item => `<button class="home-row" type="button" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : "data-route=\"invoices\""}><span class="home-row-icon muted">${icon("activity", 15)}</span><span><strong>${escapeHtml(item.title)} · ${escapeHtml(item.customer || "")}</strong><small>${escapeHtml(item.vehicle || item.meta || "")} · ${escapeHtml(label(item.status))}</small></span></button>`).join("");
   const start = model.isEmpty ? `<section class="home-start"><div><div class="eyebrow">Get started</div><h2>Your shop dashboard is ready</h2><p>Create a work order, book a visit, or open the dispatch board. Metrics, today's jobs, and recent activity fill in as soon as records land.</p></div><div class="home-start-actions"><button class="primary" type="button" data-open-new>${icon("plus", 15)} New work order</button>${canAccess("dispatch") ? `<button class="secondary" type="button" data-route="dispatch">${icon("layout-dashboard", 15)} Open dispatch</button>` : ""}</div></section>` : "";
-  const quick = `<div class="home-actions">${homeQuickAction("", "plus", "New work order")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch board")}${homeQuickAction("schedule", "calendar-days", "Schedule")}${homeQuickAction("invoices", "receipt-text", "Invoices")}${homeQuickAction("customers", "users", "Customers")}</div>`;
-  return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow()}, ${escapeHtml(firstName)}</h1><p>A live snapshot of open work, parts holds, overdue invoices, and what needs a decision next.</p></div><div class="head-actions"><button class="primary" type="button" id="home-new-ro">${icon("plus", 15)} New work order</button></div></div>${stats()}${quick}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
+  const quick = `<div class="home-command"><button class="primary home-intake" type="button" id="home-intake">${icon("plus", 18)} New Customer Intake</button><div class="home-actions">${homeQuickAction("orders", "clipboard-list", "View Work Orders")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch Board")}${homeQuickAction("shopops", "package", "Parts Requests", 'data-ops-tab="ordering"')}${homeQuickAction("customers", "users", "Customers")}${homeQuickAction("pos", "credit-card", "Card terminal")}${homeQuickAction("reports", "pie-chart", "Reports")}${homeQuickAction("payroll", "landmark", "Payroll")}</div></div>`;
+  return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow()}, ${escapeHtml(firstName)}</h1><p>Start with a customer intake. Work orders, dispatch, parts, and payroll stay one click away.</p></div><div class="head-actions"><button class="primary" type="button" id="home-intake-top">${icon("plus", 15)} New Customer Intake</button><button class="secondary" type="button" id="home-new-ro">New work order</button></div></div>${quick}${stats()}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
 }
-function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
+function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }); document.querySelectorAll("#home-intake, #home-intake-top").forEach(button => button.addEventListener("click", () => openCustomerIntake())); document.querySelectorAll("[data-ops-tab]").forEach(button => button.addEventListener("click", () => { shopOpsTab = button.dataset.opsTab }, true)) }
+async function loadPosReaders() { try { await Promise.all([loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi()]); const result = await apiFetch("/payments/terminal/readers"); posConfigured = Boolean(result.configured); posPhoneEntry = Boolean(result.phoneEntry); posReaders = result.readers || [] } catch (error) { posReaders = []; toast(error.message || "Card terminal could not be loaded") } if (state.route === "pos") render() }
+function paintPosStatus() { const note = document.querySelector(".pos-status"); if (!note || !posCharge) return; note.dataset.phase = posCharge.phase || ""; note.textContent = posCharge.message || "" }
+async function pollPosCharge() { clearTimeout(posPollTimer); if (!posCharge?.paymentIntentId || state.route !== "pos") return; try { const result = await apiFetch(`/payments/terminal/status?paymentIntentId=${encodeURIComponent(posCharge.paymentIntentId)}&readerId=${encodeURIComponent(posCharge.readerId)}`); posCharge = { ...posCharge, ...result }; paintPosStatus(); if (result.phase === "paid") { await loadPaymentsFromApi(); toast("Card payment recorded"); render(); return } if (result.phase === "declined" || result.phase === "canceled") { render(); return } posPollTimer = setTimeout(pollPosCharge, 2000) } catch (error) { toast(error.message || "The reader status could not be read") } }
+function loadStripeJs() { if (window.Stripe) return Promise.resolve(); return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = "https://js.stripe.com/v3/"; script.onload = () => resolve(); script.onerror = () => reject(new Error("The secure card form could not be loaded")); document.head.appendChild(script) }) }
+async function startPhoneEntry(event) { event.preventDefault(); const form = event.target; const data = Object.fromEntries(new FormData(form)); const button = form.querySelector("#pos-phone-prepare"); button.disabled = true; try { const session = await apiFetch("/payments/terminal/phone", { method: "POST", body: JSON.stringify({ amount: Number(data.amount), targetType: "work_order", targetId: data.orderId }) }); await loadStripeJs(); const stripe = window.Stripe(session.publishableKey); const elements = stripe.elements({ clientSecret: session.clientSecret }); const card = elements.create("payment"); const mount = document.querySelector("#pos-card-element"); mount.replaceChildren(); card.mount(mount); posStripe = { stripe, elements, paymentIntentId: session.paymentIntentId, targetId: data.orderId }; const charge = document.querySelector("#pos-phone-charge"); const status = document.querySelector("#pos-phone-status"); if (charge) charge.hidden = false; form.querySelector("[name=amount]").disabled = true; form.querySelector("[name=orderId]").disabled = true; if (status) { status.hidden = false; status.textContent = session.moto ? "Enter the card from the phone call, then charge it." : "Enter the card from the phone call. This Stripe account is charging it as a keyed card." } } catch (error) { toast(error.message || "The phone card form could not be opened"); button.disabled = false } }
+async function confirmPhoneEntry() { if (!posStripe) return; const button = document.querySelector("#pos-phone-charge"); if (button) button.disabled = true; const result = await posStripe.stripe.confirmPayment({ elements: posStripe.elements, redirect: "if_required", confirmParams: { return_url: location.href } }); if (result.error) { toast(result.error.message || "The card was not approved"); if (button) button.disabled = false; return } try { const recorded = await apiFetch(`/payments/terminal/phone/status?paymentIntentId=${encodeURIComponent(posStripe.paymentIntentId)}`); if (recorded.phase !== "paid") { toast(recorded.message || "The card was not approved"); if (button) button.disabled = false; return } await loadPaymentsFromApi(); posStripe = null; toast("Phone card payment recorded"); render() } catch (error) { toast(error.message || "The phone payment could not be recorded"); if (button) button.disabled = false } }
+async function savePosWriteup() { const order = (state.orders || []).find(item => item.id === posSelectedId); const writeup = recoveryWriteup({ customer: order?.customer, vehicle: order?.vehicle }); if (!order || !writeup.ready) { toast("Choose a work order with a customer and a vehicle"); return } if (String(order.notes || "").includes("Concern: Vehicle immobilized in mud")) { toast("That write-up is already on the work order"); return } order.notes = [order.notes, writeup.text].filter(Boolean).join("\n\n"); try { const saved = await updateOrderInApi(order); Object.assign(order, saved || {}); toast("Technician write-up saved on the work order"); render() } catch (error) { toast("The write-up could not be saved") } }
+function bindPhoneOrder() { document.querySelectorAll("[data-pos-mode]").forEach(button => button.addEventListener("click", () => { posMode = button.dataset.posMode; posStripe = null; render() })); document.querySelector("#pos-phone-form")?.addEventListener("submit", startPhoneEntry); document.querySelector("#pos-phone-charge")?.addEventListener("click", confirmPhoneEntry) }
+function bindCardTerminal() { if (state.route !== "pos") return; bindPhoneOrder(); if (posReaders === null) { posReaders = []; loadPosReaders() } document.querySelector("#pos-order")?.addEventListener("change", event => { posSelectedId = event.target.value; posCharge = null; posStripe = null; render() }); document.querySelector("#pos-save-writeup")?.addEventListener("click", savePosWriteup); const form = document.querySelector("#pos-form"); if (!form) return; document.querySelector("#pos-refresh")?.addEventListener("click", () => { posReaders = null; render() }); document.querySelector("#pos-cancel")?.addEventListener("click", async () => { if (!posCharge?.readerId) return; try { await apiFetch("/payments/terminal/cancel", { method: "POST", body: JSON.stringify({ readerId: posCharge.readerId }) }); posCharge = { ...posCharge, phase: "canceled", message: "The reader was cleared." }; clearTimeout(posPollTimer); render() } catch (error) { toast(error.message || "The reader could not be cleared") } }); form.addEventListener("submit", async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(form)); const button = form.querySelector("#pos-charge"); button.disabled = true; const reuse = posCharge?.targetId === data.orderId && posCharge?.phase === "declined" ? posCharge.paymentIntentId : ""; try { const result = await apiFetch("/payments/terminal/charge", { method: "POST", body: JSON.stringify({ readerId: data.readerId, amount: Number(data.amount), targetType: "work_order", targetId: data.orderId, paymentIntentId: reuse }) }); posCharge = { ...result, targetId: data.orderId }; render() } catch (error) { toast(error.message || "The card charge could not be started"); button.disabled = false } }); if (posCharge?.phase === "waiting") pollPosCharge() }
+const bindPosCore = bind;
+bind = function () { bindPosCore(); bindCardTerminal() };
+function openAssignmentEditor(order) {
+  const assignments = order.assignments?.length ? order.assignments : (order.tech && order.tech !== "Unassigned" ? [{ name: order.tech, role: "primary", sharePercent: 100 }] : []);
+  const techs = state.users.filter(user => user.active !== false && classificationFor(user) === "technician" && (user.techName || user.name));
+  const options = (role) => `<option value="">Select technician</option>${techs.map(user => `<option value="${escapeAttr(user.id)}" ${assignments.find(item => item.role === role)?.employeeId === user.id ? "selected" : ""}>${escapeHtml(user.techName || user.name)}</option>`).join("")}`;
+  const writeIn = assignments.find(item => item.writeIn)?.name || "";
+  showModal(`<form class="modal" id="assignment-form"><div class="modal-head"><h2>Assigned technicians</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Primary technician<select name="primary">${options("primary")}</select></label><label>Primary share %<input name="primaryShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "primary")?.sharePercent ?? 100}"/></label><label>Secondary technician<select name="secondary">${options("secondary")}</select></label><label>Secondary share %<input name="secondaryShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "secondary")?.sharePercent ?? 0}"/></label><label>Apprentice<select name="apprentice">${options("apprentice")}</select></label><label>Apprentice share %<input name="apprenticeShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "apprentice")?.sharePercent ?? 0}"/></label><label class="full">Temporary technician name<input name="writeIn" value="${escapeAttr(writeIn)}" placeholder="Subcontractor or temp"/></label></div><p class="form-help">Only technicians appear in the lists. A temporary name is stored on this work order without a payroll rate.</p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Save assignments</button></div></form>`);
+  document.querySelector("#assignment-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const nextAssignments = ["primary", "secondary", "apprentice"].flatMap(role => {
+      if (!data[role]) return [];
+      const user = state.users.find(item => item.id === data[role]);
+      if (!user) return [];
+      return [{ id: `${order.id}-${role}`, employeeId: user.id, name: user.techName || user.name, role, sharePercent: Number(data[`${role}Share`]) || 0, assignedAt: new Date().toISOString() }];
+    });
+    if (String(data.writeIn || "").trim()) nextAssignments.push({ id: `${order.id}-write-in`, name: data.writeIn.trim(), role: nextAssignments.length ? "secondary" : "primary", writeIn: true, sharePercent: 0, hoursWorked: 0, assignedAt: new Date().toISOString() });
+    const updated = applyAssignments(order, nextAssignments, state.users);
+    const saved = await updateOrderInApi({ ...order, ...updated, updatedAt: order.updatedAt });
+    const index = state.orders.findIndex(item => item.id === order.id);
+    if (index >= 0) state.orders[index] = saved;
+    syncPayroll(saved);
+    save();
+    closeModal();
+    toast(`${saved.id} technicians updated`);
+    render();
+  };
+}
+function loadIntakeDraft() { try { const raw = localStorage.getItem(INTAKE_STORAGE_KEY); return raw ? JSON.parse(raw) : null } catch { return null } }
+function saveIntakeDraft(draft) { try { localStorage.setItem(INTAKE_STORAGE_KEY, JSON.stringify(serializableIntake(draft))) } catch { /* private browsing or a full quota keeps the in-memory draft */ } }
+function openCustomerIntake() {
+  const stored = loadIntakeDraft();
+  const draft = stored && stored.customer ? stored : emptyIntakeDraft();
+  showModal('<div class="modal wide intake-modal" id="intake-host"></div>');
+  const backdrop = document.querySelector("#modal-root");
+  if (backdrop) backdrop.onclick = event => { if (event.target === backdrop) event.stopPropagation() };
+  const host = document.querySelector("#intake-host");
+  const profile = shopProfile();
+  mountIntakeWizard(host, {
+    draft,
+    users: state.users,
+    laborRate: Number(profile.laborRate || 165),
+    taxRate: Number(state.taxSettings?.rate || 0),
+    onSave: saveIntakeDraft,
+    onCancel: current => { saveIntakeDraft(current); closeModal() },
+    decodeVin: async vin => {
+      const normalized = String(vin || "").trim().toUpperCase();
+      if (normalized.length !== 17) throw new Error("Enter a 17-character VIN first.");
+      return apiFetch(`/api/vehicles/decode/${encodeURIComponent(normalized)}`);
+    },
+    lookupPlate: async () => ({ available: false, message: profile.plateProviderEnabled ? "Plate lookup is enabled in settings but no provider responded." : "Plate lookup is not connected. Enter the plate for the file, then decode the VIN or type the vehicle." }),
+    analyze: async current => {
+      try {
+        const response = await apiFetch("/api/ai/assistant", { method: "POST", body: JSON.stringify({ message: `Shop intake review only. Vehicle ${current.vehicle?.year || ""} ${current.vehicle?.make || ""} ${current.vehicle?.model || ""}. Concern: ${current.concern?.description || ""}. Codes: ${current.diagnosis?.codes || "none"}.` }) });
+        if (response?.reply || response?.message) return { source: "assistant", notice: "MechPro assistant response. Confirm every test on the vehicle before selling parts.", causes: [{ name: "Assistant notes", detail: response.reply || response.message }] };
+      } catch { /* the assistant stays off unless the shop enables it */ }
+      return localDiagnosticChecklist(current);
+    },
+    onConvert: async current => {
+      const name = [current.customer.firstName, current.customer.lastName].filter(Boolean).join(" ");
+      const display = current.customer.company ? `${name} (${current.customer.company})` : name;
+      const address = [current.customer.address, [current.customer.city, current.customer.state, current.customer.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+      const existing = state.customers.find(item => item.phone === current.customer.phone || (current.customer.email && item.email === current.customer.email));
+      await saveCustomerRecord(existing, { name: display, phone: current.customer.phone, email: current.customer.email, billingAddress: address, billingNotes: `Intake ${current.id}` });
+      const vehicleId = `veh-${Date.now()}`;
+      await saveShopEntity("vehicles", { id: vehicleId, customer: display, vin: current.vehicle.vin, year: current.vehicle.year, make: current.vehicle.make, model: current.vehicle.model, plate: current.vehicle.plate, mileage: current.vehicle.mileage, color: current.vehicle.color });
+      const max = state.orders.reduce((highest, order) => Math.max(highest, Number(String(order.id).replace(/\D/g, "")) || 0), 1040);
+      const record = intakeOrderPayload(current, { id: `RO-${max + 1}`, laborRate: Number(profile.laborRate || 165), taxRate: Number(state.taxSettings?.rate || 0), users: state.users });
+      record.intake.photos = [];
+      for (const photo of current.photos || []) {
+        if (!photo.file) { record.intake.photos.push(photo); continue }
+        try {
+          const fileId = await uploadFileToStorage(photo.file, "intake", photo.file.type || "image/jpeg", { apiFetch });
+          record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, contentType: photo.contentType, takenAt: photo.takenAt, fileId });
+        } catch (error) {
+          record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, takenAt: photo.takenAt, uploadError: error.message || "Upload failed" });
+        }
+      }
+      let saved = record;
+      if (!isOfflineDesktop()) {
+        const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
+        saved = response?.queued ? record : response;
+      }
+      state.orders.unshift(saved);
+      localStorage.removeItem(INTAKE_STORAGE_KEY);
+      save();
+      closeModal();
+      toast(`${saved.id} created from intake`);
+      render();
+    },
+  });
+}
 const renderHomeCore = render;
 render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = DOMPurify.sanitize(homeDashboard(), { USE_PROFILES: { html: true } }); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
 function applyRemoteList(key, records, entityType = key) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
@@ -728,25 +1067,39 @@ function employeeFormValue(employee, field, fallback = "") {
 }
 
 async function saveEmployeeRecord(existing, data) {
+  const email = String(existing?.email || data.workEmail || data.email || "").trim().toLowerCase();
   const record = {
     ...(existing || {}),
     id: existing?.id || `user-${Date.now()}`,
     name: data.name.trim(),
-    email: String(existing?.email || data.email).trim().toLowerCase(),
+    email,
     role: data.role,
-    title: data.title.trim(),
-    techName: data.techName.trim(),
+    title: String(data.title || "").trim(),
+    techName: String(data.techName || "").trim(),
     active: existing?.active !== false,
     employeeId: data.employeeId.trim(),
-    phone: data.phone.trim(),
-    address: data.address.trim(),
+    phone: String(data.phone || "").trim(),
+    address: String(data.address || "").trim(),
     startDate: data.startDate,
     employmentType: data.employmentType,
     payRate: Number(data.payRate),
     payFrequency: data.payFrequency,
-    department: data.department.trim(),
-    emergencyContact: data.emergencyContact.trim(),
+    classification: data.classification || classificationFor({ role: data.role, classification: existing?.classification }),
+    payPlan: PAY_PLANS.some(plan => plan.id === data.payPlan) ? data.payPlan : (existing?.payPlan || "hourly"),
+    commissionPercent: Number(data.commissionPercent) || 0,
+    department: String(data.department || "").trim(),
+    emergencyContact: String(data.emergencyContact || "").trim(),
     taxStatus: data.taxStatus,
+    w4FilingStatus: data.w4FilingStatus || existing?.w4FilingStatus || "single",
+    w4Step2Checkbox: String(data.w4Step2Checkbox) === "true",
+    w4DependentCredits: Number(data.w4DependentCredits) || 0,
+    w4OtherIncome: Number(data.w4OtherIncome) || 0,
+    w4Deductions: Number(data.w4Deductions) || 0,
+    w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
+    pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
+    stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
+    federalWithholdingRate: Number(existing?.federalWithholdingRate) || 0,
+    ssn: String(data.ssn || existing?.ssn || "").replace(/\D/g, "").slice(-4),
     createdAt: existing?.createdAt || now(),
     updatedAt: existing?.updatedAt,
   };
@@ -945,7 +1298,7 @@ openNew = function () {
 };
 
 orders = function () {
-  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(assignmentSummary(order, state.users))}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
   return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
 };
 
@@ -1364,52 +1717,178 @@ openOrder = function (id) {
   const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
   const defaultLaborRate = estimate.lines.find(line => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
   const editNotice = paidInvoice
-    ? "Line items are locked because this invoice has a recorded payment."
+    ? "Invoice already has a payment. Edits still update line items and the invoice total; recorded payments stay on the invoice."
     : invoice
-      ? "Saving also updates the unpaid invoice and clears its signature."
+      ? "Saving also updates the invoice and clears its signature so it can be re-authorized."
       : wasApproved
         ? "Saving creates a revision and clears the prior customer approval."
-        : "Changes recalculate labor, parts, tax, and total before saving.";
-  const editor = canManage && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        : "Changes recalculate labor, parts, tax, and total. Closing the dialog autosaves drafts.";
+  const detailsEditor = canManage ? `<section class="job-details-editor"><div class="job-section-head"><div><h3>Work order details</h3><p>Customer, vehicle, complaint, and assignment stay editable through estimate, work, and invoice.</p></div><span class="autosave-hint" id="job-autosave-status">Autosave on</span></div><div class="form-grid"><label>Customer *<select id="job-detail-customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input id="job-detail-phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input id="job-detail-vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input id="job-detail-vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label><label class="full">Customer complaint *<textarea id="job-detail-complaint" rows="3" required>${escapeHtml(order.complaint || "")}</textarea></label><label class="full">Technician / service notes<textarea id="job-detail-notes" rows="3">${escapeHtml(order.notes || "")}</textarea></label><label>Status<select id="job-detail-status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(status => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select id="job-detail-priority">${["normal", "high", "low"].map(priority => `<option value="${priority}" ${(order.priority || "normal") === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select id="job-detail-tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select id="job-detail-bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map(bay => `<option ${(order.bay || "Unassigned") === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input id="job-detail-promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input id="job-detail-labor-hours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label></div></section>` : "";
+  const editor = canManage ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
   const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
-  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${detailsEditor}${estimatePresentation(order, estimate, { locked: false })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
   const editorRoot = document.querySelector("#job-estimate-editor");
+  let jobCardDirty = false;
+  let jobCardSaving = false;
+  let jobCardTimer = 0;
+  const setAutosaveStatus = message => {
+    const status = document.querySelector("#job-autosave-status");
+    if (status) status.textContent = message;
+  };
+  const readJobDetails = () => ({
+    customer: document.querySelector("#job-detail-customer")?.value?.trim() || order.customer,
+    phone: document.querySelector("#job-detail-phone")?.value?.trim() || "",
+    vehicle: document.querySelector("#job-detail-vehicle")?.value?.trim() || order.vehicle,
+    vin: (document.querySelector("#job-detail-vin")?.value || "").trim().toUpperCase() || "VIN pending",
+    complaint: document.querySelector("#job-detail-complaint")?.value?.trim() || order.complaint,
+    notes: document.querySelector("#job-detail-notes")?.value?.trim() || "",
+    status: document.querySelector("#job-detail-status")?.value || order.status,
+    priority: document.querySelector("#job-detail-priority")?.value || order.priority || "normal",
+    tech: document.querySelector("#job-detail-tech")?.value || order.tech,
+    bay: document.querySelector("#job-detail-bay")?.value || order.bay,
+    mobile: (document.querySelector("#job-detail-bay")?.value || order.bay) === "Mobile",
+    promise: document.querySelector("#job-detail-promise")?.value?.trim() || order.promise,
+    laborHours: Math.max(0, Number(document.querySelector("#job-detail-labor-hours")?.value) || 0),
+  });
+  const readLaborAssignments = () => {
+    const rows = [...document.querySelectorAll(".labor-assignment-row")];
+    if (!rows.length) return null;
+    return new Map(rows.map(row => [
+      row.dataset.assignmentLine,
+      [...row.querySelectorAll(".line-technician:checked")].map(input => input.value),
+    ]));
+  };
+  const buildRevisedOrder = () => {
+    const details = canManage ? readJobDetails() : {};
+    let nextEstimate = order.estimate;
+    if (editorRoot && document.contains(editorRoot)) {
+      const fromEditor = estimateFromEditor(editorRoot);
+      if (fromEditor.lines.length) {
+        nextEstimate = {
+          ...fromEditor,
+          generatedAt: order.estimate?.generatedAt,
+          summary: order.estimate?.summary || `Estimate for ${details.vehicle || order.vehicle}`,
+        };
+      }
+    }
+    const editedAt = now();
+    let revised = workOrderWithEditedEstimate(order, nextEstimate, editedAt);
+    Object.assign(revised, details, { updatedAt: order.updatedAt });
+    const assignmentsByLine = readLaborAssignments();
+    if (assignmentsByLine && revised.estimate?.lines) {
+      revised.estimate.lines = revised.estimate.lines.map(line => line.type === "labor"
+        ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] }
+        : line);
+    }
+    return { revised, editedAt };
+  };
+  const persistJobCard = async ({ silent = false, reopen = false } = {}) => {
+    if (!canManage || jobCardSaving) return false;
+    if (!jobCardDirty && silent) return true;
+    const { revised, editedAt } = buildRevisedOrder();
+    if (!revised.customer || !revised.vehicle || !revised.complaint) {
+      if (!silent) toast("Customer, vehicle, and complaint are required");
+      return false;
+    }
+    if (editorRoot && document.contains(editorRoot) && !estimateFromEditor(editorRoot).lines.length) {
+      if (!silent) toast("Add at least one labor or part line");
+      return false;
+    }
+    if (invoice && !isOfflineDesktop() && !navigator.onLine) {
+      Object.assign(order, revised);
+      save();
+      jobCardDirty = false;
+      setAutosaveStatus("Saved locally · offline");
+      if (!silent) toast("Saved locally. Reconnect to sync the invoice.");
+      return true;
+    }
+    jobCardSaving = true;
+    setAutosaveStatus("Saving…");
+    const revisedInvoice = invoice ? {
+      ...invoiceWithEditedWorkOrder(invoice, revised, editedAt),
+      // Keep authorization on paid invoices; unpaid edits still clear for re-sign.
+      signature: paidInvoice ? invoice.signature : null,
+    } : null;
+    try {
+      const savedOrder = await updateOrderInApi(revised, { throwOnError: true });
+      Object.assign(order, savedOrder?.queued ? revised : savedOrder);
+      if (revisedInvoice) {
+        const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
+        Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
+      }
+      save();
+      jobCardDirty = false;
+      setAutosaveStatus("Saved");
+      if (!silent) {
+        setModalAutosave(null);
+        closeModal();
+        toast(`${order.id} updated${revisedInvoice ? ` · ${invoice.number} synchronized` : ""}`);
+        if (reopen) openOrder(order.id);
+        else render();
+      }
+      return true;
+    } catch (error) {
+      Object.assign(order, revised);
+      save();
+      jobCardDirty = false;
+      setAutosaveStatus("Saved locally");
+      if (!silent) toast(error.message || "Cloud sync failed — changes kept locally");
+      return false;
+    } finally {
+      jobCardSaving = false;
+    }
+  };
+  const markJobCardDirty = () => {
+    jobCardDirty = true;
+    setAutosaveStatus("Unsaved changes");
+    clearTimeout(jobCardTimer);
+    jobCardTimer = setTimeout(() => { void persistJobCard({ silent: true }) }, 700);
+  };
+  if (canManage) {
+    document.querySelector(".job-details-editor")?.addEventListener("input", markJobCardDirty);
+    document.querySelector(".job-details-editor")?.addEventListener("change", markJobCardDirty);
+    document.querySelector(".labor-assignment-panel")?.addEventListener("change", markJobCardDirty);
+    setModalAutosave(({ reason }) => {
+      clearTimeout(jobCardTimer);
+      if (!jobCardDirty) return;
+      void persistJobCard({ silent: true });
+      if (reason === "close") toast(`${order.id} autosaved`);
+    });
+  }
   if (editorRoot) {
     bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
-    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
-    document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
+    editorRoot.addEventListener("input", markJobCardDirty);
+    editorRoot.addEventListener("change", markJobCardDirty);
+    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length)); bindEstimateEditor(editorRoot); markJobCardDirty() };
+    document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot); markJobCardDirty() };
     document.querySelector("#save-job-lines").onclick = async event => {
-      const next = estimateFromEditor(editorRoot);
-      if (!next.lines.length) return toast("Add at least one labor or part line");
-      if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
       event.currentTarget.disabled = true;
-      const editedAt = now();
-      const revisedOrder = workOrderWithEditedEstimate(order, { ...next, generatedAt: order.estimate.generatedAt, summary: order.estimate.summary }, editedAt);
-      const revisedInvoice = invoice ? invoiceWithEditedWorkOrder(invoice, revisedOrder, editedAt) : null;
-      try {
-        const savedOrder = await updateOrderInApi(revisedOrder, { throwOnError: true });
-        Object.assign(order, savedOrder?.queued ? revisedOrder : savedOrder);
-        if (revisedInvoice) {
-          const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
-          Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
-        }
-        save();
-        closeModal();
-        toast(`${order.id} line items updated${revisedInvoice ? ` · ${invoice.number} synchronized` : ""}`);
-        openOrder(order.id);
-      } catch (error) {
-        event.currentTarget.disabled = false;
-        toast(error.message || "Line items could not be saved");
-      }
+      jobCardDirty = true;
+      const ok = await persistJobCard({ silent: false, reopen: true });
+      if (!ok) event.currentTarget.disabled = false;
     };
   }
   document.querySelectorAll("[data-send-job-estimate]").forEach(button => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
   document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
-  document.querySelector("#start-job-work")?.addEventListener("click", async () => { order.status = "in_progress"; await updateOrderInApi(order); save(); closeModal(); toast(`${order.id} moved to in progress`); render() });
-  document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
+  document.querySelector("#start-job-work")?.addEventListener("click", async () => {
+    jobCardDirty = true;
+    const details = readJobDetails();
+    order.status = "in_progress";
+    Object.assign(order, details, { status: "in_progress" });
+    await updateOrderInApi(order);
+    save();
+    setModalAutosave(null);
+    closeModal();
+    toast(`${order.id} moved to in progress`);
+    render();
+  });
+  document.querySelector("#complete-job-card")?.addEventListener("click", async () => {
+    if (jobCardDirty) await persistJobCard({ silent: true });
+    completeJobCard(order);
+  });
   document.querySelector("#sign-job-invoice")?.addEventListener("click", () => { if (!invoice.signature) onsiteSignatureModal("invoice", invoice) });
   document.querySelectorAll("[data-print-invoice]").forEach(button => button.onclick = () => printInvoice(button.dataset.printInvoice));
   document.querySelector("#print-job-card")?.addEventListener("click", () => printJobCard(order));
@@ -1418,30 +1897,14 @@ openOrder = function (id) {
     document.querySelectorAll(".labor-assignment-row").forEach(row => {
       row.querySelectorAll(".line-technician").forEach(input => { input.checked = selected.has(input.value) });
     });
-    toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line. Save to persist.`);
+    markJobCardDirty();
+    toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line.`);
   });
   document.querySelector("#save-labor-assignments")?.addEventListener("click", async event => {
-    const assignmentsByLine = new Map([...document.querySelectorAll(".labor-assignment-row")].map(row => [
-      row.dataset.assignmentLine,
-      [...row.querySelectorAll(".line-technician:checked")].map(input => input.value),
-    ]));
-    order.estimate.lines = order.estimate.lines.map(line => line.type === "labor"
-      ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] }
-      : line);
     event.currentTarget.disabled = true;
-    try {
-      const saved = !isOfflineDesktop() && !isLocalShell()
-        ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) })
-        : order;
-      state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
-      save();
-      closeModal();
-      toast(`${order.id} technician assignments saved`);
-      openOrder(order.id);
-    } catch (error) {
-      event.currentTarget.disabled = false;
-      toast(error.message || "Technician assignments could not be saved");
-    }
+    jobCardDirty = true;
+    const ok = await persistJobCard({ silent: false, reopen: true });
+    if (!ok) event.currentTarget.disabled = false;
   });
 };
 
@@ -1472,6 +1935,30 @@ loadShopEntities = async function () {
     ? { ...state.taxSettings, ...taxSettings }
     : { ...state.taxSettings, state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" };
 };
+
+function readHelpSnapshot() {
+  const user = currentUser();
+  if (!user) {
+    return {
+      route: pendingAuthProfile ? "pending-profile" : "login",
+      role: "",
+      subview: "",
+      selectionLabel: "",
+    };
+  }
+  const route = String(state.route || "");
+  let subview = "";
+  if (route === "pos") subview = posMode || "reader";
+  else if (route === "accounting") subview = accountingTab || "";
+  else if (route === "shopops") subview = shopOpsTab || "";
+  else if (route === "ai") subview = aiTab || "";
+  let selectionLabel = "";
+  if (route === "pos" && posSelectedId) {
+    const order = state.orders.find((item) => item.id === posSelectedId);
+    if (order) selectionLabel = `${order.id} · ${order.customer || "No customer"} · ${order.vehicle || "No vehicle"}`;
+  }
+  return { route, role: user.role || "", subview, selectionLabel };
+}
 
 const bindDurableRecordsCore = bind;
 bind = function () {
@@ -1527,6 +2014,15 @@ bind = function () {
   document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
     await loadEmployeesFromApi();
     if (state.route === "employees") render();
+  });
+  syncHelp(readHelpSnapshot(), {
+    icon,
+    onNavigate: (route) => {
+      if (!canAccess(route)) return;
+      state.route = route;
+      save();
+      render();
+    },
   });
 };
 
@@ -1618,6 +2114,7 @@ estimateEditorLine = function (line = {}, index = 0, removable = true) {
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
     </div>
@@ -1631,17 +2128,19 @@ estimateFromEditor = function (root) {
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
     const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     const inventory = type === "part" ? state.inventory.find(item => item.id === row.querySelector(".job-line-inventory").value) : null;
+    const partNumber = type === "part" ? (row.querySelector(".job-line-part-number")?.value || "").trim() : "";
     return normalizeEstimateLine({
       id: row.dataset.lineId || `line-${Date.now()}-${index}`,
       type,
       description: row.querySelector(".job-line-description").value.trim(),
       notes: row.querySelector(".job-line-notes").value.trim(),
+      partNumber,
       quantity,
       unitPrice,
       hours: type === "labor" ? quantity : 0,
       laborRate: type === "labor" ? unitPrice : 0,
       inventoryId: inventory?.id || null,
-      inventorySku: inventory?.sku || "",
+      inventorySku: inventory?.sku || partNumber || "",
       committedQuantity: type === "part" && inventory ? quantity : 0,
       priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
       laborSource: row.dataset.laborSource || "",
@@ -1669,7 +2168,10 @@ refreshEstimateEditor = function (root) {
     const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
     row.dataset.priceStatus = priceStatus;
-    row.querySelector(".job-inventory-field").hidden = type !== "part";
+    const inventoryField = row.querySelector(".job-inventory-field");
+    if (inventoryField) inventoryField.hidden = type !== "part";
+    const partNumberField = row.querySelector(".job-part-number-field");
+    if (partNumberField) partNumberField.hidden = type !== "part";
     row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
     row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
     row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
@@ -1741,13 +2243,83 @@ function applyWorkOrderDraftToForm(form, draft) {
   toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
 }
 
+const NEW_ORDER_DRAFT_KEY = "mechpro:new-work-order-draft:v1";
+function readNewOrderDraftFromForm(form) {
+  if (!form) return null;
+  const data = Object.fromEntries(new FormData(form).entries());
+  const estimate = typeof readNewOrderEstimate === "function" ? readNewOrderEstimate() : null;
+  return {
+    ...data,
+    estimateLines: estimate?.lines || [],
+    savedAt: Date.now(),
+  };
+}
+function applyStoredNewOrderDraft(form, draft) {
+  if (!form || !draft) return;
+  for (const [key, value] of Object.entries(draft)) {
+    if (key === "estimateLines" || key === "savedAt") continue;
+    const field = form.elements[key];
+    if (!field || value == null) continue;
+    if (field.type === "checkbox") field.checked = Boolean(value);
+    else field.value = value;
+  }
+  form.elements.customerSelect?.dispatchEvent(new Event("change"));
+  if (draft.customerSelect && draft.customerSelect !== "__new__") {
+    form.elements.customerSelect.value = draft.customerSelect;
+    form.elements.customerSelect.dispatchEvent(new Event("change"));
+  }
+  if (draft.vehicle) form.elements.vehicle.value = draft.vehicle;
+  if (draft.vin) form.elements.vin.value = draft.vin;
+  if (draft.phone) form.elements.phone.value = draft.phone;
+  if (Array.isArray(draft.estimateLines) && draft.estimateLines.length) {
+    const lines = document.querySelector("#new-estimate-lines");
+    if (lines) {
+      lines.innerHTML = draft.estimateLines.map(line => newOrderEstimateRow(line)).join("");
+      bindEstimateEditor(lines);
+      refreshEstimateEditor(lines);
+    }
+  }
+}
+function bindNewOrderDraftAutosave(form) {
+  if (!form) return;
+  let timer = 0;
+  const persist = () => {
+    try { localStorage.setItem(NEW_ORDER_DRAFT_KEY, JSON.stringify(readNewOrderDraftFromForm(form))) } catch { /* private mode */ }
+  };
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(persist, 400);
+  };
+  form.addEventListener("input", schedule);
+  form.addEventListener("change", schedule);
+  setModalAutosave(() => {
+    clearTimeout(timer);
+    persist();
+  });
+  form.addEventListener("submit", () => {
+    try { localStorage.removeItem(NEW_ORDER_DRAFT_KEY) } catch { /* ignore */ }
+    setModalAutosave(null);
+  }, { capture: true });
+}
+
 const openNewEstimateFillCore = openNew;
 function openNewWithDraft(draft = null) {
   openNewEstimateFillCore();
   const form = document.querySelector("#new-form");
   if (!form) return;
   addEstimateSourceControls(form);
-  if (draft) applyWorkOrderDraftToForm(form, draft);
+  if (draft) {
+    applyWorkOrderDraftToForm(form, draft);
+  } else {
+    try {
+      const stored = JSON.parse(localStorage.getItem(NEW_ORDER_DRAFT_KEY) || "null");
+      if (stored && Date.now() - Number(stored.savedAt || 0) < 7 * 24 * 60 * 60 * 1000) {
+        applyStoredNewOrderDraft(form, stored);
+        toast("Restored unsaved work order draft");
+      }
+    } catch { /* ignore corrupt draft */ }
+  }
+  bindNewOrderDraftAutosave(form);
 }
 openNew = function () { openNewWithDraft() };
 
@@ -2025,6 +2597,17 @@ openOrder = function (id) {
   const order = state.orders.find(item => item.id === id);
   const modalBody = document.querySelector(".job-card-modal .modal-body");
   if (!order || !modalBody) return;
+  const user = currentUser();
+  const assigned = user && orderIncludesTechnician(order, user, state.users);
+  const activeClock = user ? openJobClock(order.id, user.id) : null;
+  const clockRows = (order.assignments || []).map(item => {
+    const tracked = item.employeeId ? clockedHours(state.jobClockEntries, order.id, item.employeeId) : Number(item.hoursWorked || 0);
+    return `<li><strong>${escapeHtml(item.name)}</strong> · ${escapeHtml(item.role)} · ${formatHours(tracked || item.hoursWorked)}</li>`;
+  }).join("");
+  const clockButton = user?.role === "technician" && assigned ? `<button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${escapeAttr(order.id)}" type="button">${activeClock ? "Clock out" : "Clock in"}</button>` : "";
+  modalBody.insertAdjacentHTML("afterbegin", `<section class="job-clock-panel"><div><h3>Assigned technicians</h3><ul class="intake-causes">${clockRows || `<li>${escapeHtml(order.tech || "Unassigned")}</li>`}</ul>${clockButton}</div>${["admin", "service_writer"].includes(user?.role) ? `<button class="secondary" type="button" id="edit-assignments">Edit assignments</button>` : ""}</section>`);
+  document.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) });
+  document.querySelector("#edit-assignments")?.addEventListener("click", () => openAssignmentEditor(order));
   const summary = workOrderPaymentSummary(order);
   modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money(summary.total)}</b></div><div><span>Paid</span><b>${money(summary.paid)}</b></div><div><span>Remaining</span><b>${money(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
   document.querySelector("#record-work-order-payment")?.addEventListener("click", () => recordTargetPayment("work_order", order.id));
@@ -2502,6 +3085,7 @@ ${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-ex
 <label>Jump to week<input type="date" id="payroll-jump" value="${period.key}"/></label>
 </div>
 <div class="payroll-summary"><span>Pay period</span><strong>${period.start} – ${period.end}</strong><span>${liabilities.hours.toFixed(2)} labor hours</span><strong>${money(liabilities.net)} net</strong></div>
+${admin ? technicianTrackerHtml(technicianPerformance(state.orders, state.users, state.jobClockEntries)) : ""}
 ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT withheld (2200)</span><strong>${money(liabilities.federal)}</strong></article><article><span>FICA payable (2210)</span><strong>${money(liabilities.ss)}</strong></article><article><span>Medicare payable (2220)</span><strong>${money(liabilities.med)}</strong></article><article><span>Suggested liabilities</span><strong>${money(liabilities.federal + liabilities.ss + liabilities.med)}</strong><small>Do not auto-journal</small></article></div>` : ''}
 <div class="payroll-grid">${stubs.map(payStubMarkup).join('') || empty('No active payroll employees')}</div>`);
 };
@@ -2648,81 +3232,94 @@ function printEmployeeAnnualForm(userId) {
   }
 }
 
-const openEmployeeFilingCore = openEmployee;
-openEmployee = function () {
-  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon('x')}</button></div><div class="modal-body">
+openEmployee = function (existing = null) {
+  const roleOptions = ["technician", "office", "service_writer", "admin"]
+    .map(role => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role] || role}</option>`)
+    .join("");
+  const employmentOptions = ["Hourly", "Salary", "Contractor"]
+    .map(value => `<option ${existing?.employmentType === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const payFreqOptions = ["Weekly", "Biweekly", "Monthly"]
+    .map(value => `<option ${(existing?.payFrequency || "Weekly") === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const taxStatusOptions = ["W-2", "1099 Contractor"]
+    .map(value => `<option ${(existing?.taxStatus || "W-2") === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const filingStatus = existing?.w4FilingStatus || "single";
+  const filingOptions = [
+    ["single", "Single / Married filing separately"],
+    ["married_joint", "Married filing jointly"],
+    ["head_of_household", "Head of household"],
+  ].map(([value, labelText]) => `<option value="${value}" ${filingStatus === value ? "selected" : ""}>${labelText}</option>`).join("");
+  const step2 = Boolean(existing?.w4Step2Checkbox);
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">
 <h3>Identity & access</h3><div class="form-grid">
-<label>Employee name *<input name="name" required/></label>
-<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label>
-<label>Job title<input name="title"/></label>
-<label>Department<input name="department"/></label>
-<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required/></label>
-<label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label>
-<label class="full">Technician dispatch name <input name="techName"/></label>
+<label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label>
+<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required value="${employeeFormValue(existing, "employeeId")}"/></label>
+<label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label>
+<label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label>
+<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label>
+<label>Role<select name="role">${roleOptions}</select></label>
+<label>Classification<select name="classification">${EMPLOYEE_CLASSIFICATIONS.map(item => `<option value="${item.id}" ${classificationFor(existing || { role: "technician" }) === item.id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+<label class="full">Technician dispatch name <input name="techName" value="${employeeFormValue(existing, "techName")}"/></label>
 </div>
 <h3>Employment & pay</h3><div class="form-grid">
-<label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label>
-<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label>
-<label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label>
-<label>Start date<input name="startDate" type="date" value="${filingIsoDate()}"/></label>
-<label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label>
-<label>Phone<input name="phone" type="tel"/></label>
-<label class="full">Home address<input name="address"/></label>
-<label class="full">Emergency contact<input name="emergencyContact"/></label>
+<label>Employment type<select name="employmentType">${employmentOptions}</select></label>
+<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label>
+<label>Pay plan<select name="payPlan">${PAY_PLANS.map(plan => `<option value="${plan.id}" ${(existing?.payPlan || "hourly") === plan.id ? "selected" : ""}>${plan.label}</option>`).join("")}</select></label>
+<label>Commission %<input name="commissionPercent" type="number" min="0" max="100" step=".01" value="${Number(existing?.commissionPercent || 0)}"/></label>
+<label>Pay frequency<select name="payFrequency">${payFreqOptions}</select></label>
+<label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", filingIsoDate())}"/></label>
+<label>Tax status<select name="taxStatus">${taxStatusOptions}</select></label>
+<label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label>
+<label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label>
+<label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label>
 </div>
 <h3>Form W-4 / withholding (Pub 15-T 2026)</h3><div class="form-grid">
-<label>Filing status<select name="w4FilingStatus"><option value="single">Single / Married filing separately</option><option value="married_joint">Married filing jointly</option><option value="head_of_household">Head of household</option></select></label>
-<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false">No</option><option value="true">Yes — multiple jobs</option></select></label>
-<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="0"/></label>
-<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="0"/></label>
-<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="0"/></label>
-<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="0"/></label>
-<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="0"/></label>
-<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="0"/><small>TX = 0</small></label>
-<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX"/></label>
+<label>Filing status<select name="w4FilingStatus">${filingOptions}</select></label>
+<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false" ${step2 ? "" : "selected"}>No</option><option value="true" ${step2 ? "selected" : ""}>Yes — multiple jobs</option></select></label>
+<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="${Number(existing?.w4DependentCredits || 0)}"/></label>
+<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="${Number(existing?.w4OtherIncome || 0)}"/></label>
+<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="${Number(existing?.w4Deductions || 0)}"/></label>
+<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="${Number(existing?.w4ExtraWithholding || 0)}"/></label>
+<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="${Number(existing?.pretaxDeductionPerPeriod || 0)}"/></label>
+<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="${Number(existing?.stateWithholdingRate || 0)}"/><small>TX = 0</small></label>
+<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX" value="${employeeFormValue(existing, "ssn")}"/></label>
 </div>
-<div class="ledger-note">${icon('info', 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
-</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon('user-plus', 14)} Create profile</button></div></form>`);
-  document.querySelector('#employee-email')?.focus({ preventScroll: true });
-  document.querySelector('#employee-form').onsubmit = async event => {
+<div class="ledger-note">${icon("info", 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
+</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon(existing ? "save" : "user-plus", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+  if (!existing) document.querySelector("#employee-email")?.focus({ preventScroll: true });
+  document.querySelector("#employee-form").onsubmit = async event => {
     event.preventDefault();
     const form = event.target;
     const data = Object.fromEntries(new FormData(form));
-    const email = String(data.workEmail || '').trim().toLowerCase();
-    const button = form.querySelector('button.primary');
-    if (!email || !email.includes('@')) { toast('Enter a valid work email address'); return; }
-    if (state.users.some(user => String(user.email || '').toLowerCase() === email)) { toast('An employee profile already uses that email'); return; }
-    if (state.users.some(user => user.employeeId === data.employeeId.trim())) { toast('An employee already uses that employee ID'); return; }
-    if (data.role === 'technician' && !String(data.techName || '').trim()) { toast('Add the technician dispatch name'); return; }
-    const record = {
-      id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(),
-      active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate,
-      employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(),
-      emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus,
-      w4FilingStatus: data.w4FilingStatus, w4Step2Checkbox: data.w4Step2Checkbox === 'true',
-      w4DependentCredits: Number(data.w4DependentCredits) || 0, w4OtherIncome: Number(data.w4OtherIncome) || 0,
-      w4Deductions: Number(data.w4Deductions) || 0, w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
-      pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
-      stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
-      federalWithholdingRate: 0,
-      ssn: String(data.ssn || '').replace(/\D/g, '').slice(-4),
-    };
+    const email = String(existing?.email || data.workEmail || "").trim().toLowerCase();
+    const button = form.querySelector("button.primary");
+    if (!email || !email.includes("@")) { toast("Enter a valid work email address"); return; }
+    if (!existing && state.users.some(user => String(user.email || "").toLowerCase() === email)) {
+      toast("An employee profile already uses that email");
+      return;
+    }
+    if (state.users.some(user => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) {
+      toast("An employee already uses that employee ID");
+      return;
+    }
+    if (data.role === "technician" && !String(data.techName || "").trim()) {
+      toast("Add the technician dispatch name");
+      return;
+    }
     if (button) button.disabled = true;
     try {
-      const saved = await apiFetch('/entities/employees', { method: 'POST', body: JSON.stringify(record) });
-      const value = saved?.queued ? record : saved || record;
-      state.users.push(value);
-      save();
+      const saved = await saveEmployeeRecord(existing, data);
       closeModal();
-      toast(`${value.name || data.name} profile created`);
+      toast(`${saved.name} profile ${existing ? "updated" : "created"}`);
       render();
     } catch (error) {
-      toast(error.message || 'Employee could not be saved');
+      toast(error.message || "Employee could not be saved");
     } finally {
       if (button) button.disabled = false;
     }
   };
-  void openEmployeeFilingCore;
 };
 
 const bindFilingCore = bindExpandedFeatures;

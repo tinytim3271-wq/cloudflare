@@ -4,7 +4,8 @@ const FOUNDING_TRIAL_DAYS = 14;
 
 function missingFoundingSchema(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /no such table:\s*(?:main\.)?founding_invites\b/i.test(message);
+  return /no such table:\s*(?:main\.)?founding_invites\b/i.test(message)
+    || /no such column:\s*(?:[\w.]+\.)?plan_id\b/i.test(message);
 }
 
 /**
@@ -74,14 +75,14 @@ export async function applyPendingFoundingClaim(env, { email, shopId, ownerName,
         updated_at = excluded.updated_at
     `).bind(targetShopId, displayName, normalized, owner, trialEnds, nowIso, nowIso, normalized),
     env.DB.prepare(`
-      INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
-      VALUES (?, ?, 'trialing', ?, ?, ?)
+      INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, updated_at)
+      VALUES (?, ?, 'trialing', ?, ?)
       ON CONFLICT(shop_id) DO UPDATE SET
         plan_id = excluded.plan_id,
         status = excluded.status,
         current_period_end = excluded.current_period_end,
         updated_at = excluded.updated_at
-    `).bind(targetShopId, planId, trialEnds, nowIso, nowIso),
+    `).bind(targetShopId, planId, trialEnds, nowIso),
     env.DB.prepare(`
       UPDATE shops SET billing_status = 'trialing', updated_at = ? WHERE id = ?
     `).bind(nowIso, targetShopId),

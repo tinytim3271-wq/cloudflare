@@ -78,3 +78,9 @@ input,select,textarea{border-color:#cdd7cf;background:#fff}input:hover,select:ho
 .platform-table td small,.platform-table th{vertical-align:top}
 .platform-shell .shop-card{margin-bottom:10px}
 @media(max-width:900px){.platform-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Job card editable details — stay editable through invoice */
+.job-details-editor,.job-editor{margin:16px 0;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.job-details-editor .job-section-head,.job-editor .job-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.job-details-editor .autosave-hint{font:600 11px "JetBrains Mono",monospace;color:var(--muted);white-space:nowrap}
+.job-card-modal .reference-estimate-document{opacity:.92}

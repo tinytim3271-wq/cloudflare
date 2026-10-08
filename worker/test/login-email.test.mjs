@@ -9,7 +9,6 @@ function emailBinding(send = async () => {}) {
   const sent = [];
   return {
     sent,
-    createMessage(from, to, raw) { return { from, to, raw }; },
     async send(message) {
       sent.push(message);
       await send(message);
@@ -66,8 +65,10 @@ test('send-login returns 202 only after the provider accepts the message', async
   assert.equal(response.status, 202);
   assert.equal((await response.json()).ok, true);
   assert.equal(EMAIL.sent.length, 1);
-  assert.match(EMAIL.sent[0].raw, new RegExp(TOKEN));
+  assert.match(EMAIL.sent[0].text, new RegExp(TOKEN));
   assert.equal(EMAIL.sent[0].from, 'noreply@yourcarguy806.com');
+  assert.equal(EMAIL.sent[0].to, 'owner@example.test');
+  assert.equal(EMAIL.sent[0].subject, 'Sign in to MechPro');
 });
 
 test('send-login rejects a missing or wrong bearer secret before sending', async (t) => {
@@ -95,6 +96,19 @@ test('send-login does not relay links for other sites or other inboxes', async (
   const mismatch = await worker.fetch(sendLoginRequest({ email: 'other@example.test' }), env);
   assert.equal(mismatch.status, 400);
   assert.equal(EMAIL.sent.length, 0);
+});
+
+test('send-login names the provider rejection when Email Sending cannot reach that address', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const rejected = new Error('recipient not allowed');
+  rejected.code = 'E_RECIPIENT_NOT_ALLOWED';
+  const response = await worker.fetch(sendLoginRequest(), {
+    AUTH_EMAIL_WEBHOOK_SECRET: SECRET,
+    DB: pendingLoginDb(),
+    EMAIL: emailBinding(async () => { throw rejected; }),
+  });
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).message, /cannot receive a MechPro sign-in link yet/);
 });
 
 test('send-login returns 502 when the provider rejects the message', async (t) => {

@@ -123,7 +123,6 @@ test('worker email binding sends the login link and ignores a broken webhook', a
     DB: mockLoginDb(),
     AUTH_EMAIL_WEBHOOK: 'https://your-email-endpoint.example/send-login',
     EMAIL: {
-      createMessage(from, to, raw) { return { from, to, raw }; },
       async send(message) { sent.push(message); },
     },
   });
@@ -131,7 +130,8 @@ test('worker email binding sends the login link and ignores a broken webhook', a
   assert.equal(sent.length, 1);
   assert.equal(sent[0].from, 'noreply@yourcarguy806.com');
   assert.equal(sent[0].to, 'owner@example.test');
-  assert.match(sent[0].raw, /https:\/\/app\.example\.test\/api\/auth\/callback\?token=[a-f0-9]{32}/);
+  assert.equal(sent[0].subject, 'Sign in to MechPro');
+  assert.match(sent[0].text, /https:\/\/app\.example\.test\/api\/auth\/callback\?token=[a-f0-9]{32}/);
   assert.equal(fetched.mock.callCount(), 0);
 });
 
@@ -160,7 +160,6 @@ test('failed direct delivery does not start the retry cooldown', async (t) => {
   const env = {
     DB,
     EMAIL: {
-      createMessage(from, to, raw) { return { from, to, raw }; },
       async send() { throw new Error('email routing disabled'); },
     },
   };
@@ -450,6 +449,7 @@ test('Google sign-in validates the ID token and creates a one-time desktop hando
       const body = new URLSearchParams(init.body);
       assert.equal(body.get('code'), 'authorization-code');
       assert.equal(body.get('client_secret'), 'google-secret');
+      assert.equal(body.get('redirect_uri'), 'https://app.example.test/api/auth/google/callback');
       assert.ok(body.get('code_verifier'));
       return Response.json({ id_token: idToken });
     }
@@ -464,6 +464,26 @@ test('Google sign-in validates the ID token and creates a one-time desktop hando
   assert.match(await callback.text(), /href="mechpro:\/\/auth\?token=[a-f0-9]{32}"/);
   assert.doesNotMatch(callback.headers.getSetCookie().join('\n'), /mechpro_session=/);
   assert.equal(requests.length, 2);
+});
+
+test('Google sign-in from the apex host uses the registered www callback', async () => {
+  const env = {
+    GOOGLE_CLIENT_ID: 'google-client.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'google-secret',
+  };
+  const apex = await worker.fetch(new Request('https://yourcarguy806.com/api/auth/google?returnTo=%2F&desktop=1'), env);
+  assert.equal(apex.status, 302);
+  assert.equal(apex.headers.get('location'), 'https://www.yourcarguy806.com/api/auth/google?returnTo=%2F&desktop=1');
+  assert.equal(apex.headers.getSetCookie().length, 0);
+
+  const start = await worker.fetch(new Request('https://www.yourcarguy806.com/api/auth/google?returnTo=%2F'), env);
+  assert.equal(start.status, 302);
+  const authorizationUrl = new URL(start.headers.get('location'));
+  assert.equal(authorizationUrl.origin, 'https://accounts.google.com');
+  assert.equal(
+    authorizationUrl.searchParams.get('redirect_uri'),
+    'https://www.yourcarguy806.com/api/auth/google/callback',
+  );
 });
 
 test('Google callback rejects a mismatched OAuth state before token exchange', async (t) => {

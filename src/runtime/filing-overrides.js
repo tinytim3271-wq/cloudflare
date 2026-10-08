@@ -558,81 +558,91 @@ function printEmployeeAnnualForm(userId) {
   }
 }
 
-const openEmployeeFilingCore = openEmployee;
-openEmployee = function () {
-  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon('x')}</button></div><div class="modal-body">
+openEmployee = function (existing = null) {
+  const roleOptions = ["technician", "office", "service_writer", "admin"]
+    .map(role => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role] || role}</option>`)
+    .join("");
+  const employmentOptions = ["Hourly", "Salary", "Contractor"]
+    .map(value => `<option ${existing?.employmentType === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const payFreqOptions = ["Weekly", "Biweekly", "Monthly"]
+    .map(value => `<option ${(existing?.payFrequency || "Weekly") === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const taxStatusOptions = ["W-2", "1099 Contractor"]
+    .map(value => `<option ${(existing?.taxStatus || "W-2") === value ? "selected" : ""}>${value}</option>`)
+    .join("");
+  const filingStatus = existing?.w4FilingStatus || "single";
+  const filingOptions = [
+    ["single", "Single / Married filing separately"],
+    ["married_joint", "Married filing jointly"],
+    ["head_of_household", "Head of household"],
+  ].map(([value, labelText]) => `<option value="${value}" ${filingStatus === value ? "selected" : ""}>${labelText}</option>`).join("");
+  const step2 = Boolean(existing?.w4Step2Checkbox);
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">
 <h3>Identity & access</h3><div class="form-grid">
-<label>Employee name *<input name="name" required/></label>
-<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label>
-<label>Job title<input name="title"/></label>
-<label>Department<input name="department"/></label>
-<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required/></label>
-<label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label>
-<label class="full">Technician dispatch name <input name="techName"/></label>
+<label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label>
+<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required value="${employeeFormValue(existing, "employeeId")}"/></label>
+<label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label>
+<label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label>
+<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label>
+<label>Role<select name="role">${roleOptions}</select></label>
+<label class="full">Technician dispatch name <input name="techName" value="${employeeFormValue(existing, "techName")}"/></label>
 </div>
 <h3>Employment & pay</h3><div class="form-grid">
-<label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label>
-<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label>
-<label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label>
-<label>Start date<input name="startDate" type="date" value="${filingIsoDate()}"/></label>
-<label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label>
-<label>Phone<input name="phone" type="tel"/></label>
-<label class="full">Home address<input name="address"/></label>
-<label class="full">Emergency contact<input name="emergencyContact"/></label>
+<label>Employment type<select name="employmentType">${employmentOptions}</select></label>
+<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label>
+<label>Pay frequency<select name="payFrequency">${payFreqOptions}</select></label>
+<label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", filingIsoDate())}"/></label>
+<label>Tax status<select name="taxStatus">${taxStatusOptions}</select></label>
+<label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label>
+<label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label>
+<label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label>
 </div>
 <h3>Form W-4 / withholding (Pub 15-T 2026)</h3><div class="form-grid">
-<label>Filing status<select name="w4FilingStatus"><option value="single">Single / Married filing separately</option><option value="married_joint">Married filing jointly</option><option value="head_of_household">Head of household</option></select></label>
-<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false">No</option><option value="true">Yes — multiple jobs</option></select></label>
-<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="0"/></label>
-<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="0"/></label>
-<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="0"/></label>
-<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="0"/></label>
-<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="0"/></label>
-<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="0"/><small>TX = 0</small></label>
-<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX"/></label>
+<label>Filing status<select name="w4FilingStatus">${filingOptions}</select></label>
+<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false" ${step2 ? "" : "selected"}>No</option><option value="true" ${step2 ? "selected" : ""}>Yes — multiple jobs</option></select></label>
+<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="${Number(existing?.w4DependentCredits || 0)}"/></label>
+<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="${Number(existing?.w4OtherIncome || 0)}"/></label>
+<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="${Number(existing?.w4Deductions || 0)}"/></label>
+<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="${Number(existing?.w4ExtraWithholding || 0)}"/></label>
+<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="${Number(existing?.pretaxDeductionPerPeriod || 0)}"/></label>
+<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="${Number(existing?.stateWithholdingRate || 0)}"/><small>TX = 0</small></label>
+<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX" value="${employeeFormValue(existing, "ssn")}"/></label>
 </div>
-<div class="ledger-note">${icon('info', 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
-</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon('user-plus', 14)} Create profile</button></div></form>`);
-  document.querySelector('#employee-email')?.focus({ preventScroll: true });
-  document.querySelector('#employee-form').onsubmit = async event => {
+<div class="ledger-note">${icon("info", 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
+</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon(existing ? "save" : "user-plus", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+  if (!existing) document.querySelector("#employee-email")?.focus({ preventScroll: true });
+  document.querySelector("#employee-form").onsubmit = async event => {
     event.preventDefault();
     const form = event.target;
     const data = Object.fromEntries(new FormData(form));
-    const email = String(data.workEmail || '').trim().toLowerCase();
-    const button = form.querySelector('button.primary');
-    if (!email || !email.includes('@')) { toast('Enter a valid work email address'); return; }
-    if (state.users.some(user => String(user.email || '').toLowerCase() === email)) { toast('An employee profile already uses that email'); return; }
-    if (state.users.some(user => user.employeeId === data.employeeId.trim())) { toast('An employee already uses that employee ID'); return; }
-    if (data.role === 'technician' && !String(data.techName || '').trim()) { toast('Add the technician dispatch name'); return; }
-    const record = {
-      id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(),
-      active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate,
-      employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(),
-      emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus,
-      w4FilingStatus: data.w4FilingStatus, w4Step2Checkbox: data.w4Step2Checkbox === 'true',
-      w4DependentCredits: Number(data.w4DependentCredits) || 0, w4OtherIncome: Number(data.w4OtherIncome) || 0,
-      w4Deductions: Number(data.w4Deductions) || 0, w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
-      pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
-      stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
-      federalWithholdingRate: 0,
-      ssn: String(data.ssn || '').replace(/\D/g, '').slice(-4),
-    };
+    const email = String(existing?.email || data.workEmail || "").trim().toLowerCase();
+    const button = form.querySelector("button.primary");
+    if (!email || !email.includes("@")) { toast("Enter a valid work email address"); return; }
+    if (!existing && state.users.some(user => String(user.email || "").toLowerCase() === email)) {
+      toast("An employee profile already uses that email");
+      return;
+    }
+    if (state.users.some(user => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) {
+      toast("An employee already uses that employee ID");
+      return;
+    }
+    if (data.role === "technician" && !String(data.techName || "").trim()) {
+      toast("Add the technician dispatch name");
+      return;
+    }
     if (button) button.disabled = true;
     try {
-      const saved = await apiFetch('/entities/employees', { method: 'POST', body: JSON.stringify(record) });
-      const value = saved?.queued ? record : saved || record;
-      state.users.push(value);
-      save();
+      const saved = await saveEmployeeRecord(existing, data);
       closeModal();
-      toast(`${value.name || data.name} profile created`);
+      toast(`${saved.name} profile ${existing ? "updated" : "created"}`);
       render();
     } catch (error) {
-      toast(error.message || 'Employee could not be saved');
+      toast(error.message || "Employee could not be saved");
     } finally {
       if (button) button.disabled = false;
     }
   };
-  void openEmployeeFilingCore;
 };
 
 const bindFilingCore = bindExpandedFeatures;

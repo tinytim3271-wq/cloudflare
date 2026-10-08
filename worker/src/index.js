@@ -13,6 +13,7 @@ import {
   validShopId,
   validVin,
 } from './domain.mjs';
+import { payrollLinesForOrder } from '../../src/modules/technician-assignment.js';
 import {
   base64UrlEncode,
   constantTimeEqual,
@@ -26,7 +27,7 @@ import {
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
-import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
+import { canSendLoginEmail, deliverLoginEmail, handleSendLogin, signInDeliveryFailure } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
@@ -42,7 +43,8 @@ import {
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
-import { recordPayment as recordPaymentToTarget } from './payments.mjs';
+import { chargeTargetSnapshot, recordPayment as recordPaymentToTarget } from './payments.mjs';
+import { handleTerminalRoutes, stripeKeyMode, terminalPaymentRecord } from './terminal.mjs';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -959,27 +961,23 @@ async function handleOnboarding(request, env, context, analytics) {
 async function handlePayroll(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office']);
-  const [orders, employees] = await Promise.all([
+  const [orders, employees, clocks] = await Promise.all([
     listEntities(env, context.shopId, 'orders'),
     listEntities(env, context.shopId, 'employees'),
+    listEntities(env, context.shopId, 'jobclockentries'),
   ]);
   const now = new Date();
   const day = (now.getUTCDay() + 6) % 7;
   const monday = new Date(now);
   monday.setUTCDate(now.getUTCDate() - day);
   const period = monday.toISOString().slice(0, 10);
-  const entries = orders.flatMap(order => {
-    if (!['completed', 'invoiced'].includes(order.status)) return [];
-    const employee = employees.find(item => item.active && item.techName === order.tech);
-    const hours = Number(order.laborHours ?? (Number(order.labor || 0) / 165));
-    if (!employee || !hours) return [];
-    return [{
-      id: `${period}#${order.id}`, workOrderId: order.id, employeeId: employee.id,
-      periodKey: period, hours, rate: Number(employee.payRate || 0),
-      grossPay: employee.employmentType === 'Hourly' ? Math.round(hours * Number(employee.payRate || 0) * 100) / 100 : 0,
-      syncedAt: now.toISOString(),
-    }];
-  });
+  const entries = orders.flatMap(order => payrollLinesForOrder({
+    order,
+    users: employees,
+    clocks,
+    periodKey: period,
+    nowIso: now.toISOString(),
+  }).map(entry => ({ ...entry, syncedAt: now.toISOString() })));
   for (const entry of entries) await putEntity(env, context, 'payrollentries', entry.id, entry);
   captureForContext(analytics, context, 'payroll_synced', {
     period,
@@ -1420,6 +1418,77 @@ async function handlePaymentRecord(request, env, context, analytics) {
   return json(result, 201);
 }
 
+function stripeWebhookUrlForShop(request, shopId) {
+  const url = new URL(request.url);
+  return `${url.origin}/api/payments/webhook/${encodeURIComponent(shopId)}`;
+}
+
+async function handleStripeStatus(request, env, context) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'super_admin']);
+  const shopId = context.shopId;
+  if (!shopId) throw new HttpError(400, 'Shop context is required');
+  const [secretKey, webhookSecret, publishableKey] = await Promise.all([
+    getIntegrationSecret(env, shopId, 'stripe-secret-key'),
+    getIntegrationSecret(env, shopId, 'stripe-webhook-secret'),
+    getIntegrationSecret(env, shopId, 'stripe-publishable-key'),
+  ]);
+  const configured = Boolean(secretKey && webhookSecret);
+  return json({
+    configured,
+    shopId,
+    provider: 'stripe',
+    webhookUrl: stripeWebhookUrlForShop(request, shopId),
+    hasSecretKey: Boolean(secretKey),
+    hasWebhookSecret: Boolean(webhookSecret),
+    hasPublishableKey: Boolean(publishableKey),
+  });
+}
+
+async function handleStripeConfigure(request, env, context, analytics) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'super_admin']);
+  const shopId = context.shopId;
+  if (!shopId) throw new HttpError(400, 'Shop context is required');
+  const body = await requestJson(request);
+  const secretKey = String(body.secretKey || '').trim();
+  const webhookSecret = String(body.webhookSecret || '').trim();
+  const publishableKey = String(body.publishableKey || '').trim();
+  const updatingSecrets = Boolean(secretKey || webhookSecret);
+  if (updatingSecrets) {
+    if (!/^sk_(test|live)_/.test(secretKey) || !/^whsec_/.test(webhookSecret)) {
+      throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
+    }
+    await Promise.all([
+      saveIntegrationSecret(env, shopId, 'stripe-secret-key', secretKey),
+      saveIntegrationSecret(env, shopId, 'stripe-webhook-secret', webhookSecret),
+    ]);
+  }
+  if (publishableKey) {
+    if (!/^pk_(test|live)_/.test(publishableKey)) throw new HttpError(400, 'Publishable key must start with pk_test_ or pk_live_');
+    const secret = secretKey || await getIntegrationSecret(env, shopId, 'stripe-secret-key');
+    if (!secret) throw new HttpError(409, 'Save the Stripe secret key before the publishable key');
+    if (stripeKeyMode(secret) !== stripeKeyMode(publishableKey)) {
+      throw new HttpError(400, 'Publishable key must be test or live to match the secret key');
+    }
+    await saveIntegrationSecret(env, shopId, 'stripe-publishable-key', publishableKey);
+  }
+  if (!updatingSecrets && !publishableKey) {
+    throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
+  }
+  captureForContext(analytics, context, 'stripe_configured', { shop_id: shopId, provider: 'stripe' });
+  capturePostHogEvent(env, context, 'stripe_payments_configured', {
+    shop_id: shopId,
+    actor_role: context.role,
+  });
+  return json({
+    configured: true,
+    shopId,
+    provider: 'stripe',
+    webhookUrl: stripeWebhookUrlForShop(request, shopId),
+  });
+}
+
 async function handleStripeWebhook(request, env, shopId, analytics) {
   analytics.distinctId = `stripe-webhook:${shopId}`;
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
@@ -1462,6 +1531,16 @@ async function handleStripeWebhook(request, env, shopId, analytics) {
         processor: 'stripe',
         $process_person_profile: false,
       });
+    }
+  }
+  if (event.type === 'payment_intent.succeeded') {
+    const record = terminalPaymentRecord(event.data?.object, shopId);
+    if (record) {
+      try {
+        await recordPaymentToTarget(env, { shopId, userId: 'stripe-webhook' }, record.body, { paymentId: record.paymentId });
+      } catch (error) {
+        if (error?.status !== 409) throw error;
+      }
     }
   }
   return json({ received: true });
@@ -1572,14 +1651,20 @@ async function handleAdmin(request, env, context, segments, analytics) {
     const body = await requestJson(request);
     const secretKey = String(body.secretKey || '').trim();
     const webhookSecret = String(body.webhookSecret || '').trim();
-    if (!/^sk_(test|live)_/.test(secretKey) || !/^whsec_/.test(webhookSecret)) {
+    const publishableKey = String(body.publishableKey || '').trim();
+    if (!/^sk_(test|live)_/.test(secretKey) || secretKey.length < 30 || !/^whsec_/.test(webhookSecret)) {
       throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
     }
-    await Promise.all([
+    if (publishableKey && (!/^pk_(test|live)_/.test(publishableKey) || stripeKeyMode(secretKey) !== stripeKeyMode(publishableKey))) {
+      throw new HttpError(400, 'Publishable key must be test or live to match the secret key');
+    }
+    const writes = [
       saveIntegrationSecret(env, target, 'stripe-secret-key', secretKey),
       saveIntegrationSecret(env, target, 'stripe-webhook-secret', webhookSecret),
-    ]);
-    return json({ configured: true, shopId: target, provider: 'stripe' });
+    ];
+    if (publishableKey) writes.push(saveIntegrationSecret(env, target, 'stripe-publishable-key', publishableKey));
+    await Promise.all(writes);
+    return json({ configured: true, shopId: target, provider: 'stripe', hasPublishableKey: Boolean(publishableKey) });
   }
   if (request.method === 'POST' && ['reset-password', 'set-password'].includes(action)) {
     throw new HttpError(501, 'Passwords are managed by the Cloudflare Access identity provider');
@@ -1764,8 +1849,16 @@ function desktopHandoffPage(token) {
 </html>`;
 }
 
-function googleRedirectUri(request) {
-  return new URL('/api/auth/google/callback', new URL(request.url).origin).toString();
+function googleAuthOrigin(request, env) {
+  const configured = String(env.GOOGLE_REDIRECT_ORIGIN || '').trim();
+  if (configured) return new URL(configured).origin;
+  const hostname = new URL(request.url).hostname.replace(/^www\./, '');
+  if (hostname === 'yourcarguy806.com') return 'https://www.yourcarguy806.com';
+  return new URL(request.url).origin;
+}
+
+function googleRedirectUri(request, env) {
+  return new URL('/api/auth/google/callback', googleAuthOrigin(request, env)).toString();
 }
 
 async function handleGoogleSignIn(request, env) {
@@ -1777,10 +1870,18 @@ async function handleGoogleSignIn(request, env) {
   const verifier = randomBase64Url(48);
   const returnTo = safeReturnPath(requestUrl.searchParams.get('returnTo') || '/');
   const desktop = requestUrl.searchParams.get('desktop') === '1';
+  const origin = googleAuthOrigin(request, env);
+  if (requestUrl.origin !== origin) {
+    const next = new URL(`${requestUrl.pathname}${requestUrl.search}`, origin);
+    return new Response(null, {
+      status: 302,
+      headers: { Location: next.toString(), 'Cache-Control': 'no-store' },
+    });
+  }
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorizationUrl.search = new URLSearchParams({
     client_id: clientId,
-    redirect_uri: googleRedirectUri(request),
+    redirect_uri: googleRedirectUri(request, env),
     response_type: 'code',
     scope: 'openid email profile',
     state,
@@ -1819,7 +1920,7 @@ async function handleGoogleCallback(request, env) {
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: googleRedirectUri(request),
+      redirect_uri: googleRedirectUri(request, env),
       grant_type: 'authorization_code',
       code_verifier: verifier,
     }),
@@ -1977,7 +2078,7 @@ async function handleMagicLink(request, env) {
     }
   } catch (error) {
     await env.DB.prepare('DELETE FROM login_tokens WHERE token_hash = ?').bind(tokenHash).run();
-    throw error instanceof HttpError ? error : new HttpError(502, 'Unable to deliver the sign-in email');
+    throw signInDeliveryFailure(error);
   }
   const payload = {
     ok: true,
@@ -2336,8 +2437,22 @@ async function route(request, env, analytics) {
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
+  if (path.startsWith('/payments/terminal')) {
+    return handleTerminalRoutes(request, env, context, {
+      requireRole,
+      json,
+      requestJson,
+      chargeTargetSnapshot,
+      recordPayment: recordPaymentToTarget,
+      fetchImpl: fetch,
+      getStripeKey: (workerEnv, shopId) => getIntegrationSecret(workerEnv, shopId, 'stripe-secret-key'),
+      getPublishableKey: (workerEnv, shopId) => getIntegrationSecret(workerEnv, shopId, 'stripe-publishable-key'),
+    });
+  }
   if (path === '/payments/record') return handlePaymentRecord(request, env, context, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
+  if (path === '/payments/stripe/status') return handleStripeStatus(request, env, context);
+  if (path === '/payments/stripe/configure') return handleStripeConfigure(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
   throw new HttpError(404, 'Not found');
