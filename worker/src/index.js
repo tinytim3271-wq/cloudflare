@@ -389,11 +389,13 @@ async function requireActiveAccount(context, env) {
 async function requirePlanCapability(context, env, capability) {
   if (context.role === 'super_admin') return;
   const subscription = await env.DB.prepare(
-    'SELECT plan_id, status FROM subscriptions WHERE shop_id = ? LIMIT 1',
+    'SELECT plan_id, status, current_period_end FROM subscriptions WHERE shop_id = ? LIMIT 1',
   ).bind(context.shopId).first();
   const planId = String(subscription?.plan_id || '');
+  const periodEnd = subscription?.current_period_end ? Date.parse(subscription.current_period_end) : null;
+  const unexpired = periodEnd === null || (Number.isFinite(periodEnd) && periodEnd > Date.now());
   const entitled = ['active', 'trialing'].includes(String(subscription?.status || ''))
-    && planCapabilities(planId).includes(capability);
+    && unexpired && planCapabilities(planId).includes(capability);
   if (!entitled) {
     throw new HttpError(403, `${capability.replaceAll('_', ' ')} requires an active MechPro plan`);
   }
