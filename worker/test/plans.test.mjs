@@ -7,7 +7,10 @@ import {
   PUBLIC_PLANS,
   claimDecision,
   dollars,
+  hasPlanCapability,
   isPlaceholderPrice,
+  planCapabilities,
+  stripePriceForPlan,
 } from '../src/plans.mjs';
 
 const migration = readFileSync(new URL('../migrations/0004_launch_plans.sql', import.meta.url), 'utf8');
@@ -45,6 +48,25 @@ test('founding prices stay off the public page and on the invite page', () => {
 test('placeholder Stripe prices are not sent to Checkout', () => {
   assert.equal(isPlaceholderPrice('price_shop_pro'), true);
   assert.equal(isPlaceholderPrice('price_1ABC123xyz'), false);
+  assert.equal(stripePriceForPlan({}, 'shop'), '');
+  assert.equal(stripePriceForPlan({ STRIPE_PRICE_SHOP_MONTHLY: 'price_1ABC123xyz' }, 'shop'), 'price_1ABC123xyz');
+  assert.equal(stripePriceForPlan({ STRIPE_PRICE_SHOP_ANNUAL: 'price_9annual' }, 'shop', 'annual'), 'price_9annual');
+  assert.equal(stripePriceForPlan({ STRIPE_PRICE_SHOP_MONTHLY: 'price_shop' }, 'shop'), '');
+});
+
+test('plan capabilities gate paid integrations', () => {
+  assert.deepEqual(planCapabilities('solo').includes('sms'), false);
+  assert.deepEqual(planCapabilities('shop').includes('sms'), true);
+  assert.deepEqual(planCapabilities('shop_pro').includes('live_diagnostics'), true);
+  assert.deepEqual(planCapabilities('unknown'), []);
+});
+
+test('expired and invalid subscription periods do not grant plan capabilities', () => {
+  const now = Date.parse('2026-10-09T00:00:00.000Z');
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'trialing', current_period_end: '2026-10-08T00:00:00.000Z' }, 'sms', now), false);
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'trialing', current_period_end: 'invalid' }, 'sms', now), false);
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'active', current_period_end: '2026-10-10T00:00:00.000Z' }, 'sms', now), true);
+  assert.equal(hasPlanCapability({ plan_id: 'solo', status: 'active' }, 'sms', now), false);
 });
 
 test('a founding claim fails closed when the invite is missing, used, or the cap is full', () => {

@@ -33,7 +33,15 @@ import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnos
 import { canSendLoginEmail, deliverLoginEmail, handleSendLogin, signInDeliveryFailure } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
-import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
+import {
+  LIVE_DIAGNOSTICS_PLANS,
+  claimDecision,
+  hasPlanCapability,
+  isFoundingPlan,
+  isPublicPlan,
+  planCapabilities,
+  stripePriceForPlan,
+} from './plans.mjs';
 import {
   calculateVoiceCost,
   isAiEnabled,
@@ -47,6 +55,16 @@ import { handleShopAiSettings } from './shop-ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
+import {
+  handleIntegrationStatus,
+  handleLaborIntegration,
+  handleMessagingIntegration,
+  handlePartsIntegration,
+  handleQuickBooks,
+  handleQuickBooksCallback,
+  handleSupport,
+  handleTwilioWebhook,
+} from './integration-routes.mjs';
 import { handleCustomerLookup } from './customer-search.mjs';
 import { chargeTargetSnapshot, recordPayment as recordPaymentToTarget } from './payments.mjs';
 import { handleTerminalRoutes, stripeKeyMode, terminalPaymentRecord } from './terminal.mjs';
@@ -384,6 +402,16 @@ async function requireActiveAccount(context, env) {
     'SELECT suspended FROM accounts WHERE shop_id = ?',
   ).bind(context.shopId).first();
   if (account && Number(account.suspended) === 1) throw new HttpError(403, 'Customer account is suspended');
+}
+
+async function requirePlanCapability(context, env, capability) {
+  if (context.role === 'super_admin') return;
+  const subscription = await env.DB.prepare(
+    'SELECT plan_id, status, current_period_end FROM subscriptions WHERE shop_id = ? LIMIT 1',
+  ).bind(context.shopId).first();
+  if (!hasPlanCapability(subscription, capability)) {
+    throw new HttpError(403, `${capability.replaceAll('_', ' ')} requires an active MechPro plan`);
+  }
 }
 
 function entityRecord(row, type = '') {
@@ -2393,26 +2421,58 @@ async function handleBilling(request, env, context, segments) {
   if (action === 'checkout' && request.method === 'POST') {
     const body = await requestJson(request);
     const planId = String(body.planId || 'shop').trim() || 'shop';
+    const interval = String(body.interval || 'monthly').trim().toLowerCase();
+    if (!['monthly', 'annual'].includes(interval)) throw new HttpError(400, 'Billing interval must be monthly or annual');
     if (!context?.shopId) throw new HttpError(401, 'You must be signed in to upgrade');
     if (!['admin', 'super_admin'].includes(context.role)) throw new HttpError(403, 'Only shop admins can upgrade billing');
     const plan = await env.DB.prepare('SELECT * FROM plans WHERE id = ? OR stripe_price_id = ? LIMIT 1').bind(planId, planId).first();
     if (!plan || Number(plan.active) === 0) throw new HttpError(404, 'Billing plan not found');
     if (Number(plan.public) === 0 || Number(plan.founding) === 1) throw new HttpError(403, 'Founding Member plans are claimed from an invite link');
     const stripeKey = env.STRIPE_SECRET_KEY || '';
-    const priceId = String(plan.stripe_price_id || '').trim();
-    if (stripeKey && !isPlaceholderPrice(priceId)) {
+    const priceId = stripePriceForPlan(env, plan.id, interval);
+    if (stripeKey && priceId) {
       const origin = new URL(request.url).origin;
       const successUrl = String(body.successUrl || `${origin}/?billing=success`);
       const cancelUrl = String(body.cancelUrl || `${origin}/?billing=cancelled`);
+      let customer = await env.DB.prepare(
+        'SELECT stripe_customer_id FROM billing_customers WHERE shop_id = ?',
+      ).bind(context.shopId).first();
+      if (!customer?.stripe_customer_id) {
+        const customerParams = new URLSearchParams({
+          email: String(context.email || ''),
+          name: String(context.name || ''),
+          'metadata[shopId]': context.shopId,
+        });
+        const customerResponse = await fetch('https://api.stripe.com/v1/customers', {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${btoa(`${stripeKey}:`)}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Idempotency-Key': `billing-customer-${context.shopId}`,
+          },
+          body: customerParams,
+        });
+        const created = await customerResponse.json().catch(() => ({}));
+        if (!customerResponse.ok || !created.id) throw new HttpError(502, created.error?.message || 'Stripe customer could not be created');
+        await env.DB.prepare(`
+          INSERT INTO billing_customers (shop_id, stripe_customer_id, created_at) VALUES (?, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id
+        `).bind(context.shopId, created.id, new Date().toISOString()).run();
+        customer = { stripe_customer_id: created.id };
+      }
       const params = new URLSearchParams({
         mode: 'subscription',
         success_url: successUrl,
         cancel_url: cancelUrl,
+        customer: customer.stripe_customer_id,
         client_reference_id: context.shopId,
         'line_items[0][price]': priceId,
         'line_items[0][quantity]': '1',
         'metadata[shopId]': context.shopId,
         'metadata[planId]': plan.id,
+        'metadata[interval]': interval,
+        'subscription_data[metadata][shopId]': context.shopId,
+        'subscription_data[metadata][planId]': plan.id,
       });
       const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
         method: 'POST',
@@ -2426,7 +2486,7 @@ async function handleBilling(request, env, context, segments) {
         provider: 'stripe',
         actor_role: context.role,
       });
-      return json({ ok: true, planId: plan.id, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
+      return json({ ok: true, planId: plan.id, interval, shopId: context.shopId, url: session.url, provider: 'stripe', mode: 'checkout' });
     }
     throw new HttpError(503, 'Billing is not configured for this plan');
   }
@@ -2473,6 +2533,7 @@ async function handleBilling(request, env, context, segments) {
       active: Number(account?.suspended) !== 1 && ['trialing', 'active'].includes(status) && !expired,
       status,
       planId: subscription ? String(subscription.plan_id || '') : null,
+      capabilities: planCapabilities(subscription?.plan_id || 'shop'),
       currentPeriodEnd: expiresAt,
     });
   }
@@ -2490,26 +2551,102 @@ async function handleBilling(request, env, context, segments) {
     const expected = await hmacHex(secret, `${timestamp}.${payload}`);
     if (!signatures.some(value => constantTimeEqual(value, expected))) throw new HttpError(400, 'Invalid Stripe signature');
     const event = parseJson(payload);
-    if (event?.type === 'checkout.session.completed') {
-      const shopId = event.data?.object?.client_reference_id || event.data?.object?.metadata?.shopId;
-      const planId = event.data?.object?.metadata?.planId || 'starter';
-      if (shopId) {
+    const object = event.data?.object || {};
+    let shopId = object.client_reference_id || object.metadata?.shopId || '';
+    const customerId = typeof object.customer === 'string' ? object.customer : object.customer?.id;
+    if (!shopId && customerId) {
+      const customer = await env.DB.prepare(
+        'SELECT shop_id FROM billing_customers WHERE stripe_customer_id = ?',
+      ).bind(customerId).first();
+      shopId = customer?.shop_id || '';
+    }
+    if (shopId) {
+      const eventId = String(event.id || crypto.randomUUID());
+      const duplicate = await env.DB.prepare(
+        'SELECT id FROM billing_events WHERE id = ?',
+      ).bind(eventId).first();
+      if (duplicate) return json({ received: true, duplicate: true }, 200);
+
+      if (customerId) {
+        await env.DB.prepare(`
+          INSERT INTO billing_customers (shop_id, stripe_customer_id, created_at) VALUES (?, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id
+        `).bind(shopId, customerId, new Date().toISOString()).run();
+      }
+
+      const subscriptionEvent = ['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'].includes(event.type);
+      const checkoutEvent = event.type === 'checkout.session.completed';
+      const paymentFailed = event.type === 'invoice.payment_failed';
+      if (subscriptionEvent || checkoutEvent || paymentFailed) {
+        const existing = await env.DB.prepare(
+          'SELECT plan_id, stripe_subscription_id, current_period_end, current_period_start FROM subscriptions WHERE shop_id = ?',
+        ).bind(shopId).first();
+        const planId = String(object.metadata?.planId || existing?.plan_id || 'shop');
+        const rawStatus = paymentFailed ? 'past_due'
+          : checkoutEvent ? 'active'
+            : event.type === 'customer.subscription.deleted' ? 'canceled'
+              : String(object.status || 'active');
+        const status = ['active', 'trialing'].includes(rawStatus) ? rawStatus
+          : ['past_due', 'unpaid', 'incomplete', 'incomplete_expired', 'canceled', 'paused'].includes(rawStatus)
+            ? rawStatus : 'inactive';
+        const periodEndSeconds = Number(object.current_period_end || 0);
+        const periodStartSeconds = Number(object.current_period_start || 0);
+        const periodEnd = paymentFailed
+          ? existing?.current_period_end || null
+          : periodEndSeconds > 0 ? new Date(periodEndSeconds * 1000).toISOString() : null;
+        const periodStart = paymentFailed
+          ? existing?.current_period_start || null
+          : periodStartSeconds > 0 ? new Date(periodStartSeconds * 1000).toISOString() : null;
+        const invoiceSubscription = typeof object.subscription === 'string'
+          ? object.subscription
+          : object.subscription?.id;
+        const subscriptionId = paymentFailed
+          ? String(invoiceSubscription || existing?.stripe_subscription_id || '')
+          : checkoutEvent
+            ? String(object.subscription || existing?.stripe_subscription_id || '')
+            : String(object.id || existing?.stripe_subscription_id || '');
         const nowIso = new Date().toISOString();
         await env.DB.prepare(
-          'UPDATE accounts SET subscription_status = ?, subscription_expires_at = NULL, updated_at = ? WHERE shop_id = ?',
-        ).bind('active', nowIso, shopId).run();
-        await env.DB.prepare('UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?').bind('active', nowIso, shopId).run();
+          'UPDATE accounts SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE shop_id = ?',
+        ).bind(status, periodEnd, nowIso, shopId).run();
+        await env.DB.prepare(
+          'UPDATE shops SET billing_status = ?, updated_at = ? WHERE id = ?',
+        ).bind(status, nowIso, shopId).run();
         await env.DB.prepare(`
-          INSERT INTO subscriptions (shop_id, plan_id, status, current_period_end, created_at, updated_at)
-          VALUES (?, ?, 'active', NULL, ?, ?)
-          ON CONFLICT(shop_id) DO UPDATE SET plan_id = excluded.plan_id, status = 'active',
-            current_period_end = NULL, updated_at = excluded.updated_at
-        `).bind(shopId, planId, nowIso, nowIso).run();
-        capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_activated', {
+          INSERT INTO subscriptions (
+            shop_id, stripe_subscription_id, plan_id, status,
+            current_period_end, current_period_start, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(shop_id) DO UPDATE SET
+            stripe_subscription_id = COALESCE(excluded.stripe_subscription_id, subscriptions.stripe_subscription_id),
+            plan_id = excluded.plan_id, status = excluded.status,
+            current_period_end = excluded.current_period_end,
+            current_period_start = excluded.current_period_start,
+            updated_at = excluded.updated_at
+        `).bind(
+          shopId, subscriptionId || null, planId, status, periodEnd, periodStart, nowIso, nowIso,
+        ).run();
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO billing_events (id, shop_id, event_type, event_json, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          eventId, shopId, String(event.type || 'unknown'),
+          JSON.stringify(event), new Date().toISOString(),
+        ).run();
+        capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_status_changed', {
           plan_id: planId,
+          subscription_status: status,
           provider: 'stripe',
           $process_person_profile: false,
         });
+      } else {
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO billing_events (id, shop_id, event_type, event_json, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          eventId, shopId, String(event.type || 'unknown'),
+          JSON.stringify(event), new Date().toISOString(),
+        ).run();
       }
     }
     return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);
@@ -2627,6 +2764,20 @@ async function route(request, env, analytics) {
     return handleStripeWebhook(request, env, decodeURIComponent(segments[2] || ''), analytics);
   }
   if (segments[0] === 'agentphone' && segments[1] === 'webhook') return handleAgentPhoneWebhook(request, env, decodeURIComponent(segments[2] || ''));
+  if (segments[0] === 'messaging' && segments[1] === 'twilio' && segments[2] === 'webhook') {
+    return handleTwilioWebhook(request, env, decodeURIComponent(segments[3] || ''));
+  }
+  if (segments[0] === 'quickbooks' && segments[1] === 'callback') {
+    return handleQuickBooksCallback(request, env, {
+      getSecret: getIntegrationSecret,
+      saveSecret: saveIntegrationSecret,
+      deleteSecret: deleteIntegrationSecret,
+      encryptSecret,
+      decryptSecret,
+      getEntity,
+      listEntities,
+    });
+  }
   if (segments[0] === 'billing') {
     const action = segments[1] || '';
     const context = action === 'webhook' ? null : await resolveContext(request, env);
@@ -2644,6 +2795,32 @@ async function route(request, env, analytics) {
   if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
   if (segments[0] === 'ordering') return handleOrdering(request, env, context, segments);
+  if (path === '/integrations/status') return handleIntegrationStatus(request, env, context);
+  if (segments[0] === 'labor-times') {
+    await requirePlanCapability(context, env, 'labor_guides');
+    return handleLaborIntegration(request, env, context);
+  }
+  if (segments[0] === 'parts') {
+    await requirePlanCapability(context, env, 'parts_ordering');
+    return handlePartsIntegration(request, env, context, segments);
+  }
+  if (segments[0] === 'messaging') {
+    await requirePlanCapability(context, env, 'sms');
+    return handleMessagingIntegration(request, env, context, segments);
+  }
+  if (segments[0] === 'quickbooks') {
+    await requirePlanCapability(context, env, 'quickbooks');
+    return handleQuickBooks(request, env, context, segments, {
+      getSecret: getIntegrationSecret,
+      saveSecret: saveIntegrationSecret,
+      deleteSecret: deleteIntegrationSecret,
+      encryptSecret,
+      decryptSecret,
+      getEntity,
+      listEntities,
+    });
+  }
+  if (segments[0] === 'support') return handleSupport(request, env, context);
   if (segments[0] === 'integrations' && segments[1] === 'partstech') {
     return createPartstechHandlers({
       saveSecret: saveIntegrationSecret,

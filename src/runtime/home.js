@@ -202,6 +202,8 @@ export const sidebarCatalog = [
       { route: 'imports', icon: 'file-up', label: 'Import data' },
       { route: 'messaging', icon: 'message-square-more', label: 'Messaging' },
       { route: 'payments', icon: 'credit-card', label: 'Payments' },
+      { route: 'integrations', icon: 'plug-zap', label: 'Integrations' },
+      { route: 'support', icon: 'life-buoy', label: 'Help & support' },
       { route: 'settings', icon: 'settings', label: 'Settings' },
     ],
   },
