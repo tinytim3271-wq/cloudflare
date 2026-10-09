@@ -35,6 +35,7 @@ function integrationError(error) {
         : error.status >= 400 && error.status < 500 ? error.status : 502;
     return new HttpError(status, error.message);
   }
+  if (error instanceof TypeError) return new HttpError(400, error.message);
   return new HttpError(502, error instanceof Error ? error.message : 'Integration request failed');
 }
 
