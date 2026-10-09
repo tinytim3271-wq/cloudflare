@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {
   CUSTOMER_SEARCH_DEBOUNCE_MS,
   CUSTOMER_SEARCH_MIN_LENGTH,
+  customerContactChanged,
+  customerContactFields,
   likelyDuplicateCustomers,
   localCustomerMatches,
+  mergeSavedCustomer,
   shouldSearchCustomers,
 } from './customer-intake.js';
 
@@ -49,4 +52,39 @@ test('likely duplicate detection normalizes phone and email', () => {
     ).length,
     1,
   );
+});
+
+test('customer contact fields keep phone, email, and billing address', () => {
+  assert.deepEqual(customerContactFields({
+    name: '  Ada Lovelace ',
+    phone: ' 555-0100 ',
+    email: ' ada@example.com ',
+    billingAddress: ' 12 Main St ',
+    billingNotes: ' Net 15 ',
+  }), {
+    name: 'Ada Lovelace',
+    phone: '555-0100',
+    email: 'ada@example.com',
+    billingAddress: '12 Main St',
+    billingNotes: 'Net 15',
+  });
+  assert.equal(customerContactFields({ name: 'Ada', phone: undefined, email: undefined, billingAddress: undefined }).phone, '');
+  assert.equal(
+    customerContactFields({ name: 'Ada', phone: '555', email: 'ada@example.com', billingAddress: '12 Main' }, { billingNotes: 'Keep me' }).billingNotes,
+    'Keep me',
+  );
+});
+
+test('customer contact changes detect edited phone, email, and billing address', () => {
+  const existing = { name: 'Ada', phone: '555', email: 'ada@example.com', billingAddress: '12 Main', billingNotes: '' };
+  assert.equal(customerContactChanged(existing, existing), false);
+  assert.equal(customerContactChanged(existing, { ...existing, email: 'new@example.com' }), true);
+  assert.equal(customerContactChanged(null, existing), true);
+});
+
+test('saved customer merge keeps contact fields the server omitted', () => {
+  const record = { id: 'c1', name: 'Ada', phone: '555', email: 'ada@example.com', billingAddress: '12 Main', billingNotes: 'Net 15' };
+  assert.deepEqual(mergeSavedCustomer(record, { id: 'c1', name: 'Ada', phone: '555' }).email, 'ada@example.com');
+  assert.equal(mergeSavedCustomer(record, { queued: true }).billingAddress, '12 Main');
+  assert.equal(mergeSavedCustomer(record, { ...record, email: '' }).email, '');
 });

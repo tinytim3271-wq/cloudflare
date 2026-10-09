@@ -4,23 +4,15 @@ import { constantTimeEqual } from './security.mjs';
 const DEFAULT_FROM = 'noreply@yourcarguy806.com';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function buildLoginMessage({ from, to, loginUrl }) {
+function loginText(loginUrl) {
   return [
-    `From: MechPro <${from}>`,
-    `To: ${to}`,
-    'Subject: Sign in to MechPro',
-    `Date: ${new Date().toUTCString()}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: 8bit',
-    '',
     'Sign in to MechPro by opening this link:',
     '',
     loginUrl,
     '',
     'This link expires in 15 minutes. If you did not request it, ignore this email.',
     '',
-  ].join('\r\n');
+  ].join('\n');
 }
 
 async function hashValue(value) {
@@ -28,24 +20,43 @@ async function hashValue(value) {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function createCloudflareEmail(from, to, raw) {
-  const { EmailMessage } = await import('cloudflare:email');
-  return new EmailMessage(from, to, raw);
-}
-
 export function canSendLoginEmail(env) {
   return typeof env.EMAIL?.send === 'function';
+}
+
+const UNSENDABLE_CODES = new Set([
+  'E_RECIPIENT_NOT_ALLOWED',
+  'E_SENDER_DOMAIN_NOT_AVAILABLE',
+  'E_SENDER_NOT_VERIFIED',
+]);
+
+export function signInDeliveryFailure(error) {
+  if (error instanceof HttpError) return error;
+  const code = String(error?.code || '');
+  console.error(JSON.stringify({
+    message: 'sign-in email rejected',
+    code: code || 'unknown',
+  }));
+  if (UNSENDABLE_CODES.has(code)) {
+    return new HttpError(
+      502,
+      'That address cannot receive a MechPro sign-in link yet. Email Sending is turned off for yourcarguy806.com, so only an address already verified in Cloudflare can be used.',
+    );
+  }
+  if (code) return new HttpError(502, `Unable to deliver the sign-in email (${code}).`);
+  return new HttpError(502, 'Unable to deliver the sign-in email');
 }
 
 export async function deliverLoginEmail(env, { email, loginUrl }) {
   if (!canSendLoginEmail(env)) throw new HttpError(503, 'Email delivery is not configured on this Worker');
   const from = String(env.AUTH_EMAIL_FROM || DEFAULT_FROM).trim();
   if (!EMAIL_PATTERN.test(from)) throw new HttpError(503, 'AUTH_EMAIL_FROM is not a valid sender address');
-  const raw = buildLoginMessage({ from, to: email, loginUrl });
-  const message = typeof env.EMAIL.createMessage === 'function'
-    ? env.EMAIL.createMessage(from, email, raw)
-    : await createCloudflareEmail(from, email, raw);
-  await env.EMAIL.send(message);
+  await env.EMAIL.send({
+    to: email,
+    from,
+    subject: 'Sign in to MechPro',
+    text: loginText(loginUrl),
+  });
 }
 
 function requireDeliverySecret(request, env) {
@@ -107,8 +118,7 @@ export async function handleSendLogin(request, env) {
   try {
     await deliverLoginEmail(env, { email, loginUrl: loginUrl.toString() });
   } catch (error) {
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(502, 'Unable to deliver the sign-in email');
+    throw signInDeliveryFailure(error);
   }
   return json({ ok: true }, 202);
 }

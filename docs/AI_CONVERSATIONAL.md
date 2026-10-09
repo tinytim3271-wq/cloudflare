@@ -2,8 +2,23 @@
 
 MechPro's primary shop-reasoning path is Anthropic Claude. Sonnet handles normal shop questions and Opus is available for explicit or heuristic escalation of difficult diagnostics. Deepgram Voice Agent provides speech-to-text and text-to-speech while using the same Anthropic account as its BYO thinking backend.
 
-`AI_ENABLED` defaults to `0` in `wrangler.jsonc`. Production remains off until the provider secrets and current contracted billing rates are configured.
+`AI_ENABLED` is `1` in `wrangler.jsonc`. Text assistant turns are routed in this order:
 
+1. **The shop's own Anthropic key** (paid upgrade, see below). Claude answers with the shop's key, so Anthropic bills the shop directly and MechPro records no provider cost for those turns.
+2. **The platform `ANTHROPIC_API_KEY` secret**, only if a platform admin sets it. This is an optional platform-wide override: MechPro then pays Anthropic for every shop that has no key of its own. Leave it unset to keep the default below.
+3. **Cloudflare Workers AI** (the included default): the `AI` binding with model `WORKERS_AI_MODEL` (default `@cf/meta/llama-3.3-70b-instruct-fp8-fast`). It receives the 40 most recently updated shop records as read-only context, cannot call tools, and never prepares estimate drafts.
+
+If a Claude call fails, the turn is answered by Workers AI instead. When the shop's own key is the problem (rejected, no permission, out of credits, model not available), the key is flagged in `shop_ai_settings` and the response carries a `notice` telling the shop to check its key in Shop settings > AI; temporary Anthropic outages fall back with a softer notice and do not flag the key. Voice (Deepgram) is unchanged and still requires both platform provider secrets. Set `AI_ENABLED` to `0` to turn all AI endpoints off.
+
+## Per-shop Anthropic key (paid upgrade)
+
+Shop owners and admins can add their own Anthropic API key in **Shop settings > AI** (`GET/PUT/DELETE /api/settings/ai`).
+
+- Saving runs a one-token Messages call with the key; invalid, unauthorized, or out-of-credit keys are rejected with a clear message and nothing is stored.
+- The key is AES-GCM encrypted with the existing `INTEGRATION_ENCRYPTION_KEY` Worker secret and stored in D1 table `shop_ai_settings` (migration `0009_shop_ai_settings.sql`). Only the last 4 characters are kept in clear; the API only ever returns the masked form (`••••1234`).
+- Other roles can read the status ("Using Cloudflare AI (included)" or "Using Claude with your key ••••1234") but cannot change it.
+- Default Claude model for shop keys: `SHOP_ANTHROPIC_MODEL` (falls back to `ANTHROPIC_SONNET_MODEL`, then `claude-sonnet-5`). An optional per-shop `model` can be sent with the key.
+- Until migration 0009 is applied, status reads report the included AI and saving a key returns 503; assistant answers are unaffected.
 ## Configuration
 
 Never commit provider keys. Configure production secrets with Wrangler:
@@ -13,11 +28,12 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put DEEPGRAM_API_KEY
 ```
 
-For local development, copy `.dev.vars.example` to `.dev.vars`, replace its placeholders locally, and set `AI_ENABLED=1`. `.dev.vars` is gitignored.
+For local development, copy `.dev.vars.example` to `.dev.vars` and replace its placeholders locally. Without an Anthropic key, `wrangler dev` runs the Workers AI fallback against your Cloudflare account (requires `wrangler login`). `.dev.vars` is gitignored.
 
 The non-secret model settings are:
 
 - `ANTHROPIC_SONNET_MODEL` (default `claude-sonnet-5`)
+- `SHOP_ANTHROPIC_MODEL` (default Claude model for shops using their own key; defaults to `ANTHROPIC_SONNET_MODEL`)
 - `ANTHROPIC_OPUS_MODEL` (default `claude-opus-5`)
 - `ANTHROPIC_MAX_TOKENS` (optional; bounded to 256–4096)
 - `DEEPGRAM_LISTEN_MODEL` (default `nova-3`)
