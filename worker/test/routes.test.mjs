@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEntityDeleteStatements, listChatMessagesForConversations, listEntities } from '../src/routes/entities.mjs';
+import {
+  buildEntityDeleteStatements,
+  listChatMessagesForConversations,
+  listEntities,
+  putEntity,
+} from '../src/routes/entities.mjs';
 import {
   assertUploadContentType,
   assertUploadSize,
@@ -292,4 +297,60 @@ test('files route preserves an upstream storage status without misreporting a si
       && error.status === 429
       && error.message === 'File storage is temporarily unavailable. Try again.',
   );
+});
+
+test('putEntity rejects stale If-Match so remote approvals are not overwritten', async () => {
+  const writes = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async first() {
+                if (/SELECT created_at, created_by, updated_at FROM entities/i.test(sql)) {
+                  return {
+                    created_at: '2026-10-06T10:00:00.000Z',
+                    created_by: 'writer-1',
+                    updated_at: '2026-10-06T12:00:00.000Z',
+                  };
+                }
+                return null;
+              },
+              async run() {
+                writes.push({ sql, args });
+                return { success: true };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const context = { shopId: 'shop-1', userId: 'writer-1' };
+  const staleBody = {
+    id: 'RO-1',
+    status: 'estimate',
+    updatedAt: '2026-10-06T10:00:00.000Z',
+  };
+
+  await assert.rejects(
+    () => putEntity(env, context, 'orders', 'RO-1', staleBody, '2026-10-06T10:00:00.000Z'),
+    (error) => error instanceof HttpError
+      && error.status === 409
+      && /updated elsewhere/i.test(error.message),
+  );
+  assert.equal(writes.length, 0);
+
+  const saved = await putEntity(
+    env,
+    context,
+    'orders',
+    'RO-1',
+    { ...staleBody, estimateApproval: { status: 'approved' }, linesLockedAt: '2026-10-06T12:00:00.000Z' },
+    '2026-10-06T12:00:00.000Z',
+  );
+  assert.equal(writes.length, 1);
+  assert.equal(saved.estimateApproval.status, 'approved');
+  assert.ok(saved.updatedAt);
 });

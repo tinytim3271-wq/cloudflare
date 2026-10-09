@@ -43,6 +43,8 @@ test('system prompt requires detailed, evidence-grounded answers', () => {
   assert.match(MECHPRO_SYSTEM_PROMPT, /read-only/i);
   assert.match(buildAssistantSystemPrompt(), /prepare_estimate_work_order/);
   assert.match(buildAssistantSystemPrompt(), /\$140\.00 per labor hour/);
+  assert.match(buildAssistantSystemPrompt(), /\$200 flat fee/);
+  assert.match(buildAssistantSystemPrompt(), /never calculate it as a percentage of labor/);
 });
 
 test('assistant pricing prompt uses rates from tenant-scoped shop settings', async () => {
@@ -98,14 +100,17 @@ test('estimate and work-order tool creates a bounded review draft without persis
     requestedServices: ['Inspect noise'],
     parts: [{ description: 'Unpriced cover', quantity: 1, unitPrice: 0, priceStatus: 'pending' }],
     labor: [{ description: 'Inspection', hours: 1, source: 'Caller-provided time' }],
+    afterMidnightFee: true,
   }, { laborRate: 175, taxRate: 6.5 });
   assert.equal(result.kind, 'estimate_work_order_draft');
   assert.equal(result.requiresUserReview, true);
   assert.equal(result.saved, false);
   assert.equal(result.draft.parts[0].priceStatus, 'pending');
+  assert.equal(result.draft.afterMidnightFee, true);
   assert.deepEqual(result.pricing, { laborRate: 175, taxRate: 6.5 });
   const tool = ANTHROPIC_TOOLS.find(item => item.name === 'prepare_estimate_work_order');
   assert.ok(tool.input_schema.properties.parts.items.required.includes('priceStatus'));
+  assert.equal(tool.input_schema.properties.afterMidnightFee.type, 'boolean');
   const omittedStatus = prepareEstimateWorkOrderDraft({
     customer: { name: 'Caller' },
     vehicle: { description: '2020 Example' },

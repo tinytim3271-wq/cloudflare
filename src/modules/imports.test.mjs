@@ -64,13 +64,16 @@ test('work order import skips an existing repair order number', () => {
 });
 
 test('invoice import keeps totals and rejects duplicates and bad money', () => {
-  const csv = 'number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2041,Ada,RO-1,2026-09-01,2026-09-15,sent,10,8.25,0.83,10.83\nINV-3000,Bea,RO-2,2026-09-02,2026-09-16,paid,100,8.25,8.25,108.25\n,Cara,RO-3,2026-09-03,,overdue,,, ,nope\n,Dee,RO-4,2026-09-03,2026-09-17,void,50,8.25,4.13,54.13';
+  const csv = 'number,customer,ro,date,paid_date,due,status,subtotal,tax_rate,tax,amount\nINV-2041,Ada,RO-1,2026-09-01,,2026-09-15,sent,10,8.25,0.83,10.83\nINV-3000,Bea,RO-2,2026-09-02,2026-09-10,2026-09-16,paid,100,8.25,8.25,108.25\n,Cara,RO-3,2026-09-03,,,overdue,,, ,nope\n,Dee,RO-4,2026-09-03,,2026-09-17,void,50,8.25,4.13,54.13';
   const result = prepareImportRecords('invoices', csv, shop);
   assert.equal(result.records.length, 1);
   assert.equal(result.records[0].number, 'INV-3000');
   assert.equal(result.records[0].status, 'paid');
   assert.equal(result.records[0].amount, 108.25);
   assert.equal(result.records[0].subtotal, 100);
+  assert.equal(result.records[0].closedAt, '2026-09-10');
+  assert.equal(result.records[0].closeoutSource, 'source_closeout_date');
+  assert.equal(result.records[0].importSource, 'csv');
   assert.match(result.errors.join('\n'), /numeric invoice amount/);
   assert.match(result.errors.join('\n'), /sent, overdue, or paid/);
 });
@@ -83,8 +86,17 @@ test('invoice import can assign a number and derive tax from the shop rate', () 
   assert.equal(invoice.number, 'INV-2042');
   assert.equal(invoice.amount, 250);
   assert.equal(invoice.due, '2026-10-14');
+  assert.equal(invoice.closedAt, '2026-09-30');
+  assert.equal(invoice.closeoutSource, 'invoice_date');
   assert.equal(invoice.taxRate, 8.25);
   assert.ok(invoice.subtotal > 0 && invoice.subtotal < invoice.amount);
+});
+
+test('invoice import rejects an invalid explicit closeout date', () => {
+  const csv = 'number,customer,date,closeout_date,status,amount\nINV-3001,Ada,2026-09-02,not-a-date,paid,108.25';
+  const result = prepareImportRecords('invoices', csv, shop);
+  assert.equal(result.records.length, 0);
+  assert.match(result.errors[0], /Closeout date must be a real date/);
 });
 
 test('estimate import builds a pending register row and skips duplicates', () => {

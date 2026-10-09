@@ -24,9 +24,12 @@ export function claimBatchOutcome(inviteUpdated, counterUpdated) {
 
 /**
  * After `/api/founding/claim` stores the owner email in `used_by_shop_id`,
- * attach the reserved founding plan when that email's shop is created/signed in.
+ * attach the reserved founding plan when that email's *new* shop is created.
  * Without this step the invite is consumed but entitlement/subscription never
  * receive the founding plan_id.
+ *
+ * Never overwrite an existing non-founding (or different) subscription — claim
+ * emails are unverified, so a stolen invite must not rewrite a live shop's plan.
  */
 export async function applyPendingFoundingClaim(env, { email, shopId, ownerName, shopName } = {}) {
   const normalized = String(email || '').trim().toLowerCase();
@@ -56,6 +59,26 @@ export async function applyPendingFoundingClaim(env, { email, shopId, ownerName,
   const planId = String(invite?.plan_id || '').trim();
   if (!invite?.token || !isFoundingPlan(planId)) return null;
 
+  let existingSub;
+  try {
+    existingSub = await env.DB.prepare(`
+      SELECT plan_id, status FROM subscriptions WHERE shop_id = ? LIMIT 1
+    `).bind(targetShopId).first();
+  } catch (error) {
+    if (!missingFoundingSchema(error) && !/no such table:\s*(?:main\.)?subscriptions\b/i.test(
+      error instanceof Error ? error.message : String(error),
+    )) {
+      throw error;
+    }
+    existingSub = null;
+  }
+
+  const existingPlan = String(existingSub?.plan_id || '').trim();
+  if (existingPlan && existingPlan !== planId) {
+    // Refuse to clobber a shop that already has a different plan (paid or otherwise).
+    return null;
+  }
+
   const now = new Date();
   const nowIso = now.toISOString();
   const trialEnds = new Date(now.getTime() + FOUNDING_TRIAL_DAYS * 86400000).toISOString();
@@ -82,7 +105,10 @@ export async function applyPendingFoundingClaim(env, { email, shopId, ownerName,
         status = excluded.status,
         current_period_end = excluded.current_period_end,
         updated_at = excluded.updated_at
-    `).bind(targetShopId, planId, trialEnds, nowIso),
+      WHERE subscriptions.plan_id IS NULL
+         OR trim(subscriptions.plan_id) = ''
+         OR subscriptions.plan_id = excluded.plan_id
+    `).bind(targetShopId, planId, trialEnds, nowIso, nowIso),
     env.DB.prepare(`
       UPDATE shops SET billing_status = 'trialing', updated_at = ? WHERE id = ?
     `).bind(nowIso, targetShopId),

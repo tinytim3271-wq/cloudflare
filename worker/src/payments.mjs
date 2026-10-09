@@ -189,6 +189,8 @@ export async function recordPayment(env, context, body, { paymentId = crypto.ran
       paymentStatus: summary.status,
       status: summary.status,
       paidAt: summary.status === "paid" ? input.receivedAt : invoice.record.paidAt,
+      closedAt: summary.status === "paid" ? input.receivedAt : invoice.record.closedAt,
+      closeoutSource: summary.status === "paid" ? "payment_date" : invoice.record.closeoutSource,
     };
     const write = entityWriteStatement(
       env,
