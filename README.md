@@ -15,7 +15,7 @@ HTTP-only cookie, with magic-link and Google sign-in endpoints at
 - **D1** stores tenant accounts, identity mappings, entities, audit events, and
   encrypted integration configuration.
 - **R2** stores inspection photos, signatures, and Windows downloads.
-- **Workers AI** powers `/api/ai/assistant` and AgentPhone responses.
+- **Anthropic Claude** (when `ANTHROPIC_API_KEY` is set) or the **Workers AI** fallback powers `/api/ai/assistant` and AgentPhone responses. See `docs/AI_CONVERSATIONAL.md`.
 - **Cloudflare Access** should be reserved for internal/operator surfaces as the
   product moves to public SaaS signup, login, and billing.
 
@@ -85,6 +85,33 @@ Source lives in `src/`; `npm run build:web` refreshes committed `app.js`.
 | `DIAGNOSTICS_SIGNING_PRIVATE_KEY` | Required ECDSA signing key for `/api/diagnostics/authorize` | Worker secret (`wrangler secret put`) |
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ACCESS_ADMIN_EMAILS` | Cloudflare Access/admin bootstrap for internal surfaces | Worker secrets / `.dev.vars` for local development |
 | `DEV_AUTH_BYPASS` | Local-only auth bypass for `wrangler dev`; never production | `.dev.vars` local only |
+
+## Shop integrations (PartsTech, MOTOR labor, QuickBooks)
+
+Per-shop credentials are encrypted at rest in D1 (`integration_secrets` + `INTEGRATION_ENCRYPTION_KEY`).
+Unconfigured integrations return **not connected** and fail closed — they never invent parts, labor times, or accounting responses.
+
+| Integration | API routes | Secrets / signup |
+| --- | --- | --- |
+| PartsTech parts | `GET/POST/DELETE /api/integrations/partstech`, `POST .../quote`, `POST .../order` | Shop stores partner+user API keys in D1 after creating a PartsTech partner account |
+| Labor guide (MOTOR / ALLDATA / ShopKey) | `GET/POST/DELETE /api/integrations/labor-guide`, `POST .../search`, `POST .../manual` | Book providers when connected. If none connected, search auto-falls back to a labeled **web estimate — not book time** via `LABOR_WEB_SEARCH_API_KEY` (Brave). Manual entry always works. ALLDATA/ShopKey adapters are recognized but not live yet |
+| QuickBooks Online | `GET/DELETE /api/integrations/quickbooks`, `POST .../connect`, `POST .../callback`, `POST .../sync` | Create an Intuit Developer app; set `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` Worker secrets; shops complete OAuth |
+
+Repair-order flow helpers live in `src/modules/repair-order-flow.js` (inspection → estimate → customer approval link via existing `/api/document-links` + SMS/email messaging → RO → invoice → Stripe payment).
+
+### Apply D1 migrations (when you are ready to deploy)
+
+```bash
+# Local only (does not touch production):
+npm run db:migrate:local
+
+# Production (owner action — not run by this branch work):
+# npm run db:migrate:remote
+# npm run deploy:worker
+# npm run deploy:pages
+```
+
+Migration `worker/migrations/0008_repair_flow_integrations.sql` adds `oauth_states` and `integration_sync_log` for QuickBooks idempotency.
 
 ## Release Process
 

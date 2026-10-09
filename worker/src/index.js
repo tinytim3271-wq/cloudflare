@@ -24,6 +24,9 @@ import {
   verifyAccessJwt,
   verifyGoogleIdToken,
 } from './security.mjs';
+import { createPartstechHandlers } from './integrations/partstech.mjs';
+import { createLaborGuideHandlers } from './integrations/labor-guide.mjs';
+import { createQuickbooksHandlers } from './integrations/quickbooks.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
@@ -33,13 +36,14 @@ import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import { LIVE_DIAGNOSTICS_PLANS, claimDecision, isFoundingPlan, isPlaceholderPrice, isPublicPlan } from './plans.mjs';
 import {
   calculateVoiceCost,
-  calculateTextCost,
   isAiEnabled,
   readAudioWithinLimit,
   recordAiUsage,
   runAnthropicTurn,
   transcribeDeepgramAudio,
+  usageCostsForResult,
 } from './ai.mjs';
+import { handleShopAiSettings } from './shop-ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
@@ -1206,17 +1210,22 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     autoEscalate: options.autoEscalate,
     allowEstimatePreparation: options.source !== 'agentphone',
   });
-  const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
+  const costs = usageCostsForResult(env, result);
   await recordAiUsage(env, {
     shopId,
     userId: options.userId || null,
     channel: options.channel || 'text',
-    provider: 'anthropic',
+    provider: result.provider || 'anthropic',
     model: result.model,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     ...costs,
-    metadata: { routingReason: result.routingReason, source: options.source || 'assistant' },
+    metadata: {
+      routingReason: result.routingReason,
+      source: options.source || 'assistant',
+      keySource: result.keySource || null,
+      ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom, failureKind: result.failureKind } : {}),
+    },
   });
   return {
     text: result.text,
@@ -1224,6 +1233,8 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     modelFamily: result.family,
     routingReason: result.routingReason,
     usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+    keySource: result.keySource || null,
+    ...(result.notice ? { notice: result.notice } : {}),
   };
 }
 
@@ -2610,9 +2621,37 @@ async function route(request, env, analytics) {
   if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);
   if (segments[0] === 'diagnostics') return handleDiagnostics(request, env, context, segments, analytics);
   if (segments[0] === 'ordering') return handleOrdering(request, env, context, segments);
+  if (segments[0] === 'integrations' && segments[1] === 'partstech') {
+    return createPartstechHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'labor-guide') {
+    return createLaborGuideHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'quickbooks') {
+    return createQuickbooksHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
+  if (path === '/settings/ai') return handleShopAiSettings(request, env, context, { recordAudit: recordDiagnosticAudit });
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
   if (path === '/ai/transcribe') return handleVoiceTranscription(request, env, context);
   if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);

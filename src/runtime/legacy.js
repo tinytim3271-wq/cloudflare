@@ -9,13 +9,21 @@ import { CANNED_MENU, cannedServiceGroups, estimateLineFromService, missingCanne
 import { buildRepairGuide, repairDiagram, safeVideoUrl, stepText } from '../modules/repair-guide.js';
 import { inspectionMenuHtml } from '../modules/shop-inspections.js';
 import { autozoneProLoginUrl, orderingPanelHtml } from '../modules/autozone-pro.js';
+import { partstechPanelHtml } from '../modules/partstech.js';
+import { laborGuidePanelHtml, createManualLaborEntry } from '../modules/labor-guide.js';
+import { shopAiPanelHtml } from '../modules/shop-ai-settings.js';
+import { quickbooksPanelHtml } from '../modules/quickbooks.js';
+import { applyEstimateFromInspection } from '../modules/repair-order-flow.js';
 import { uploadFailureMessage, uploadFileToStorage } from '../modules/file-upload.js';
 import { applyAiWorkflowEstimate } from '../modules/ai-workflow.js';
 import {
   CUSTOMER_SEARCH_DEBOUNCE_MS,
   CUSTOMER_SEARCH_MIN_LENGTH,
+  customerContactChanged,
+  customerContactFields,
   likelyDuplicateCustomers,
   localCustomerMatches,
+  mergeSavedCustomer,
   shouldSearchCustomers,
 } from '../modules/customer-intake.js';
 import * as Mileage from '../modules/mileage.js';
@@ -26,29 +34,6 @@ import { presentCatalogInspection, printCatalogInspection } from './catalog-insp
 import { applyQueuedEntityMutations } from './entity-persistence.js';
 import { createMutationQueueStore } from './mutation-queue-store.js';
 import { paymentSummary } from '../modules/payments.js';
-import { cardTerminalModel, recoveryWriteup } from '../modules/card-terminal.js';
-import { syncHelp } from '../modules/help-menu.js';
-import {
-  applyAssignments,
-  assignmentSummary,
-  attributeClockHours,
-  classificationFor,
-  clockedHours,
-  orderIncludesTechnician,
-  payrollLinesForOrder,
-  PAY_PLANS,
-  EMPLOYEE_CLASSIFICATIONS,
-  technicianTrackerHtml,
-  technicianPerformance,
-} from '../modules/technician-assignment.js';
-import {
-  INTAKE_STORAGE_KEY,
-  emptyIntakeDraft,
-  intakeOrderPayload,
-  localDiagnosticChecklist,
-  mountIntakeWizard,
-  serializableIntake,
-} from '../modules/intake-wizard.js';
 import {
   customLaborDraft,
   customersWithSelected,
@@ -86,8 +71,13 @@ import {
   normalizeEstimateApproval,
   validateEstimateApproval,
 } from '../modules/estimate-approval.js';
-const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, visibleSidebar } = window.__MECHPRO_HOME__;
+const { buildHomeModel, emptyState, greetingForNow, localIsoDate, mergeRemoteCollection, pendingCreateIdsForCollection, visibleSidebar } = window.__MECHPRO_HOME__;
 void escapeAttr;
+function safeHtml(markup) {
+  const html = String(markup ?? "");
+  if (typeof DOMPurify === "undefined" || typeof DOMPurify.sanitize !== "function") return html;
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ["target"] });
+}
 function empty(message) { return emptyState(message) }
 function localAssistantReply(message) { const source = aiKeywords(message), order = state.orders.find(item => [item.id, item.customer, item.vehicle].some(value => source.includes(String(value || "").toLowerCase()))); if (order) return `${order.id} is ${statusLabel[order.status] || order.status} for ${order.customer}. Vehicle: ${order.vehicle}. Concern: ${order.complaint}. Technician: ${order.tech || "Unassigned"}. Promise: ${order.promise || "Not scheduled"}. Verify the record before acting.`; if (/diagnos|check engine|misfire|brake|rough idle|warning light/.test(source)) return "The cloud assistant is temporarily unavailable. Record the exact symptoms, DTCs, freeze-frame data, and vehicle VIN, then verify tests and specifications with current manufacturer service information."; if (/schedule|appointment|available|book/.test(source)) return `There are ${state.appointments.length} appointments loaded locally. Confirm the date, time, customer, and technician before booking.`; return "The cloud assistant is temporarily unavailable because the AI provider is rate-limited. Loaded work orders and local workflow guidance remain available; try again after the provider quota resets." }
 function chatUser(email) { return state.users.find(user => cleanEmail(user.email) === cleanEmail(email)) }
@@ -138,57 +128,7 @@ async function loadChatFromApi() { try { const [conversations, messages] = await
 async function sendChatMessage(conversationId, body) { const record = await apiFetch("/entities/chatmessages", { method: "POST", body: JSON.stringify({ id: `chatmessage-${Date.now()}`, conversationId, body, createdAt: now() }) }); state.chatMessages.push(record); markChatRead(conversationId); return record }
 function scheduleChatRefresh() { clearTimeout(chatRefreshTimer); if (state.route !== "chat") return; chatRefreshTimer = setTimeout(async () => { if (state.route !== "chat") return; await loadChatFromApi(); render() }, 10000) }
 function bindTeamChat() { document.querySelector("#new-direct-chat")?.addEventListener("click", openDirectChat); document.querySelector("#empty-new-direct")?.addEventListener("click", openDirectChat); document.querySelector("#new-group-chat")?.addEventListener("click", () => openGroupChat()); document.querySelector("#manage-chat-group")?.addEventListener("click", () => openGroupChat(state.conversations.find(item => item.id === chatConversationId))); document.querySelector("#refresh-chat")?.addEventListener("click", async () => { await loadChatFromApi(); toast("Team chat refreshed"); render() }); document.querySelectorAll("[data-chat-thread]").forEach(button => button.onclick = () => { chatConversationId = button.dataset.chatThread; markChatRead(chatConversationId); render() }); document.querySelector("#chat-message-form")?.addEventListener("submit", async event => { event.preventDefault(); const body = String(new FormData(event.target).get("body") || "").trim(), button = event.target.querySelector("button"); if (!body) return; button.disabled = true; try { await sendChatMessage(chatConversationId, body); render() } catch (error) { toast("Message could not be sent"); button.disabled = false } }) }
-function payments() {
-  const config = state.billingSettings;
-  const status = stripePaymentStatus;
-  const configured = Boolean(status?.configured || config.enabled);
-  const shopId = status?.shopId || sessionClaimShopId(authSession()?.claims) || "";
-  const webhookUrl = status?.webhookUrl || (shopId ? `${location.origin}${cloudflareConfig.apiUrl}/payments/webhook/${encodeURIComponent(shopId)}` : "");
-  const statusLabel = configured
-    ? `Connected${config.accountLabel ? ` · ${escapeHtml(config.accountLabel)}` : ""}`
-    : "Stripe keys not saved yet";
-  return shell(`${heading("Online payments", "Payment service", "Connect this shop's Stripe account so customers can pay invoices online with a hosted Checkout link.", false)}<section class="messaging-panel"><div class="messaging-status ${configured ? "ready" : "idle"}">${icon(configured ? "circle-check" : "credit-card", 17)}<div><strong>${configured ? "Online card payments ready" : "Online card payments not connected"}</strong><span>${statusLabel}. Secrets stay encrypted on the Worker — the browser never stores them.</span></div></div><div class="service-contract"><h2>Stripe Checkout for invoices</h2><p>Paste your Stripe secret key and webhook signing secret. MechPro creates Checkout Sessions through <code>POST /payments/checkout-session</code> and records payments when Stripe posts <code>checkout.session.completed</code> to your shop webhook.</p><label class="full">Webhook endpoint (Stripe Dashboard → Developers → Webhooks)<input id="stripe-webhook-url" readonly value="${escapeAttr(webhookUrl)}" placeholder="Sign in to load the shop webhook URL"/><div class="messaging-actions"><button class="secondary" type="button" id="copy-stripe-webhook" ${webhookUrl ? "" : "disabled"}>${icon("copy", 14)} Copy webhook URL</button></div></label><p class="ai-disclaimer">Subscribe the webhook to event <b>checkout.session.completed</b> only. Use test keys (<code>sk_test_</code>) until you are ready for live cards.</p></div><form class="form-grid" id="billing-form"><label class="full">Stripe secret key *<input name="secretKey" type="password" autocomplete="off" placeholder="sk_test_… or sk_live_…" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved key. Enter a new key only to replace it." : "Required. Starts with sk_test_ or sk_live_."}</small></label><label class="full">Webhook signing secret *<input name="webhookSecret" type="password" autocomplete="off" placeholder="whsec_…" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved signing secret." : "From the Stripe webhook endpoint details."}</small></label><label class="full">Stripe publishable key<input name="publishableKey" autocomplete="off" placeholder="pk_test_… or pk_live_…"/><small>${status?.hasPublishableKey ? "Saved. Enter a new key only to replace it. Required for phone orders." : "Starts with pk_test_ or pk_live_. Required before the office can type a card for a phone order."}</small></label><label>Account label<input name="accountLabel" value="${escapeAttr(config.accountLabel || "")}" placeholder="e.g. Main shop Stripe"/></label><label>Shop name on receipts<input name="shopName" value="${escapeAttr(config.shopName || "Your Car Guy")}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled || configured ? "checked" : ""}/><span>Enable Pay online on open invoices</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="refresh-stripe-status">${icon("refresh-cw", 14)} Refresh status</button><button class="primary" type="submit">${icon("save", 14)} Save Stripe keys</button></div></form></section>`);
-}
-let posReaders = null;
-let posConfigured = false;
-let posCharge = null;
-let posPollTimer = 0;
-let posSelectedId = "";
-let posMode = "reader";
-let posPhoneEntry = false;
-let posStripe = null;
-function cardTerminal() {
-  const model = cardTerminalModel({
-    orders: state.orders || [],
-    invoices: state.invoices || [],
-    payments: state.payments || [],
-    selectedId: posSelectedId,
-    readers: posReaders || [],
-    configured: posConfigured,
-    paymentSummary,
-  });
-  const selected = model.selected;
-  if (selected) posSelectedId = selected.targetId;
-  const options = model.choices.map(choice => `<option value="${escapeAttr(choice.targetId)}" ${selected?.targetId === choice.targetId ? "selected" : ""}>${escapeHtml(choice.label)} · due ${money(choice.balance)}</option>`).join("");
-  const readerOptions = model.readers.map(reader => `<option value="${escapeAttr(reader.id)}">${escapeHtml(reader.label)} · ${escapeHtml(reader.status)}</option>`).join("");
-  const writeup = selected ? recoveryWriteup({ customer: selected.customer, vehicle: selected.vehicle }) : recoveryWriteup({});
-  const chargeNote = posCharge ? `<p class="pos-status" data-phase="${escapeAttr(posCharge.phase || "")}">${escapeHtml(posCharge.message || "")}</p>` : "";
-  const connection = posReaders === null
-    ? "Checking the shop Stripe account…"
-    : model.configured
-      ? (model.readers.length ? `${model.readers.length} reader${model.readers.length === 1 ? "" : "s"} online in this Stripe account.` : "Stripe is connected. No card reader is registered yet. Add one in the Stripe Dashboard under Terminal, then refresh.")
-      : "Stripe is not connected. An owner saves the shop keys on the Payments page before this counter can take a card.";
-  const identity = `<div class="full pos-identity"><span>Customer</span><strong>${escapeHtml(selected?.customer || "Select a work order")}</strong><span>Vehicle</span><strong>${escapeHtml(selected?.vehicle || "Vehicle comes from the work order")}</strong></div>`;
-  const amountField = `<label>Amount<input name="amount" id="pos-amount" type="number" min="0.50" step="0.01" value="${selected && selected.balance >= 0.5 ? selected.balance.toFixed(2) : ""}" required/></label>`;
-  const orderField = `<label class="full">Work order<select name="orderId" id="pos-order" required>${options || `<option value="">No work orders</option>`}</select></label>`;
-  const phoneNotice = posPhoneEntry
-    ? "Type the card number, expiration, security code, and postal code from the phone call. Stripe collects the card. MechPro stores the approval on the work order."
-    : "Add the Stripe publishable key on the Payments page first. It starts with pk_test_ or pk_live_ and must belong to the same account as the secret key.";
-  const counter = posMode === "phone"
-    ? `<form class="form-grid" id="pos-phone-form">${orderField}${identity}${amountField}<div class="full" id="pos-card-element"></div><p class="ai-disclaimer">${escapeHtml(phoneNotice)}</p><div class="full messaging-actions"><button class="primary" type="submit" id="pos-phone-prepare" ${!selected || selected.balance < 0.5 || !posPhoneEntry ? "disabled" : ""}>${icon("credit-card", 14)} Enter card</button><button class="primary" type="button" id="pos-phone-charge" hidden>${icon("check", 14)} Charge card</button></div><p class="pos-status" id="pos-phone-status" hidden></p></form>`
-    : `<form class="form-grid" id="pos-form">${orderField}${identity}${amountField}<label>Reader<select name="readerId" id="pos-reader" required>${readerOptions || `<option value="">No reader</option>`}</select></label><div class="full messaging-actions"><button class="secondary" type="button" id="pos-refresh">${icon("refresh-cw", 14)} Refresh readers</button><button class="secondary" type="button" id="pos-cancel" ${posCharge ? "" : "disabled"}>${icon("x", 14)} Cancel on reader</button><button class="primary" type="submit" id="pos-charge" ${!selected || selected.balance < 0.5 || !model.readers.length ? "disabled" : ""}>${icon("credit-card", 14)} Charge card</button></div>${chargeNote}</form>`;
-  return shell(`${heading("Front counter", "Card terminal", "Take a card on the reader, or type a card for a purchase made over the phone.", false)}<section class="messaging-panel pos-terminal"><div class="messaging-status ${model.configured ? "ready" : "idle"}">${icon("credit-card", 17)}<div><strong>${posMode === "phone" ? "Phone order" : model.configured ? "Card reader ready" : "Card reader not connected"}</strong><span>${escapeHtml(posMode === "phone" ? phoneNotice : connection)}</span></div></div><div class="accounting-tabs"><button class="tab ${posMode === "reader" ? "active" : ""}" type="button" data-pos-mode="reader">Card reader</button><button class="tab ${posMode === "phone" ? "active" : ""}" type="button" data-pos-mode="phone">Phone order</button></div>${counter}<section class="pos-writeup"><h2>Technician write-up</h2><p>The recovery note uses the customer and vehicle on the selected work order.</p><pre id="pos-writeup">${escapeHtml(writeup.ready ? writeup.text : "Select a work order that has both a customer name and a vehicle. Those details are written into the note. They are not filled in from memory.")}</pre><button class="secondary" type="button" id="pos-save-writeup" ${writeup.ready ? "" : "disabled"}>${icon("save", 14)} Save on work order</button></section></section>`);
-}
+function payments() { const config = state.billingSettings; return shell(`${heading("Online payments", "Payment service", "Enable shops to accept customer credit and debit card payments through a connected processing account.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "credit-card", 17)}<div><strong>${config.enabled ? "Online card payments active" : "Online card payments not connected"}</strong><span>${config.enabled ? `Connected account: ${config.accountLabel || "Stripe Connect"}` : "Connect the shop account through Stripe's hosted onboarding flow."}</span></div></div><div class="service-contract"><h2>Stripe Connect hosted onboarding</h2><p>The subscribing shop completes card-processing onboarding on a Stripe-hosted page. The platform endpoint keeps Stripe secret keys server-side, creates checkout sessions, and returns a hosted payment URL. MechPro never handles raw card data.</p><code>POST /checkout-sessions<br>{ invoiceId, amount, customer, description, successUrl, cancelUrl }<br>Response: { url: "https://checkout.stripe.com/..." }</code></div><form class="form-grid" id="billing-form"><label class="full">Stripe Connect onboarding URL *<input name="onboardingUrl" type="url" value="${config.onboardingUrl}" placeholder="https://connect.stripe.com/setup/..."/></label><label class="full">Secure checkout-session endpoint *<input name="checkoutEndpoint" type="url" value="${config.checkoutEndpoint}" placeholder="https://billing.yourshop.com/checkout-sessions"/></label><label>Connected account label<input name="accountLabel" value="${config.accountLabel}" placeholder="e.g. acct_... or Main Shop Stripe"/></label><label>Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this service to create hosted debit and credit card checkout links</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="open-stripe-onboarding">${icon("external-link", 14)} Connect Stripe account</button><button class="primary" type="submit">${icon("save", 14)} Save payment service</button></div></form></section>`) }
 function messaging() { const config = state.messagingSettings; return shell(`${heading("Delivery infrastructure", "Messaging service", "Connect this shop's own secure delivery service for automatic email and SMS.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "circle-alert", 17)}<div><strong>${config.enabled ? "Shop messaging service active" : "Native device messaging is active"}</strong><span>${config.enabled ? "Estimate and customer messages will post to the configured shop endpoint." : "Messages currently open the device email or SMS app."}</span></div></div><div class="service-contract"><h2>Shop-managed delivery endpoint</h2><p>Configure a secure endpoint owned by the subscribing shop. It stores SMTP and SMS provider credentials server-side; MechPro never stores or exposes those credentials in the browser.</p><code>POST /messages<br>{ channel: "email" | "sms", to, subject, body, metadata }</code></div><form class="form-grid" id="messaging-form"><label class="full">Secure service endpoint *<input name="endpoint" type="url" value="${config.endpoint}" placeholder="https://messaging.yourshop.com/messages"/></label><label>Sender email<input name="senderEmail" type="email" value="${config.senderEmail}" placeholder="service@yourshop.com"/></label><label>Sender phone<input name="senderPhone" type="tel" value="${config.senderPhone}" placeholder="+18065550100"/></label><label class="full">Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this endpoint for customer email and SMS delivery</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="test-messaging">${icon("send", 14)} Test configuration</button><button class="primary" type="submit">${icon("save", 14)} Save messaging service</button></div></form></section>`) }
 let assistantConversation = [], assistantPaused = false, assistantSessionId = "";
 function openGlobalAssistant() { showModal(`<div class="modal wide global-assistant-modal"><div class="modal-head"><h2>MechPro Assistant</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">${liveAssistant()}</div></div>`); bindLiveAssistant(); }
@@ -278,7 +218,7 @@ const seed = {
   estimates: [],
   // Default messaging settings – replace with your real service endpoint to enable email/SMS delivery.
   messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
-  billingSettings: { enabled: false, provider: "stripe", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy", shopId: "", webhookUrl: "" },
+  billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
   payments: [],
   taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly", ein: "", texasTaxpayerNumber: "", webfileNumber: "", jurisdictions: null },
   chartOfAccounts: [
@@ -297,7 +237,6 @@ const seed = {
   ]
 };
 const LOCAL_PREFERENCES_VERSION = 2;
-let stripePaymentStatus = null;
 let state = load(), filter = "active", query = "", importPreview = null, accountingTab = "overview", payrollPeriodKey = null, taxPackageRange = null, filingCenterOpen = false, shopOpsTab = "vehicles", reminderFilter = "all", aiTab = "workflow", aiResult = null, taxReportResult = null, chatConversationId = null, chatRefreshTimer = null, platformAccounts = null, platformAccountsLoading = false, elmPort = null, pendingAuthProfile = null;
 const usStates = [{ code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" }, { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" }, { code: "CT", name: "Connecticut" }, { code: "DE", name: "Delaware" }, { code: "DC", name: "District of Columbia" }, { code: "FL", name: "Florida" }, { code: "GA", name: "Georgia" }, { code: "HI", name: "Hawaii" }, { code: "ID", name: "Idaho" }, { code: "IL", name: "Illinois" }, { code: "IN", name: "Indiana" }, { code: "IA", name: "Iowa" }, { code: "KS", name: "Kansas" }, { code: "KY", name: "Kentucky" }, { code: "LA", name: "Louisiana" }, { code: "ME", name: "Maine" }, { code: "MD", name: "Maryland" }, { code: "MA", name: "Massachusetts" }, { code: "MI", name: "Michigan" }, { code: "MN", name: "Minnesota" }, { code: "MS", name: "Mississippi" }, { code: "MO", name: "Missouri" }, { code: "MT", name: "Montana" }, { code: "NE", name: "Nebraska" }, { code: "NV", name: "Nevada" }, { code: "NH", name: "New Hampshire" }, { code: "NJ", name: "New Jersey" }, { code: "NM", name: "New Mexico" }, { code: "NY", name: "New York" }, { code: "NC", name: "North Carolina" }, { code: "ND", name: "North Dakota" }, { code: "OH", name: "Ohio" }, { code: "OK", name: "Oklahoma" }, { code: "OR", name: "Oregon" }, { code: "PA", name: "Pennsylvania" }, { code: "RI", name: "Rhode Island" }, { code: "SC", name: "South Carolina" }, { code: "SD", name: "South Dakota" }, { code: "TN", name: "Tennessee" }, { code: "TX", name: "Texas" }, { code: "UT", name: "Utah" }, { code: "VT", name: "Vermont" }, { code: "VA", name: "Virginia" }, { code: "WA", name: "Washington" }, { code: "WV", name: "West Virginia" }, { code: "WI", name: "Wisconsin" }, { code: "WY", name: "Wyoming" }];
 function sanitizeUsers(users) { return users.map(({ password, ...user }) => user) }
@@ -340,7 +279,7 @@ function queueEntityMutation(mutation, conflict = false) { const queue = readMut
 async function authorizedApiRequest(path, options = {}) { const session = authSession(); if (!session) throw new Error("Not signed in"); const localHeaders = isLocalShell() ? { "X-MechPro-Dev-Email": session.claims.email || "admin@example.com", "X-MechPro-Dev-Name": session.claims.name || "Local Developer", "X-MechPro-Dev-Sub": session.claims.sub || "local-development" } : {}; return fetch(`${cloudflareConfig.apiUrl}${path}`, { ...options, credentials: "include", headers: { "Content-Type": "application/json", ...localHeaders, ...options.headers || {} } }) }
 async function verifyDesktopEntitlement() { if (!isDesktopApp || isOfflineDesktop() || (isLocalShell() && cloudflareConfig.apiUrl.startsWith("/"))) { desktopEntitlementVerified = true; return true } if (!navigator.onLine) throw new Error("MechPro Desktop requires an internet connection to verify your subscription."); let response; try { response = await authorizedApiRequest("/subscription/entitlement", { cache: "no-store" }) } catch { throw new Error("MechPro could not reach the subscription service. Check your internet connection and try again.") } const body = await response.json().catch(() => ({})); if (!response.ok || body.active !== true) throw new Error(body.status === "expired" ? "Your MechPro subscription has expired." : body.status === "suspended" ? "This MechPro subscription is suspended." : "An active MechPro subscription is required for the Windows app."); desktopEntitlementVerified = true; desktopLoginMessage = ""; return true }
 async function flushMutationQueue() { if (flushingMutationQueue || !navigator.onLine || !authSession()) return; flushingMutationQueue = true; let synced = 0; try { const queue = readMutationQueue(); for (const item of [...queue]) { if (item.conflict) continue; let response; try { response = await authorizedApiRequest(item.path, withOptimisticConcurrencyHeaders({ method: item.method, body: item.body }, item.expectedUpdatedAt)) } catch { break } if (response.status === 409) { item.conflict = true; writeMutationQueue(queue); toast("An offline edit conflicts with newer server data. Reload before editing that record again."); continue } if (!response.ok) { if (response.status >= 500 || response.status === 401) break; item.conflict = true; writeMutationQueue(queue); continue } queue.splice(queue.indexOf(item), 1); writeMutationQueue(queue); synced++ } if (synced) toast(`${synced} offline change${synced === 1 ? "" : "s"} synced`) } finally { flushingMutationQueue = false } }
-async function apiFetch(path, options = {}) { if (isOfflineDesktop()) { const method = String(options.method || "GET").toUpperCase(); if (method === "GET" || method === "HEAD") { const offlineError = new Error("This copy of MechPro keeps shop records on this computer."); offlineError.retryable = false; throw offlineError } return { queued: true } } if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareMutation(path, options); try { const response = await authorizedApiRequest(path, withOptimisticConcurrencyHeaders(mutation.options, mutation.expectedUpdatedAt)); if (!response.ok) { const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`); error.status = response.status; error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
+async function apiFetch(path, options = {}) { if (isOfflineDesktop()) { if (String(path).startsWith("/ai/")) { const aiError = new Error("MechPro AI runs in the cloud. This offline copy keeps records on this computer only, so sign in to the online version at yourcarguy806.com to use the assistant."); aiError.retryable = false; throw aiError } const method = String(options.method || "GET").toUpperCase(); if (method === "GET" || method === "HEAD") { const offlineError = new Error("This copy of MechPro keeps shop records on this computer."); offlineError.retryable = false; throw offlineError } return { queued: true } } if (readMutationQueue().some(item => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue(); const mutation = prepareMutation(path, options); try { const response = await authorizedApiRequest(path, withOptimisticConcurrencyHeaders(mutation.options, mutation.expectedUpdatedAt)); if (!response.ok) { const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`); error.status = response.status; error.retryable = response.status >= 500; throw error } return response.status === 204 ? null : response.json() } catch (error) { if (mutation.queueable && (error.retryable || !navigator.onLine || error instanceof TypeError)) { queueEntityMutation(mutation); if (!options.silent) toast("Saved offline. MechPro will sync when the connection returns."); return { queued: true } } throw error } }
 window.addEventListener("online", flushMutationQueue);
 async function pushCustomerToApi(record) { record.id ||= mutationId(); try { await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) }) } catch (error) { console.error("Failed to sync customer to API", error) } }
 async function loadCustomersFromApi() { try { state.customers = await apiFetch("/entities/customers"); cloudSyncStatus = "connected"; save() } catch (error) { console.error("Failed to load customers from API; using local data", error); cloudSyncStatus = authSession() ? "offline" : "local" } }
@@ -374,15 +313,15 @@ function icon(name, size = 18) { return `<i data-lucide="${name}" style="width:$
 function money(value) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value) }
 function initials(name) { return name.split(/\s+/).map(x => x[0]).slice(0, 2).join("").toUpperCase() }
 const roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "pos", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai"] };
+const roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai"] };
 function currentUser() { const session = authSession(); if (!session || !desktopEntitlementVerified) return null; const email = String(session.claims.email || "").trim().toLowerCase(); const profile = state.users.find(user => user.id === state.currentUserId && user.active && user.email.toLowerCase() === email) || null; if (!profile) return null; const jwtRole = sessionClaimRole(session.claims); return jwtRole && jwtRole !== profile.role ? { ...profile, role: jwtRole } : profile }
 function canAccess(route) { return !!currentUser() && roleRoutes[currentUser().role].includes(route) }
-function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => orderIncludesTechnician(order, user, state.users)) : state.orders }
+function visibleOrders() { const user = currentUser(); return user?.role === "technician" ? state.orders.filter(order => order.tech === user.techName) : state.orders }
 function weekPeriod(date = new Date()) { const day = date.getDay(), monday = new Date(date); monday.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); monday.setHours(0, 0, 0, 0); const friday = new Date(monday); friday.setDate(monday.getDate() + 4); return { key: monday.toISOString().slice(0, 10), start: monday.toLocaleDateString("en-US", { month: "short", day: "numeric" }), end: friday.toLocaleDateString("en-US", { month: "short", day: "numeric" }) } }
 function shopDayLabel(date = new Date()) { return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) }
 function relativePromiseHint() { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); return `Tomorrow, ${tomorrow.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }
 function employeeByTech(name) { return state.users.find(user => user.techName === name && user.active) }
-function syncPayroll(order) { const period = weekPeriod(); const lines = payrollLinesForOrder({ order, users: state.users, clocks: state.jobClockEntries, periodKey: period.key, nowIso: now() }); lines.forEach(line => { const entry = state.payrollEntries.find(item => item.id === line.id || (item.workOrderId === line.workOrderId && item.employeeId === line.employeeId && item.periodKey === line.periodKey)); if (entry) { Object.assign(entry, line); updatePayrollEntryInApi(entry) } else { state.payrollEntries.push(line); pushPayrollEntryToApi(line) } }) }
+function syncPayroll(order) { if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return; const employee = employeeByTech(order.tech); if (!employee) return; const hours = Number(order.laborHours ?? (Number(order.labor || 0) / 165)); if (!hours) return; const period = weekPeriod(), entry = state.payrollEntries.find(item => item.workOrderId === order.id); const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() }; if (entry) { Object.assign(entry, line); updatePayrollEntryInApi(entry) } else { state.payrollEntries.push(line); pushPayrollEntryToApi(line) } }
 function syncAllPayroll() { state.orders.forEach(syncPayroll); save() }
 function now() { return new Date().toISOString() }
 function openShift(userId = currentUser()?.id) { return state.shiftEntries.find(entry => entry.userId === userId && !entry.clockOut) }
@@ -392,8 +331,8 @@ function formatTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "
 function formatHours(hours) { return `${Number(hours || 0).toFixed(2)} hr` }
 function jobTrackedHours(workOrderId) { return state.jobClockEntries.filter(entry => entry.workOrderId === workOrderId && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }
 function toggleShift() { const user = currentUser(), shift = openShift(user.id); if (shift) { shift.clockOut = now(); shift.hours = hoursBetween(shift.clockIn, shift.clockOut); updateShiftEntryInApi(shift); toast(`Shift clocked out: ${formatHours(shift.hours)}`) } else { const entry = { id: `shift-${Date.now()}`, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.shiftEntries.push(entry); pushShiftEntryToApi(entry); toast("Shift clocked in") }; save(); render() }
-function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || !orderIncludesTechnician(order, user, state.users)) { toast("Only an assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
-function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); const tracked = attributeClockHours(order, currentUser()?.id, state.jobClockEntries, state.users); order.assignments = tracked.assignments; order.tech = tracked.tech; order.laborHours = tracked.laborHours; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
+function startJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), user = currentUser(); if (!order || user.role !== "technician" || order.tech !== user.techName) { toast("Only the assigned technician can clock this job"); return } if (openJobClock(workOrderId, user.id)) { toast("You are already clocked into this job"); return } const entry = { id: `jobclock-${Date.now()}`, workOrderId, userId: user.id, clockIn: now(), clockOut: null, hours: 0 }; state.jobClockEntries.push(entry); pushJobClockEntryToApi(entry); save(); toast(`${order.id} job clock started`); render() }
+function stopJobClock(workOrderId) { const order = state.orders.find(item => item.id === workOrderId), entry = openJobClock(workOrderId); if (!order || !entry) return; entry.clockOut = now(); entry.hours = hoursBetween(entry.clockIn, entry.clockOut); order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100; updateJobClockEntryInApi(entry); void updateOrderInApi(order).catch(error => toast(error.message || "Work order could not be saved")); save(); toast(`${order.id} job clock stopped: ${formatHours(entry.hours)}`); render() }
 function label(status) { return ({ estimate: "Estimate", approved: "Approved", in_progress: "In progress", waiting_parts: "Waiting parts", completed: "Completed", invoiced: "Invoiced", paid: "Paid", sent: "Sent", overdue: "Overdue" })[status] || status }
 function badge(status) { return `<span class="badge ${status}">${label(status)}</span>` }
 function toast(message) { const node = document.createElement("div"); node.className = "toast"; node.textContent = message; document.querySelector("#toast-region").append(node); setTimeout(() => node.remove(), 2600) }
@@ -423,7 +362,7 @@ function linkedOrders(vehicle) { const { ordersByVin, ordersByVehicleLabel } = g
 function operationsVehicles() { const rows = state.vehicles.map(vehicle => { const history = linkedOrders(vehicle); return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} · ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>` }).join(""); return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>` }
 function catalogInspectionApp() { return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig, render, vehicleLabel, isLocalShell, save } }
 function openCatalogInspection(existing, catalogId) { presentCatalogInspection(catalogInspectionApp(), existing, catalogId) }
-function operationsInspections() { const rows = [...state.inspections].reverse().map(item => { const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`; return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} · ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>` }
+function operationsInspections() { const rows = [...state.inspections].reverse().map(item => { const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`; return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} · ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button><button class="mini-action" data-estimate-from-inspection="${item.id}">${icon("file-text", 13)} Estimate</button></td></tr>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>` }
 function operationsInventory() { const rows = state.inventory.map(item => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} · ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money(Number(item.cost || 0))}</td><td>${money(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join(""); return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter(item => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>` }
 function visibleCannedServices() { const ids = new Set(CANNED_MENU.map(item => item.id)); if (state.services.some(item => ids.has(item.id))) return state.services; const names = new Set(state.services.map(item => String(item.name || "").trim().toLowerCase())); return [...state.services, ...CANNED_MENU.filter(item => !names.has(item.name.toLowerCase()))] }
 function operationsServices() { const groups = cannedServiceGroups(visibleCannedServices()), tables = groups.map(group => { const rows = group.items.map(item => { const price = Number(item.menuPrice ?? item.partsPrice ?? 0), discount = Number(item.discount || 0); return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>` }).join(""); return `<h3>${escapeHtml(group.label)}</h3><div class="data-panel"><table><thead><tr><th>Service</th><th>Menu price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` }).join(""); return `<div class="ops-actions"><span class="ops-note">Starter menu prices. Edit any job for this shop. The shop note stays off the customer estimate.</span><button class="primary" id="add-service">${icon("list-plus", 14)} Canned service</button></div>${tables || `<div class="data-panel"><table><tbody><tr><td>No canned services yet.</td></tr></tbody></table></div>`}` }
@@ -432,8 +371,50 @@ function reminderStatus(item) { if (item.sentAt) return "sent"; const today = ne
 function operationsReminders() { const filters = [["all", "All"], ["due", "Due"], ["overdue", "Overdue"], ["sent", "Sent"]], items = [...state.reminders].sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate))).filter(item => reminderFilter === "all" || reminderStatus(item) === reminderFilter), rows = items.map(item => { const status = reminderStatus(item), vehicle = reminderVehicle(item), statusLabel = status === "upcoming" ? "Upcoming" : status[0].toUpperCase() + status.slice(1), statusClass = status === "sent" ? "paid" : status === "overdue" ? "overdue" : status === "due" ? "approved" : "estimate"; return `<tr class="clickable-row" data-edit-reminder="${item.id}"><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.service)}${item.parentReminderId ? `<small>Follow-up reminder</small>` : ""}</td><td>${item.dueDate || "Date pending"}<small>${item.dueMileage ? `${item.dueMileage} miles${vehicle?.mileage ? ` · current ${vehicle.mileage}` : ""}` : "No mileage trigger"}</small></td><td><span class="badge ${statusClass}">${statusLabel}</span>${item.sentAt ? `<small>${new Date(item.sentAt).toLocaleString()}</small>` : ""}</td><td><div class="reminder-actions"><button class="mini-action" data-edit-reminder-button="${item.id}">${icon("pencil", 13)} Edit</button>${item.sentAt ? `<button class="mini-action" data-follow-up-reminder="${item.id}">${icon("calendar-plus", 13)} Follow up</button>` : `<button class="mini-action" data-send-reminder="${item.id}">${icon("send", 13)} Send</button>`}</div></td></tr>` }).join(""); return `<div class="ops-actions reminder-toolbar"><div class="tabs reminder-filters">${filters.map(([value, text]) => `<button class="tab ${reminderFilter === value ? "active" : ""}" data-reminder-filter="${value}">${text}</button>`).join("")}</div><button class="primary" id="add-reminder">${icon("bell-plus", 14)} Add reminder</button></div><div class="data-panel reminder-table"><table><thead><tr><th>Customer & vehicle</th><th>Service</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No ${reminderFilter === "all" ? "maintenance" : reminderFilter} reminders.</td></tr>`}</tbody></table></div>` }
 function operationsDiagnostics() { const output = state.elmOutput || "Connect an ELM327 for generic OBD-II data. OEM programming, module coding, and bidirectional controls are in OEM diagnostics.", friendly = typeof output === "string" ? output : output.friendly, raw = typeof output === "object" ? output.raw : ""; return `<section class="diagnostics-console"><div class="messaging-status ${elmPort ? "ready" : "idle"}">${icon(elmPort ? "circle-check" : "usb", 17)}<div><strong>${elmPort ? "ELM327 connected" : "No diagnostic adapter connected"}</strong><span>Chrome or Edge desktop · compatible USB or Bluetooth-COM ELM327 adapter</span></div></div><div class="ops-actions"><button class="primary" id="elm-connect">${icon("plug-zap", 14)} ${elmPort ? "Disconnect" : "Connect adapter"}</button><button class="secondary" data-elm-command="live" ${elmPort ? "" : "disabled"}>${icon("activity", 14)} Live data</button><button class="secondary" data-elm-command="dtc" ${elmPort ? "" : "disabled"}>${icon("scan-line", 14)} Read DTCs</button><button class="secondary danger" data-elm-command="clear" ${elmPort ? "" : "disabled"}>${icon("eraser", 14)} Clear DTCs</button><button class="primary" id="open-oem-programming" type="button">${icon("radio-tower", 14)} OEM programming, coding, and bidirectional</button></div><pre id="elm-output">${escapeHtml(friendly)}</pre>${raw ? `<details class="elm-raw"><summary>Raw adapter response</summary><pre>${escapeHtml(raw)}</pre></details>` : ""}</section>` }
 let autozoneAccount = { connected: false, loaded: false };
-function operationsOrdering() { const canSave = ["owner", "admin"].includes(currentUser()?.role); return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }) }
+let partstechAccount = { connected: false, loaded: false };
+let laborGuideAccount = { connected: false, provider: "manual", loaded: false };
+let quickbooksAccount = { connected: false, loaded: false };
+function operationsOrdering() { const canSave = ["owner", "admin"].includes(currentUser()?.role); return [
+  orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }),
+  partstechPanelHtml(partstechAccount, { canSave, escapeHtml, icon }),
+  laborGuidePanelHtml(laborGuideAccount, { canSave, escapeHtml, icon }),
+  quickbooksPanelHtml(quickbooksAccount, { canSave, escapeHtml, icon }),
+].join("") }
 async function loadAutozoneAccount(force = false) { if (autozoneAccount.loaded && !force) return; autozoneAccount = { ...autozoneAccount, loaded: true }; try { const account = await apiFetch("/ordering/autozone"); autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true } } catch { autozoneAccount = { connected: false, loaded: true, unavailable: true } } if (state.route === "shopops" && shopOpsTab === "ordering") render() }
+
+async function loadPartstechAccount(force = false) {
+  if (partstechAccount.loaded && !force) return;
+  partstechAccount = { ...partstechAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/partstech");
+    partstechAccount = { ...account, loaded: true };
+  } catch {
+    partstechAccount = { connected: false, loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
+async function loadLaborGuideAccount(force = false) {
+  if (laborGuideAccount.loaded && !force) return;
+  laborGuideAccount = { ...laborGuideAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/labor-guide");
+    laborGuideAccount = { ...account, loaded: true };
+  } catch {
+    laborGuideAccount = { connected: false, provider: "manual", loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
+async function loadQuickbooksAccount(force = false) {
+  if (quickbooksAccount.loaded && !force) return;
+  quickbooksAccount = { ...quickbooksAccount, loaded: true };
+  try {
+    const account = await apiFetch("/integrations/quickbooks");
+    quickbooksAccount = { ...account, loaded: true };
+  } catch {
+    quickbooksAccount = { connected: false, loaded: true, unavailable: true };
+  }
+  if (state.route === "shopops" && shopOpsTab === "ordering") render();
+}
 async function openAutozoneOrder(keyword) { const url = autozoneProLoginUrl(keyword); const opened = window.open(url, "_blank", "noopener,noreferrer"); if (!opened) { toast("Allow pop-ups to open AutoZone Pro."); return } if (!autozoneAccount.connected) { toast("AutoZone Pro opened. Save the shop login on Ordering to copy the password next time."); return } try { const detail = await apiFetch("/ordering/autozone?reveal=1"); if (detail?.password && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(detail.password); toast(`AutoZone Pro opened for ${detail.username}. Password copied — paste it on their sign-in page.`); return } toast(`AutoZone Pro opened. Sign in as ${detail?.username || "the saved user"}.`) } catch (error) { toast(error.message || "AutoZone Pro opened. The saved password could not be copied.") } }
 async function saveAutozoneLogin(form) { const data = Object.fromEntries(new FormData(form)); const account = await apiFetch("/ordering/autozone", { method: "POST", body: JSON.stringify({ username: data.username, password: data.password }) }); autozoneAccount = { connected: true, username: account.username, connectedAt: account.connectedAt, loaded: true }; toast("AutoZone Pro login saved"); render() }
 function shopOperations() { const tabs = [["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["ordering", "Ordering"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"]], view = { vehicles: operationsVehicles, inspections: operationsInspections, inventory: operationsInventory, ordering: operationsOrdering, services: operationsServices, reminders: operationsReminders, diagnostics: operationsDiagnostics }[shopOpsTab]; return shell(`${heading("Connected workflow", "Shop operations", "Linked vehicles, inspections, stock, service templates, reminders, vendors, and basic OBD-II tools.", false)}<div class="accounting-tabs ops-tabs">${tabs.map(tab => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${view()}`) }
@@ -496,7 +477,168 @@ globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, fo
 async function elmCommand(command) { if (!elmPort?.readable || !elmPort?.writable) throw new Error("Adapter is not connected"); const writer = elmPort.writable.getWriter(), reader = elmPort.readable.getReader(), decoder = new TextDecoder(); try { await writer.write(new TextEncoder().encode(`${command}\r`)); let output = "", done = false; while (!done && !output.includes(">")) { const pending = reader.read(), result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 1800))]); if (result.timeout) { await reader.cancel(); break } done = result.done; output += decoder.decode(result.value || new Uint8Array()) } return output.trim() } finally { writer.releaseLock(); reader.releaseLock() } }
 async function connectElm() { if (elmPort) { await elmPort.close(); elmPort = null; state.elmOutput = "Adapter disconnected."; save(); return render() } if (!navigator.serial) return toast("Web Serial requires desktop Chrome or Edge"); try { elmPort = await navigator.serial.requestPort(); await elmPort.open({ baudRate: 38400 }); for (const command of ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"]) await elmCommand(command); state.elmOutput = "ELM327 initialized. Vehicle ignition should be on."; save(); render() } catch (error) { elmPort = null; toast(`Adapter connection failed: ${error.message}`) } }
 async function runElm(action) { try { if (action === "clear" && !confirm("Clear stored diagnostic trouble codes? This may reset readiness monitors and should only be done after repairs are verified.")) return; const commands = action === "live" ? [["RPM", "010C"], ["Speed", "010D"], ["Coolant", "0105"]] : action === "dtc" ? [["Stored DTCs", "03"]] : [["Clear response", "04"]], lines = [], rawResponses = []; for (const [label, command] of commands) { const raw = await elmCommand(command); lines.push(formatElmResult(label, command, raw)); rawResponses.push(`${command}\n${raw}`) } state.elmOutput = { friendly: `${new Date().toLocaleString()}\n${lines.join("\n")}`, raw: rawResponses.join("\n\n") }; save(); render() } catch (error) { toast(error.message) } }
-function bindShopOperations() { document.querySelector("#open-oem-programming")?.addEventListener("click", () => { state.route = "oem-diagnostics"; save(); render() }); document.querySelectorAll("[data-order-autozone]").forEach(button => { button.onclick = () => { const item = state.inventory.find(row => row.id === button.dataset.orderAutozone); void openAutozoneOrder(item?.name || "") } }); document.querySelector("#autozone-login-form")?.addEventListener("submit", async event => { event.preventDefault(); try { await saveAutozoneLogin(event.target) } catch (error) { toast(error.message || "Could not save the AutoZone Pro login") } }); document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => { try { await apiFetch("/ordering/autozone", { method: "DELETE" }); autozoneAccount = { connected: false, loaded: true }; toast("AutoZone Pro login removed"); render() } catch (error) { toast(error.message || "Could not remove the AutoZone Pro login") } }); document.querySelector("#autozone-search-form")?.addEventListener("submit", event => { event.preventDefault(); void openAutozoneOrder(new FormData(event.target).get("keyword")) }); document.querySelector("#autozone-open")?.addEventListener("click", () => { void openAutozoneOrder("") }); if (shopOpsTab === "ordering") void loadAutozoneAccount(); document.querySelectorAll("[data-ops-tab]").forEach(button => button.onclick = () => { shopOpsTab = button.dataset.opsTab; render() }); document.querySelector("#add-vehicle")?.addEventListener("click", () => openVehicleForm()); document.querySelector("#add-inspection")?.addEventListener("click", () => openInspectionForm()); document.querySelectorAll("[data-start-inspection]").forEach(button => button.onclick = () => openCatalogInspection(null, button.dataset.startInspection)); document.querySelector("#manage-templates")?.addEventListener("click", openManageTemplates); document.querySelectorAll("[data-edit-inspection]").forEach(button => button.onclick = () => { const inspection = state.inspections.find(item => item.id === button.dataset.editInspection); if (inspection?.catalogId) openCatalogInspection(inspection); else openInspectionForm(inspection) }); document.querySelectorAll("[data-edit-template]").forEach(button => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find(t => t.id === button.dataset.editTemplate))); document.querySelectorAll("[data-edit-vehicle]").forEach(row => row.onclick = () => openVehicleDetail(row.dataset.editVehicle)); document.querySelector("#add-inventory")?.addEventListener("click", addInventory); document.querySelector("#add-vendor")?.addEventListener("click", addVendor); document.querySelector("#add-service")?.addEventListener("click", addService); document.querySelectorAll("[data-edit-service]").forEach(button => button.onclick = event => { event.stopPropagation(); openServiceForm(state.services.find(item => item.id === button.dataset.editService)) }); document.querySelector("#add-reminder")?.addEventListener("click", addReminder); document.querySelectorAll("[data-reminder-filter]").forEach(button => button.onclick = () => { reminderFilter = button.dataset.reminderFilter; render() }); document.querySelectorAll("[data-edit-reminder]").forEach(row => row.onclick = () => openReminderForm(state.reminders.find(item => item.id === row.dataset.editReminder))); document.querySelectorAll("[data-edit-reminder-button]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(state.reminders.find(item => item.id === button.dataset.editReminderButton)) }); document.querySelectorAll("[data-follow-up-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(null, state.reminders.find(item => item.id === button.dataset.followUpReminder)) }); document.querySelectorAll("[data-receive-stock]").forEach(button => button.onclick = () => receiveStock(button.dataset.receiveStock)); document.querySelectorAll("[data-send-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); sendReminder(button.dataset.sendReminder) }); document.querySelector("#elm-connect")?.addEventListener("click", connectElm); document.querySelectorAll("[data-elm-command]").forEach(button => button.onclick = () => runElm(button.dataset.elmCommand)) }
+
+async function buildEstimateFromInspectionRecord(inspection) {
+  const orderId = inspection.workOrderId;
+  const order = state.orders?.find(item => item.id === orderId) || {
+    id: orderId || `RO-${Date.now()}`,
+    customer: inspection.customer,
+    vehicle: inspection.vehicle,
+    status: "intake",
+  };
+  const next = applyEstimateFromInspection(order, inspection, {
+    laborRate: Number(shopProfile()?.laborRate) || 165,
+    taxRate: Number(state.taxSettings?.rate) || 0,
+  }, currentUser() || { name: "Staff" });
+  await saveShopEntity("orders", next);
+  if (!state.orders.some(item => item.id === next.id)) state.orders.push(next);
+  else state.orders = state.orders.map(item => item.id === next.id ? next : item);
+  toast(`Estimate draft built from inspection (${next.estimate.lines.length} finding line(s))`);
+  return next;
+}
+function bindShopOperations() { document.querySelector("#open-oem-programming")?.addEventListener("click", () => { state.route = "oem-diagnostics"; save(); render() }); document.querySelectorAll("[data-order-autozone]").forEach(button => { button.onclick = () => { const item = state.inventory.find(row => row.id === button.dataset.orderAutozone); void openAutozoneOrder(item?.name || "") } }); document.querySelector("#autozone-login-form")?.addEventListener("submit", async event => { event.preventDefault(); try { await saveAutozoneLogin(event.target) } catch (error) { toast(error.message || "Could not save the AutoZone Pro login") } }); document.querySelector("#autozone-disconnect")?.addEventListener("click", async () => { try { await apiFetch("/ordering/autozone", { method: "DELETE" }); autozoneAccount = { connected: false, loaded: true }; toast("AutoZone Pro login removed"); render() } catch (error) { toast(error.message || "Could not remove the AutoZone Pro login") } }); document.querySelector("#autozone-search-form")?.addEventListener("submit", event => { event.preventDefault(); void openAutozoneOrder(new FormData(event.target).get("keyword")) }); document.querySelector("#autozone-open")?.addEventListener("click", () => { void openAutozoneOrder("") }); if (shopOpsTab === "ordering") {
+    void loadAutozoneAccount();
+    void loadPartstechAccount();
+    void loadLaborGuideAccount();
+    void loadQuickbooksAccount();
+  }
+  document.querySelector("#partstech-connect-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      const data = Object.fromEntries(new FormData(event.target));
+      partstechAccount = { ...(await apiFetch("/integrations/partstech", { method: "POST", body: JSON.stringify(data) })), loaded: true };
+      toast("PartsTech connected");
+      render();
+    } catch (error) { toast(error.message || "Could not connect PartsTech"); }
+  });
+  document.querySelector("#partstech-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/partstech", { method: "DELETE" });
+      partstechAccount = { connected: false, loaded: true };
+      toast("PartsTech disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect PartsTech"); }
+  });
+  document.querySelector("#partstech-search-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const panel = document.querySelector("#partstech-results");
+    if (panel) panel.innerHTML = "<p>Quoting…</p>";
+    try {
+      const result = await apiFetch("/integrations/partstech/quote", { method: "POST", body: JSON.stringify(data) });
+      const rows = (result.items || []).map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
+      if (panel) panel.innerHTML = `<table><thead><tr><th>Part</th><th>#</th><th>Price</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No quotes returned</td></tr>"}</tbody></table>`;
+      window.__MECHPRO_PARTSTECH_LINES__ = Object.fromEntries((result.items || []).map(item => [item.id, item]));
+      document.querySelectorAll("[data-add-pt-line]").forEach(button => {
+        button.onclick = () => {
+          const line = window.__MECHPRO_PARTSTECH_LINES__?.[button.dataset.addPtLine];
+          if (!line) return;
+          state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+          toast(`Added ${line.description} to pending estimate lines`);
+        };
+      });
+    } catch (error) {
+      if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "PartsTech quote failed")}</p>`;
+      toast(error.message || "PartsTech quote failed");
+    }
+  });
+  document.querySelector("#labor-guide-connect-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      const data = Object.fromEntries(new FormData(event.target));
+      laborGuideAccount = { ...(await apiFetch("/integrations/labor-guide", {
+        method: "POST",
+        body: JSON.stringify({ provider: data.provider, viaPartstech: data.viaPartstech === "on" }),
+      })), loaded: true };
+      toast("Labor guide saved");
+      render();
+    } catch (error) { toast(error.message || "Could not save labor guide"); }
+  });
+  document.querySelector("#labor-guide-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/labor-guide", { method: "DELETE" });
+      laborGuideAccount = { connected: false, provider: "manual", loaded: true };
+      toast("MOTOR disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect labor guide"); }
+  });
+  document.querySelector("#labor-guide-search-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const panel = document.querySelector("#labor-guide-results");
+    if (panel) panel.innerHTML = "<p>Looking up…</p>";
+    try {
+      const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
+      if (result.provider === "web_estimate") {
+        if (!result.found) {
+          if (panel) panel.innerHTML = `<p class="login-error"><b>no estimate found</b> — ${escapeHtml(result.message || "web estimate unavailable")}. Manual entry stays available below.</p>`;
+          toast(result.message || "no estimate found");
+          return;
+        }
+        const sources = (result.sources || []).map(source => `<li><a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.title || source.url)}</a></li>`).join("");
+        const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<div class="messaging-status idle"><div><strong>web estimate — not book time</strong><span>Average ${escapeHtml(String(result.averageHours))} hrs from ${escapeHtml(String(result.sourceCount || 0))} source(s). Not ALLDATA / MOTOR / ShopKey book time.</span></div></div><table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table><ol class="ops-note">${sources}</ol>`;
+      } else {
+        const rows = (result.lines || []).map(line => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+        if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
+      }
+      window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map(line => [line.id, line]));
+      document.querySelectorAll("[data-add-labor-line]").forEach(button => {
+        button.onclick = () => {
+          const line = window.__MECHPRO_LABOR_LINES__?.[button.dataset.addLaborLine];
+          if (!line) return;
+          state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+          toast(`Added ${line.description}`);
+        };
+      });
+    } catch (error) {
+      if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "Labor guide search failed")}</p>`;
+      toast(error.message || "Labor guide search failed");
+    }
+  });
+  document.querySelector("#manual-labor-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const line = createManualLaborEntry({
+      description: data.description,
+      hours: data.hours,
+      laborRate: data.laborRate,
+    });
+    state.pendingEstimateLines = [...(state.pendingEstimateLines || []), line];
+    toast(`Added manual labor: ${line.description}`);
+  });
+  document.querySelector("#qbo-connect")?.addEventListener("click", async () => {
+    try {
+      const redirectUri = `${location.origin}/qbo/callback`;
+      const result = await apiFetch("/integrations/quickbooks/connect", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
+      if (result.authorizeUrl) location.href = result.authorizeUrl;
+      else toast("QuickBooks authorize URL missing");
+    } catch (error) { toast(error.message || "Could not start QuickBooks connect"); }
+  });
+  document.querySelector("#qbo-disconnect")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/integrations/quickbooks", { method: "DELETE" });
+      quickbooksAccount = { connected: false, loaded: true };
+      toast("QuickBooks disconnected");
+      render();
+    } catch (error) { toast(error.message || "Could not disconnect QuickBooks"); }
+  });
+  document.querySelector("#qbo-sync-now")?.addEventListener("click", async () => {
+    const status = document.querySelector("#qbo-sync-status");
+    if (status) status.textContent = "Sync uses per-record POST /integrations/quickbooks/sync from invoices and customers.";
+    toast("Open a customer or invoice and sync from there, or call the sync API with entityType/localId");
+  });
+ document.querySelectorAll("[data-ops-tab]").forEach(button => button.onclick = () => { shopOpsTab = button.dataset.opsTab; render() }); document.querySelector("#add-vehicle")?.addEventListener("click", () => openVehicleForm()); document.querySelector("#add-inspection")?.addEventListener("click", () => openInspectionForm()); document.querySelectorAll("[data-start-inspection]").forEach(button => button.onclick = () => openCatalogInspection(null, button.dataset.startInspection)); document.querySelector("#manage-templates")?.addEventListener("click", openManageTemplates); document.querySelectorAll("[data-edit-inspection]").forEach(button => button.onclick = () => { const inspection = state.inspections.find(item => item.id === button.dataset.editInspection); if (inspection?.catalogId) openCatalogInspection(inspection); else openInspectionForm(inspection) });
+  document.querySelectorAll("[data-estimate-from-inspection]").forEach(button => button.onclick = async event => {
+    event.stopPropagation();
+    const inspection = state.inspections.find(item => item.id === button.dataset.estimateFromInspection);
+    if (!inspection) return toast("Inspection not found");
+    try { await buildEstimateFromInspectionRecord(inspection); render(); }
+    catch (error) { toast(error.message || "Could not build estimate from inspection"); }
+  }); document.querySelectorAll("[data-edit-template]").forEach(button => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find(t => t.id === button.dataset.editTemplate))); document.querySelectorAll("[data-edit-vehicle]").forEach(row => row.onclick = () => openVehicleDetail(row.dataset.editVehicle)); document.querySelector("#add-inventory")?.addEventListener("click", addInventory); document.querySelector("#add-vendor")?.addEventListener("click", addVendor); document.querySelector("#add-service")?.addEventListener("click", addService); document.querySelectorAll("[data-edit-service]").forEach(button => button.onclick = event => { event.stopPropagation(); openServiceForm(state.services.find(item => item.id === button.dataset.editService)) }); document.querySelector("#add-reminder")?.addEventListener("click", addReminder); document.querySelectorAll("[data-reminder-filter]").forEach(button => button.onclick = () => { reminderFilter = button.dataset.reminderFilter; render() }); document.querySelectorAll("[data-edit-reminder]").forEach(row => row.onclick = () => openReminderForm(state.reminders.find(item => item.id === row.dataset.editReminder))); document.querySelectorAll("[data-edit-reminder-button]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(state.reminders.find(item => item.id === button.dataset.editReminderButton)) }); document.querySelectorAll("[data-follow-up-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); openReminderForm(null, state.reminders.find(item => item.id === button.dataset.followUpReminder)) }); document.querySelectorAll("[data-receive-stock]").forEach(button => button.onclick = () => receiveStock(button.dataset.receiveStock)); document.querySelectorAll("[data-send-reminder]").forEach(button => button.onclick = event => { event.stopPropagation(); sendReminder(button.dataset.sendReminder) }); document.querySelector("#elm-connect")?.addEventListener("click", connectElm); document.querySelectorAll("[data-elm-command]").forEach(button => button.onclick = () => runElm(button.dataset.elmCommand)) }
 function openCustomerMessage(name, phone, email) { showModal(`<form class="modal" id="customer-message-form"><div class="modal-head"><h2>Message ${name}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${phone || "No phone"} · ${email || "No email"}</span><strong>Your Car Guy</strong></div><label>Delivery method<select name="channel"><option value="sms" ${phone ? "" : "disabled"}>Text message</option><option value="email" ${email ? "" : "disabled"}>Email</option></select></label><label>Subject<input name="subject" value="Update from Your Car Guy"/></label><label>Message *<textarea name="message" required>Hello ${name}, this is Your Car Guy with an update regarding your vehicle.</textarea></label><p class="ai-disclaimer">This opens the device's configured messaging or email app. The app does not transmit messages through an outside service.</p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("send", 14)} Open device app</button></div></form>`); document.querySelector("#customer-message-form").onsubmit = event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), body = encodeURIComponent(data.message); if (data.channel === "email") { window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(data.subject)}&body=${body}` } else { window.location.href = `sms:${String(phone).replace(/[^0-9+]/g, "")}?body=${body}` } state.messageLog ??= []; state.messageLog.push({ id: `message-${Date.now()}`, customer: name, channel: data.channel, subject: data.subject, body: data.message, createdAt: now() }); save(); toast(`Opened ${data.channel === "email" ? "email" : "messaging"} app for ${name}`); closeModal() } }
 let financeDerivedCache=null;
 function getFinanceDerived(){const key=[state.invoices.length,state.payments.length,state.invoices.at(-1)?.number||"",state.payments.at(-1)?.id||state.payments.at(-1)?.invoiceNumber||""].join("|");if(financeDerivedCache?.key===key)return financeDerivedCache;const completedPaidByInvoice=new Map();for(const payment of state.payments){if(payment.status!=="completed")continue;const number=String(payment.invoiceNumber||"");if(!number)continue;completedPaidByInvoice.set(number,(completedPaidByInvoice.get(number)||0)+Number(payment.amount||0))}const invoiceByNumber=new Map();const balanceByCustomer=new Map();for(const invoice of state.invoices){invoiceByNumber.set(invoice.number,invoice);const paid=completedPaidByInvoice.get(invoice.number)||0;const effectivePaid=paid||((invoice.status==="paid")?Number(invoice.amount||0):0);const balance=Math.max(0,Math.round((Number(invoice.amount||0)-effectivePaid)*100)/100);balanceByCustomer.set(invoice.customer,(balanceByCustomer.get(invoice.customer)||0)+balance)}financeDerivedCache={key,completedPaidByInvoice,invoiceByNumber,balanceByCustomer};return financeDerivedCache}
@@ -507,55 +649,7 @@ function openInvoiceTax(number) { const invoice = state.invoices.find(item => it
 function taxReport(fromDate, toDate) { const from = new Date(fromDate), to = new Date(toDate), invoices = getFinanceDerived().invoiceByNumber; to.setHours(23, 59, 59, 999); const rows = paymentRecords().filter(payment => { const d = new Date(payment.receivedAt); return d >= from && d <= to }).map(payment => { const invoice = invoices.get(payment.invoiceNumber), bd = invoiceTaxBreakdown(invoice), ratio = invoice ? payment.amount / (invoice.amount || payment.amount) : 0; return { date: payment.receivedAt, invoiceNumber: payment.invoiceNumber, customer: payment.customer, gross: payment.amount, taxable: Math.round(bd.subtotal * ratio * 100) / 100, tax: Math.round(bd.tax * ratio * 100) / 100 } }).sort((a, b) => String(a.date).localeCompare(String(b.date))); const totals = rows.reduce((acc, row) => ({ gross: acc.gross + row.gross, taxable: acc.taxable + row.taxable, tax: acc.tax + row.tax }), { gross: 0, taxable: 0, tax: 0 }); return { from: fromDate, to: toDate, rows, totals } }
 function invoices() { const q = query.toLowerCase(), rows = state.invoices.filter(x => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map(x => { const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x); return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money(x.amount)}</b><small>Subtotal ${money(bd.subtotal)} · Tax ${money(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money(paid)} · Balance ${money(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>` }).join(""); return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`) }
 function recordPayment(invoiceNumber, method) { const invoice = state.invoices.find(item => item.number === invoiceNumber); if (!invoice) return; const balance = invoiceBalance(invoice); showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} · ${escapeHtml(invoice.customer)}</span><strong>Balance ${money(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`); document.querySelector("#payment-form").onsubmit = event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)), amount = Number(data.amount); if (!Number.isFinite(amount) || amount <= 0 || amount > balance) { toast("Enter a payment amount within the open balance"); return } const paymentRecord = { id: `payment-${Date.now()}`, invoiceNumber, customer: invoice.customer, amount, method, receivedAt: data.receivedAt, reference: data.reference.trim(), note: data.note.trim(), status: "completed", recordedBy: currentUser().id }; state.payments.push(paymentRecord); pushPaymentToApi(paymentRecord); const newBalance = invoiceBalance(invoice); if (newBalance === 0) { invoice.status = "paid"; invoice.due = `Paid ${data.receivedAt}` } else invoice.status = "sent"; updateInvoiceInApi(invoice); save(); closeModal(); toast(`${money(amount)} ${method} payment recorded for ${invoice.number}`); render() } }
-async function startInvoiceCheckout(number) {
-  const invoice = state.invoices.find(item => item.number === number);
-  if (!invoice) return;
-  const ensureStripeReady = async () => {
-    if (state.billingSettings.enabled) return true;
-    try {
-      const status = await apiFetch("/payments/stripe/status");
-      stripePaymentStatus = status;
-      if (status?.configured) {
-        state.billingSettings = {
-          ...state.billingSettings,
-          enabled: true,
-          provider: "stripe",
-          shopId: status.shopId || state.billingSettings.shopId || "",
-          webhookUrl: status.webhookUrl || state.billingSettings.webhookUrl || "",
-        };
-        save();
-        return true;
-      }
-    } catch (error) {
-      console.error("Could not load Stripe payment status", error);
-    }
-    toast("Configure Stripe on the Payments page before creating a checkout link");
-    return false;
-  };
-  if (!await ensureStripeReady()) return;
-  const checkoutWindow = window.open("", "_blank");
-  try {
-    const data = await apiFetch("/payments/checkout-session", {
-      method: "POST",
-      body: JSON.stringify({
-        invoiceNumber: invoice.number,
-        successUrl: `${location.origin}${location.pathname}#payment-success`,
-        cancelUrl: `${location.origin}${location.pathname}#payment-cancel`,
-      }),
-    });
-    if (!data.url) throw new Error("Checkout service did not return a payment URL");
-    invoice.checkoutUrl = data.url;
-    invoice.checkoutCreatedAt = now();
-    updateInvoiceInApi(invoice);
-    save();
-    if (checkoutWindow) checkoutWindow.location = data.url;
-    else window.location.assign(data.url);
-    toast(`Opened secure card checkout for ${invoice.number}`);
-  } catch (error) {
-    checkoutWindow?.close();
-    toast(error.message || "The shop payment service could not create a checkout link");
-  }
-}
+async function startInvoiceCheckout(number) { const invoice = state.invoices.find(item => item.number === number), config = state.billingSettings; if (!invoice) return; if (!config.enabled) { toast("This shop has not connected online card payments yet"); return } const checkoutWindow = window.open("", "_blank"); try { const data = await apiFetch("/payments/checkout-session", { method: "POST", body: JSON.stringify({ invoiceNumber: invoice.number, successUrl: `${location.origin}${location.pathname}#payment-success`, cancelUrl: `${location.origin}${location.pathname}#payment-cancel` }) }); if (!data.url) throw new Error("Checkout service did not return a payment URL"); invoice.checkoutUrl = data.url; invoice.checkoutCreatedAt = now(); updateInvoiceInApi(invoice); save(); if (checkoutWindow) checkoutWindow.location = data.url; else window.location.assign(data.url); toast(`Opened secure card checkout for ${invoice.number}`) } catch (error) { checkoutWindow?.close(); toast(error.message || "The shop payment service could not create a checkout link") } }
 function reports() { const t = state.taxSettings, stateName = usStates.find(s => s.code === t.state)?.name || t.state, result = taxReportResult; return shell(`${heading("Performance", "Reports", "A concise operational snapshot and state tax filing report based on current shop records.", false)}${stats()}<section class="messaging-panel"><div class="messaging-status ready">${icon("landmark", 17)}<div><strong>Tax filing report — ${stateName}</strong><span>Sales tax collected, formatted for ${stateName}'s ${t.filingFrequency.toLowerCase()} filing. Change the subscribing state in Shop settings.</span></div></div><form class="form-grid" id="tax-report-form"><label>From date *<input type="date" name="from" value="${result?.from || "2026-08-01"}" required/></label><label>To date *<input type="date" name="to" value="${result?.to || "2026-08-14"}" required/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("file-text", 14)} Generate report</button>${result ? `<button class="secondary" type="button" id="print-tax-report">${icon("printer", 14)} Print report</button>` : ""}</div></form>${result ? taxReportView(result, stateName, t) : ""}</section>`) }
 function taxReportView(result, stateName, settings) { const rows = result.rows.map(row => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money(row.gross)}</td><td>${money(row.taxable)}</td><td><b>${money(row.tax)}</b></td></tr>`).join(""); return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings.taxId || "Not set"} · Filing frequency: ${settings.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>` }
 function settings() { const t = state.taxSettings, stateOptions = usStates.map(s => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""); return shell(`${heading("Administration", "Shop settings", "Core business defaults used throughout MechPro.", false)}<div class="settings-panel"><div class="form-grid"><label>Shop name<input value="Your Car Guy"/></label><label>Phone<input value="555-0100"/></label><label class="full">Address<input value="100 Demo Street, Example City, TX 00000"/></label><label>Default labor rate<input value="$165.00 / hr"/></label><label>Sales tax<input value="8.25%"/></label><label>Service bays<input value="4"/></label><label>SMS notifications<select><option>Enabled</option><option>Disabled</option></select></label></div><button class="primary settings-save">${icon("save", 15)} Save settings</button></div><div class="settings-panel"><div class="statement-head"><div><div class="eyebrow">Tax filing</div><h2>Subscribing state & filing details</h2></div>${icon("landmark", 18)}</div><form class="form-grid" id="tax-settings-form"><label>Filing state *<select name="state" required>${stateOptions}</select></label><label>State tax ID<input name="taxId" value="${t.taxId}" placeholder="e.g. 1-234-5678-9"/></label><label>Default sales tax rate % *<input name="rate" type="number" step=".01" min="0" value="${t.rate}" required/></label><label>Filing frequency<select name="filingFrequency"><option ${t.filingFrequency === "Monthly" ? "selected" : ""}>Monthly</option><option ${t.filingFrequency === "Quarterly" ? "selected" : ""}>Quarterly</option><option ${t.filingFrequency === "Annually" ? "selected" : ""}>Annually</option></select></label><div class="full"><button class="primary" type="submit">${icon("save", 14)} Save tax settings</button></div></form></div>`) }
@@ -606,129 +700,14 @@ function openFreeTerm(shopId, shopName) { showModal(`<form class="modal" id="fre
 function bindPlatformAdmin() { document.querySelector("#refresh-platform")?.addEventListener("click", () => { platformAccounts = null; render() }); document.querySelector("#new-customer-account")?.addEventListener("click", openCustomerAccount); document.querySelectorAll("[data-credit-shop]").forEach(button => button.onclick = () => openAccountCredit(button.dataset.creditShop, button.dataset.shopName)); document.querySelectorAll("[data-convert-shop]").forEach(button => button.onclick = () => openConvertPaid(button.dataset.convertShop, button.dataset.shopName)); document.querySelectorAll("[data-trial-shop]").forEach(button => button.onclick = () => openFreeTerm(button.dataset.trialShop, button.dataset.shopName)); document.querySelectorAll("[data-account-status]").forEach(button => button.onclick = async () => { const suspended = button.dataset.suspended === "true", action = suspended ? "suspend" : "reactivate"; if (!confirm(`${action[0].toUpperCase() + action.slice(1)} ${button.dataset.shopName}?`)) return; button.disabled = true; try { await platformApi(`/admin/accounts/${encodeURIComponent(button.dataset.accountStatus)}/status`, { method: "POST", body: JSON.stringify({ suspended }) }); platformAccounts = null; toast(`${button.dataset.shopName} ${suspended ? "suspended" : "reactivated"}`); render() } catch (error) { toast(error.message); button.disabled = false } }) }
 
 function openPasswordReset() { showModal(`<div class="modal"><div class="modal-head"><h2>Password and MFA</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><p>MechPro authentication is managed by Cloudflare Access and your organization identity provider. Use your identity provider's account-recovery flow or contact your administrator.</p></div><div class="modal-actions"><button type="button" class="primary" data-close>Close</button></div></div>`) }
-function render() { const root = document.querySelector("#root"); if (!currentUser()) { root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen(); lucide.createIcons(); bind(); return } if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0]; const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, pos: cardTerminal, ai: aiWorkbench, messaging, payments, reports, settings }; if (typeof accounting === "function") views.accounting = accounting; if (typeof payroll === "function") views.payroll = payroll; if (typeof imports === "function") views.imports = imports; if (typeof employees === "function") views.employees = employees; if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView; root.innerHTML = (views[state.route] || views.home || views.dispatch)(); const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0); if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) { const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav"); chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || "")) } if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) { const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav"); floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics")) } lucide.createIcons(); bind(); bindPlatformAdmin(); document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan); bindEstimateActions(); bindMessagingService(); bindPaymentService(); if (state.route === "payments") void loadStripePaymentStatus(); bindTeamChat(); if (typeof bindOemDiagnostics === "function") bindOemDiagnostics(); root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => { await loadChatFromApi(); render() }); scheduleChatRefresh() }
+function render() { const root = document.querySelector("#root"); if (!currentUser()) { root.innerHTML = safeHtml(pendingAuthProfile ? pendingProfileScreen() : loginScreen()); lucide.createIcons(); bind(); return } if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0]; const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, reports, settings }; if (typeof accounting === "function") views.accounting = accounting; if (typeof payroll === "function") views.payroll = payroll; if (typeof imports === "function") views.imports = imports; if (typeof employees === "function") views.employees = employees; if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView; root.innerHTML = safeHtml((views[state.route] || views.home || views.dispatch)()); const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0); if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) { const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav"); chatNav?.insertAdjacentHTML("beforeend", nav("chat", "messages-square", "Team chat", unread || "")) } if (typeof isOemDiagnosticsAvailable === "function" && isOemDiagnosticsAvailable() && !root.querySelector('[data-route="oem-diagnostics"]')) { const floorNav = root.querySelector('.sidebar [aria-label="Shop floor"]') || root.querySelector(".sidebar .nav"); floorNav?.insertAdjacentHTML("beforeend", nav("oem-diagnostics", "radio-tower", "OEM diagnostics")) } lucide.createIcons(); bind(); bindPlatformAdmin(); document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan); bindEstimateActions(); bindMessagingService(); bindPaymentService(); bindTeamChat(); if (typeof bindOemDiagnostics === "function") bindOemDiagnostics(); root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => { await loadChatFromApi(); render() }); scheduleChatRefresh() }
 function bindMessagingService() { document.querySelector("#messaging-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.messagingSettings = { enabled: data.enabled === "on", endpoint: data.endpoint.trim(), senderEmail: data.senderEmail.trim(), senderPhone: data.senderPhone.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.messagingSettings.enabled && !state.messagingSettings.endpoint) { toast("A secure service endpoint is required before enabling delivery"); return } save(); toast("Shop messaging service saved"); render() }); document.querySelector("#test-messaging")?.addEventListener("click", () => { const config = state.messagingSettings; if (!config.endpoint) { toast("Save a secure endpoint before testing"); return } toast("Endpoint saved. Use your shop service test endpoint to verify SMTP and SMS credentials.") }) }
-async function loadStripePaymentStatus() {
-  if (!canAccess("payments")) return;
-  try {
-    stripePaymentStatus = await apiFetch("/payments/stripe/status");
-    if (stripePaymentStatus?.configured && !state.billingSettings.enabled) {
-      state.billingSettings = {
-        ...state.billingSettings,
-        enabled: true,
-        provider: "stripe",
-        shopId: stripePaymentStatus.shopId || state.billingSettings.shopId || "",
-        webhookUrl: stripePaymentStatus.webhookUrl || state.billingSettings.webhookUrl || "",
-      };
-      save();
-    }
-  } catch (error) {
-    console.error("Failed to load Stripe payment status", error);
-  }
-}
-function bindPaymentService() {
-  document.querySelector("#billing-form")?.addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.target;
-    const data = Object.fromEntries(new FormData(form));
-    const secretKey = String(data.secretKey || "").trim();
-    const webhookSecret = String(data.webhookSecret || "").trim();
-    const publishableKey = String(data.publishableKey || "").trim();
-    const button = form.querySelector("button[type=submit]");
-    const alreadyConfigured = Boolean(stripePaymentStatus?.configured);
-    if ((!secretKey || !webhookSecret) && !alreadyConfigured) {
-      toast("Enter both the Stripe secret key and webhook signing secret");
-      return;
-    }
-    if ((secretKey && !webhookSecret) || (!secretKey && webhookSecret)) {
-      toast("Provide both keys together when updating Stripe credentials");
-      return;
-    }
-    if (publishableKey && !/^pk_(test|live)_/.test(publishableKey)) {
-      toast("Publishable key must start with pk_test_ or pk_live_");
-      return;
-    }
-    if (button) button.disabled = true;
-    try {
-      if ((secretKey && webhookSecret) || publishableKey) {
-        const result = await apiFetch("/payments/stripe/configure", {
-          method: "POST",
-          body: JSON.stringify({
-            ...(secretKey && webhookSecret ? { secretKey, webhookSecret } : {}),
-            ...(publishableKey ? { publishableKey } : {}),
-          }),
-        });
-        stripePaymentStatus = { ...stripePaymentStatus, ...result, configured: true, hasPublishableKey: Boolean(publishableKey) || Boolean(stripePaymentStatus?.hasPublishableKey) };
-      } else {
-        stripePaymentStatus = await apiFetch("/payments/stripe/status");
-      }
-      state.billingSettings = {
-        enabled: data.enabled === "on" || Boolean(stripePaymentStatus?.configured),
-        provider: "stripe",
-        accountLabel: String(data.accountLabel || "").trim(),
-        shopName: String(data.shopName || "").trim() || "Your Car Guy",
-        shopId: stripePaymentStatus?.shopId || state.billingSettings.shopId || "",
-        webhookUrl: stripePaymentStatus?.webhookUrl || state.billingSettings.webhookUrl || "",
-        checkoutEndpoint: "",
-        onboardingUrl: "",
-      };
-      save();
-      toast(secretKey ? "Stripe keys saved securely" : "Payment settings saved");
-      render();
-    } catch (error) {
-      toast(error.message || "Could not save Stripe payment settings");
-    } finally {
-      if (button) button.disabled = false;
-    }
-  });
-  document.querySelector("#copy-stripe-webhook")?.addEventListener("click", async () => {
-    const input = document.querySelector("#stripe-webhook-url");
-    const value = input?.value?.trim();
-    if (!value) return toast("Webhook URL is not available yet");
-    try {
-      await navigator.clipboard.writeText(value);
-      toast("Webhook URL copied");
-    } catch {
-      input.select();
-      document.execCommand("copy");
-      toast("Webhook URL copied");
-    }
-  });
-  document.querySelector("#refresh-stripe-status")?.addEventListener("click", async () => {
-    try {
-      stripePaymentStatus = await apiFetch("/payments/stripe/status");
-      if (stripePaymentStatus?.configured) {
-        state.billingSettings = {
-          ...state.billingSettings,
-          enabled: state.billingSettings.enabled || true,
-          provider: "stripe",
-          shopId: stripePaymentStatus.shopId || "",
-          webhookUrl: stripePaymentStatus.webhookUrl || "",
-        };
-        save();
-      }
-      toast(stripePaymentStatus?.configured ? "Stripe is connected" : "Stripe is not configured yet");
-      render();
-    } catch (error) {
-      toast(error.message || "Could not refresh Stripe status");
-    }
-  });
-}
+function bindPaymentService() { document.querySelector("#billing-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.billingSettings = { enabled: data.enabled === "on", provider: "stripe_connect", checkoutEndpoint: data.checkoutEndpoint.trim(), onboardingUrl: data.onboardingUrl.trim(), accountLabel: data.accountLabel.trim(), shopName: data.shopName.trim() || "Your Car Guy" }; if (state.billingSettings.enabled && (!state.billingSettings.checkoutEndpoint || !state.billingSettings.onboardingUrl)) { toast("Stripe onboarding and checkout endpoints are required before enabling payments"); return } save(); toast("Stripe payment service saved"); render() }); document.querySelector("#open-stripe-onboarding")?.addEventListener("click", () => { const url = document.querySelector("#billing-form [name=onboardingUrl]").value; if (!url) { toast("Enter the Stripe Connect onboarding URL first"); return } window.open(url, "_blank", "noopener") }) }
 function bindLiveAssistant() { const form = document.querySelector("#assistant-form"); if (!form) return; const input = form.elements.message, sendButton = form.querySelector("button[type=submit]"), append = (role, content) => { assistantConversation.push({ role, content }); const list = document.querySelector("#assistant-messages"); list.innerHTML = assistantConversation.map(item => `<article class="assistant-message ${item.role}"><strong>${item.role === "user" ? "You" : "MechPro Assistant"}</strong><p>${escapeHtml(item.content)}</p></article>`).join(""); list.scrollTop = list.scrollHeight }; form.onsubmit = async event => { event.preventDefault(); if (assistantPaused) return; const message = String(input.value || "").trim(); if (!message) return; input.value = ""; sendButton.disabled = true; append("user", message); try { const result = await apiFetch("/ai/assistant", { method: "POST", body: JSON.stringify({ message, sessionId: assistantSessionId || undefined, history: assistantConversation.slice(-10).map(item => ({ role: item.role === "assistant" ? "assistant" : "user", content: [{ text: item.content }] })) }) }); assistantSessionId = result.sessionId || assistantSessionId; const answer = result.message || "I could not answer that right now."; append("assistant", answer); if (!assistantPaused && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(answer)) } } catch (error) { append("assistant", error.message || "The live assistant is unavailable.") } finally { sendButton.disabled = assistantPaused } }; document.querySelector("#assistant-stop")?.addEventListener("click", () => speechSynthesis?.cancel()); document.querySelector("#assistant-mic")?.addEventListener("click", () => { if (assistantPaused) return; const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition; if (!Recognition) { toast("Voice input is not supported in this browser"); return } const recognition = new Recognition(); recognition.lang = "en-US"; recognition.interimResults = false; recognition.onstart = () => toast("Listening..."); recognition.onerror = () => toast("Microphone input could not be captured"); recognition.onresult = event => { input.value = event.results[0][0].transcript; form.requestSubmit() }; recognition.start() }) }
 function bindEstimateActions() { bindLiveAssistant(); document.querySelector("#save-ai-estimate")?.addEventListener("click", makeEstimate); document.querySelectorAll("[data-send-estimate]").forEach(button => button.onclick = () => sendEstimate(button.dataset.sendEstimate, button.dataset.channel)); document.querySelectorAll("[data-sign-estimate]").forEach(button => button.onclick = () => openSignature(button.dataset.signEstimate)); document.querySelectorAll("[data-message-customer]").forEach(button => button.onclick = event => { event.stopPropagation(); openCustomerMessage(decodeURIComponent(button.dataset.messageCustomer), decodeURIComponent(button.dataset.messagePhone), decodeURIComponent(button.dataset.messageEmail)) }); document.querySelectorAll("[data-open-customer]").forEach(el => { if (el.tagName === "BUTTON") el.onclick = event => { event.stopPropagation(); openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) }; else el.onclick = event => { if (event.target.closest("[data-message-customer]")) return; openCustomerRecord(decodeURIComponent(el.dataset.openCustomer)) } }); document.querySelectorAll("[data-pay-invoice]").forEach(button => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice)); document.querySelectorAll("[data-record-payment]").forEach(button => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method)); document.querySelectorAll("[data-edit-tax]").forEach(button => button.onclick = () => openInvoiceTax(button.dataset.editTax)) }
-function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "payments") { await loadStripePaymentStatus(); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate }); order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#user-menu-toggle")?.addEventListener("click", event => { event.stopPropagation(); const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle"); if (!panel || !toggle) return; const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }); document.querySelector("#user-menu-settings")?.addEventListener("click", () => { state.route = "settings"; save(); render() }); document.querySelector("#sign-out")?.addEventListener("click", () => { void signOutEverywhere() }); if (!userMenuDismissBound) { userMenuDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle"); if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) } document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
-let modalAutosaveFlush = null;
-function setModalAutosave(flushFn) { modalAutosaveFlush = typeof flushFn === "function" ? flushFn : null }
-function showModal(html) { closeModal(); const root = document.createElement("div"); root.id = "modal-root"; root.className = "modal-backdrop"; root.innerHTML = html; root.onclick = e => { if (e.target === root) closeModal() }; document.body.append(root); lucide.createIcons(); root.querySelectorAll("[data-close]").forEach(x => { if (!x.textContent.trim() && !x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close"); if (!x.getAttribute("title") && !x.textContent.trim()) x.setAttribute("title", "Close"); x.onclick = closeModal }); root.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) }) }
-function closeModal() {
-  const root = document.querySelector("#modal-root");
-  const flush = modalAutosaveFlush;
-  modalAutosaveFlush = null;
-  if (flush && root) {
-    try { flush({ reason: "close", root }) } catch (error) { console.error("Modal autosave failed", error) }
-  }
-  root?.remove();
-}
+function bind() { bindAttentionPanel(); document.querySelectorAll("[data-route]").forEach(x => x.onclick = async () => { state.route = x.dataset.route; save(); render(); if (x.dataset.route === "customers") { await loadCustomersFromApi(); render() } if (x.dataset.route === "shopops") { await loadShopEntities(); render() } if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) { await loadOrdersFromApi(); if (x.dataset.route === "home") await Promise.all([loadInvoicesFromApi(), loadShopEntities()]); if (x.dataset.route === "schedule") await loadShopEntities(); render() } if (["invoices", "accounting", "reports"].includes(x.dataset.route)) { await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]); render() } if (x.dataset.route === "ai") { await loadEstimatesFromApi(); render() } if (x.dataset.route === "payroll") { await Promise.all([loadShiftEntriesFromApi(), loadJobClockEntriesFromApi(), loadPayrollEntriesFromApi()]); render() } }); document.querySelectorAll("[data-filter]").forEach(x => x.onclick = () => { filter = x.dataset.filter; render() }); document.querySelectorAll("[data-accounting-tab]").forEach(x => x.onclick = () => { accountingTab = x.dataset.accountingTab; render() }); document.querySelectorAll("[data-ai-tab]").forEach(x => x.onclick = () => { aiTab = x.dataset.aiTab; aiResult = null; render() }); document.querySelector("#ai-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (aiTab === "workflow") { const order = state.orders.find(item => item.id === data.workOrderId); if (!order) return; aiResult = workflowLocal(order) } else if (aiTab === "diagnostics") aiResult = diagnoseLocal(data.vehicle, data.symptoms, data.dtc); else if (aiTab === "estimate") aiResult = estimateLocal(data.vehicle, data.service, data.notes); else if (aiTab === "guide") aiResult = guideLocal(data.vehicle, data.repair); else aiResult = phoneLocal(data.transcript); render() }); document.querySelector("#apply-ai-workflow")?.addEventListener("click", () => { if (aiResult?.kind !== "workflow") return; const order = state.orders.find(item => item.id === aiResult.orderId); if (!order) return; order.aiWorkflow = { generatedAt: now(), probableCauses: aiResult.diagnostics.causes, diagnosticChecklist: aiResult.diagnostics.tests, repairSteps: aiResult.guide.steps, recommendedServices: aiResult.recommended, estimate: aiResult.estimate }; applyAiWorkflowEstimate(order, aiResult.estimate, { rate: shopMileageRate(), taxRate: state.taxSettings.rate }); order.notes = `${order.notes || ""}\nAI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.trim(); updateOrderInApi(order); save(); toast(`${order.id} updated with AI workflow`); render() }); document.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order)); document.querySelector("#new-ro-button")?.addEventListener("click", openNew); document.querySelector("#new-employee")?.addEventListener("click", openEmployee); document.querySelector("#user-menu-toggle")?.addEventListener("click", event => { event.stopPropagation(); const panel = document.querySelector("#user-menu-panel"), toggle = document.querySelector("#user-menu-toggle"); if (!panel || !toggle) return; const willOpen = panel.hidden; panel.hidden = !willOpen; toggle.setAttribute("aria-expanded", willOpen ? "true" : "false") }); document.querySelector("#user-menu-settings")?.addEventListener("click", () => { state.route = "settings"; save(); render() }); document.querySelector("#sign-out")?.addEventListener("click", () => { void signOutEverywhere() }); if (!userMenuDismissBound) { userMenuDismissBound = true; document.addEventListener("click", event => { const openPanel = document.querySelector("#user-menu-panel"), openToggle = document.querySelector("#user-menu-toggle"); if (!openPanel || openPanel.hidden || event.target.closest("#user-menu")) return; openPanel.hidden = true; openToggle?.setAttribute("aria-expanded", "false") }) } document.querySelector("#global-clock")?.addEventListener("click", toggleShift); document.querySelector("#job-clock")?.addEventListener("click", event => { const id = event.currentTarget.dataset.workOrderId; openJobClock(id) ? stopJobClock(id) : startJobClock(id) }); document.querySelectorAll("[data-toggle-user]").forEach(button => button.onclick = () => { const user = state.users.find(item => item.id === button.dataset.toggleUser); if (!user) return; user.active = !user.active; save(); toast(`${user.name} account ${user.active ? "activated" : "deactivated"}`); render() }); document.querySelector("#sync-payroll")?.addEventListener("click", () => { syncAllPayroll(); toast("Completed job labor synced to weekly payroll"); render() }); document.querySelector("#payroll-export")?.addEventListener("click", exportPayroll); document.querySelector("#export-button")?.addEventListener("click", exportCsv); document.querySelector("#accounting-export")?.addEventListener("click", exportLedger); document.querySelector("#record-expense")?.addEventListener("click", openExpense); document.querySelector("#journal-entry")?.addEventListener("click", openJournal); document.querySelector("#tax-settings-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); state.taxSettings = { state: data.state, taxId: data.taxId.trim(), rate: Number(data.rate) || 0, filingFrequency: data.filingFrequency }; save(); toast("Tax settings saved"); render() }); document.querySelector("#tax-report-form")?.addEventListener("submit", event => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); taxReportResult = taxReport(data.from, data.to); render() }); document.querySelector("#print-tax-report")?.addEventListener("click", () => window.print()); document.querySelector("#menu-button")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open")); document.querySelector(".settings-save")?.addEventListener("click", () => toast("Shop settings saved")); document.querySelectorAll("[data-template]").forEach(button => button.onclick = () => downloadTemplate(button.dataset.template)); document.querySelectorAll("[data-import-type]").forEach(button => button.onclick = () => { const input = document.querySelector("#csv-input"); input.dataset.type = button.dataset.importType; input.click() }); document.querySelector("#csv-input")?.addEventListener("change", async event => { const file = event.target.files[0]; if (!file) return; importPreview = prepareImport(event.target.dataset.type, await file.text()); render() }); document.querySelector("#cancel-import")?.addEventListener("click", () => { importPreview = null; render() }); document.querySelector("#confirm-import")?.addEventListener("click", applyImport);[document.querySelector("#global-search"), document.querySelector("#order-search")].filter(Boolean).forEach(x => x.oninput = e => { query = e.target.value; clearTimeout(window.searchTimer); window.searchTimer = setTimeout(render, 180) }); document.onkeydown = e => { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); document.querySelector("#global-search")?.focus() } if (e.key === "Escape") closeModal() } }
+function showModal(html) { closeModal(); const root = document.createElement("div"); root.id = "modal-root"; root.className = "modal-backdrop"; root.innerHTML = safeHtml(html); root.onclick = e => { if (e.target === root) closeModal() }; document.body.append(root); lucide.createIcons(); root.querySelectorAll("[data-close]").forEach(x => { if (!x.textContent.trim() && !x.getAttribute("aria-label")) x.setAttribute("aria-label", "Close"); if (!x.getAttribute("title") && !x.textContent.trim()) x.setAttribute("title", "Close"); x.onclick = closeModal }); root.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) }) }
+function closeModal() { document.querySelector("#modal-root")?.remove() }
 function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) { return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>` }
 function newOrderServiceExplanation(service, fallback) { const source = aiKeywords(service); if (/brake|rotor|pad/.test(source)) return "Includes wheel removal, brake friction and hardware inspection, pad and rotor replacement where quoted, approved lubrication, fastener and wheel torque verification, brake bedding, and a final road test."; if (/oil|lube/.test(source)) return "Includes draining the engine oil, replacing the oil filter, refilling with the specified grade and quantity, checking for leaks and final level, resetting the maintenance reminder when applicable, and a multipoint fluid and safety inspection."; if (/a\/c|air.?condition/.test(source)) return "Includes confirming vent temperature and airflow, scanning HVAC-related modules, inspecting fan and condenser operation, recording system pressures with approved equipment, and reporting the verified fault before additional repair parts are authorized."; return `${fallback || "Includes initial inspection and standard service labor."} The technician will verify the concern, perform the quoted service using current manufacturer information, document findings, and complete a post-service quality-control check.` }
 function readNewOrderEstimate() { const lines = [...document.querySelectorAll(".new-estimate-line")].map(row => { const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), labor = Math.round(hours * 165 * 100) / 100; return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor, parts, total: Math.round((labor + parts) * 100) / 100 } }).filter(line => line.service); const labor = lines.reduce((sum, line) => sum + line.labor, 0), laborHours = lines.reduce((sum, line) => sum + line.hours, 0), parts = lines.reduce((sum, line) => sum + line.parts, 0), shopSupplies = lines.length ? 12 : 0, subtotal = Math.round((labor + parts + shopSupplies) * 100) / 100, tax = Math.round(subtotal * .0825 * 100) / 100, total = Math.round((subtotal + tax) * 100) / 100; return { lines, labor, laborHours, parts, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: 8.25, total } }
@@ -737,7 +716,7 @@ function bindNewOrderEstimator() { const form = document.querySelector("#new-for
 function techOptions(selected = "Unassigned") { const names = ["Unassigned", ...state.users.filter(user => user.active && user.techName).map(user => user.techName)]; return [...new Set(names)].map(name => `<option ${name === selected ? "selected" : ""}>${escapeHtml(name)}</option>`).join("") }
 function vehicleOptionsForCustomer(customerName, selectedVin = "") { const vehicles = state.vehicles.filter(vehicle => !customerName || vehicle.customer === customerName); return `<option value="">Enter vehicle manually</option>${vehicles.map(vehicle => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel(vehicle))}${vehicle.vin ? ` · ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}` }
 function bindNewOrderCustomerPickers() { const form = document.querySelector("#new-form"); if (!form) return; const customerSelect = form.elements.customerSelect, customerInput = form.elements.customer, phoneInput = form.elements.phone, vehicleSelect = form.elements.vehicleSelect, vehicleInput = form.elements.vehicle, vinInput = form.elements.vin, vinStatus = document.querySelector("#new-ro-vin-status"); const syncCustomer = () => { const name = customerSelect.value; if (name === "__new__") { customerInput.value = ""; customerInput.hidden = false; customerInput.required = true; customerInput.focus(); vehicleSelect.innerHTML = vehicleOptionsForCustomer(""); return } customerInput.hidden = true; customerInput.required = false; customerInput.value = name; const match = state.customers.find(item => item.name === name); if (match) phoneInput.value = match.phone || ""; vehicleSelect.innerHTML = vehicleOptionsForCustomer(name) }; const syncVehicle = () => { const option = vehicleSelect.selectedOptions[0]; if (!option || !option.value) { vehicleInput.readOnly = false; return } vehicleInput.value = option.dataset.label || ""; vinInput.value = option.dataset.vin || ""; vehicleInput.readOnly = true }; customerSelect.onchange = syncCustomer; vehicleSelect.onchange = syncVehicle; document.querySelector("#new-ro-decode-vin")?.addEventListener("click", async () => { const vin = String(vinInput.value || "").trim().toUpperCase(); if (vin.length !== 17) { vinStatus.textContent = "Enter a 17-character VIN"; return } vinStatus.textContent = "Decoding VIN…"; try { const data = await apiFetch(`/vehicles/decode/${encodeURIComponent(vin)}`); vehicleInput.value = [data.year, data.make, data.model, data.trim].filter(Boolean).join(" "); vinInput.value = vin; vehicleInput.readOnly = false; vehicleSelect.value = ""; vinStatus.textContent = data.cached ? "Cached NHTSA data loaded" : "NHTSA vehicle data loaded" } catch { vinStatus.textContent = "VIN could not be decoded" } }); syncCustomer() }
-function openNew() { const promiseDefault = relativePromiseHint(); showModal(`<form class="modal wide" id="new-form"><div class="modal-head"><h2>New work order</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customerSelect" required><option value="__new__">+ New customer</option>${customerOptions()}</select></label><label>Customer name (new)<input name="customer" hidden/></label><label>Phone<input name="phone"/></label><label class="full">Linked vehicle<select name="vehicleSelect">${vehicleOptionsForCustomer("")}</select></label><label class="full">Vehicle description *<input name="vehicle" required placeholder="Year, make, model, trim"/></label><label class="full">VIN<input name="vin" maxlength="17" pattern="[A-HJ-NPR-Z0-9]{0,17}"/></label><div class="full vin-actions"><button class="secondary" type="button" id="new-ro-decode-vin">${icon("scan-line", 14)} Decode VIN with NHTSA</button><span id="new-ro-vin-status"></span></div></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required></textarea></label><label>Status<select name="status"><option value="estimate">Estimate</option><option value="approved">Approved</option><option value="in_progress">In progress</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label><label>Technician<select name="tech">${techOptions()}</select></label><label>Assignment<select name="bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label><label>Promise time<input name="promise" value="${escapeHtml(promiseDefault)}"/></label><label>Estimate total<input id="new-estimate-total" name="total" type="number" min="0" step="0.01" value="0.00" readonly/></label></div><h3>AI service estimate</h3><section class="new-order-estimator"><div class="estimator-prompt"><label>Requested services, one per line<textarea name="requestedServices" placeholder="Front brake pads and rotors&#10;Synthetic oil and filter service"></textarea></label><button class="primary" id="generate-new-estimate" type="button">${icon("sparkles", 15)} Generate with AI</button></div><div class="estimator-toolbar"><p>Edit the generated prices and included-work explanations before creating the order.</p><button class="secondary" id="add-estimate-line" type="button">${icon("plus", 14)} Add service</button></div><div id="new-estimate-lines"></div><div class="new-estimate-summary" id="new-estimate-summary"></div></section>${Mileage.newOrderMileageMarkup({ rate: Mileage.normalizeMileageRate(typeof shopProfile === "function" ? shopProfile().mileageRate : 0.68), shopAddress: typeof shopProfile === "function" ? shopProfile().address : "" })}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("plus", 15)} Create work order</button></div></form>`); bindNewOrderEstimator(); bindWorkOrderMileage("#new-form"); bindNewOrderCustomerPickers(); document.querySelector("#new-form").onsubmit = async e => { e.preventDefault(); const submitButton = e.target.querySelector("button.primary"), data = Object.fromEntries(new FormData(e.target)), customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim(); if (!customerName) { toast("Select or enter a customer name"); return } const estimate = readNewOrderEstimate(), id = `RO-${Math.max(1040, ...state.orders.map(x => Number(x.id.split("-")[1]) || 0)) + 1}`; let order = { id, customer: customerName, phone: data.phone, vehicle: data.vehicle, vin: String(data.vin || "").trim().toUpperCase() || "VIN pending", complaint: data.complaint, status: data.status, priority: data.priority, tech: data.tech, bay: data.bay, mobile: data.bay === "Mobile", promise: data.promise, total: estimate.total, scheduled: "Unscheduled", notes: "New intake. Diagnosis pending.", labor: estimate.labor, laborHours: estimate.laborHours, parts: estimate.parts, tax: estimate.tax, jobAddress: String(data.jobAddress || "").trim(), tripMilesOneWay: Number(data.tripMilesOneWay) || 0, estimate: { ...estimate, generatedAt: now(), summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.` } }; order = Mileage.applyMileageToOrder(order, { oneWayMiles: order.tripMilesOneWay, jobAddress: order.jobAddress, rate: shopMileageRate(), taxRate: state.taxSettings.rate }); if (submitButton) submitButton.disabled = true; try { const saved = await pushOrderToApi(order); state.orders.unshift(saved || order); if (!state.customers.some(x => x.name.toLowerCase() === customerName.toLowerCase())) { const record = { id: mutationId(), name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 }; state.customers.unshift(record); try { await pushCustomerToApi(record) } catch (customerError) { console.error("Failed to sync customer", customerError) } } save(); closeModal(); toast(`${id} created successfully`); render() } catch (error) { toast(error.message || "Work order could not be saved"); } finally { if (submitButton) submitButton.disabled = false } } }
+function openNew() { const promiseDefault = relativePromiseHint(); showModal(`<form class="modal wide" id="new-form"><div class="modal-head"><h2>New work order</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Customer & vehicle</h3><div class="form-grid"><label>Customer *<select name="customerSelect" required><option value="__new__">+ New customer</option>${customerOptions()}</select></label><label>Customer name (new)<input name="customer" hidden/></label><label>Phone<input name="phone"/></label><label class="full">Linked vehicle<select name="vehicleSelect">${vehicleOptionsForCustomer("")}</select></label><label class="full">Vehicle description *<input name="vehicle" required placeholder="Year, make, model, trim"/></label><label class="full">VIN<input name="vin" maxlength="17" pattern="[A-HJ-NPR-Z0-9]{0,17}"/></label><div class="full vin-actions"><button class="secondary" type="button" id="new-ro-decode-vin">${icon("scan-line", 14)} Decode VIN with NHTSA</button><span id="new-ro-vin-status"></span></div></div><h3>Service details</h3><div class="form-grid"><label class="full">Customer complaint *<textarea name="complaint" required></textarea></label><label>Status<select name="status"><option value="estimate">Estimate</option><option value="approved">Approved</option><option value="in_progress">In progress</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label><label>Technician<select name="tech">${techOptions()}</select></label><label>Assignment<select name="bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label><label>Promise time<input name="promise" value="${escapeHtml(promiseDefault)}"/></label><label>Estimate total<input id="new-estimate-total" name="total" type="number" min="0" step="0.01" value="0.00" readonly/></label></div><h3>AI service estimate</h3><section class="new-order-estimator"><div class="estimator-prompt"><label>Requested services, one per line<textarea name="requestedServices" placeholder="Front brake pads and rotors&#10;Synthetic oil and filter service"></textarea></label><button class="primary" id="generate-new-estimate" type="button">${icon("sparkles", 15)} Generate with AI</button></div><div class="estimator-toolbar"><p>Edit the generated prices and included-work explanations before creating the order.</p><button class="secondary" id="add-estimate-line" type="button">${icon("plus", 14)} Add service</button></div><div id="new-estimate-lines"></div><div class="new-estimate-summary" id="new-estimate-summary"></div></section>${Mileage.newOrderMileageMarkup({ rate: Mileage.normalizeMileageRate(typeof shopProfile === "function" ? shopProfile().mileageRate : 0.68), shopAddress: typeof shopProfile === "function" ? shopProfile().address : "" })}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("plus", 15)} Create work order</button></div></form>`); bindNewOrderEstimator(); bindWorkOrderMileage("#new-form"); bindNewOrderCustomerPickers(); document.querySelector("#new-form").onsubmit = async e => { e.preventDefault(); const submitButton = e.target.querySelector("button.primary"), data = Object.fromEntries(new FormData(e.target)), customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim(); if (!customerName) { toast("Select or enter a customer name"); return } const estimate = readNewOrderEstimate(), id = `RO-${Math.max(1040, ...state.orders.map(x => Number(x.id.split("-")[1]) || 0)) + 1}`; let order = { id, customer: customerName, phone: data.phone, vehicle: data.vehicle, vin: String(data.vin || "").trim().toUpperCase() || "VIN pending", complaint: data.complaint, status: data.status, priority: data.priority, tech: data.tech, bay: data.bay, mobile: data.bay === "Mobile", promise: data.promise, total: estimate.total, scheduled: "Unscheduled", notes: "New intake. Diagnosis pending.", labor: estimate.labor, laborHours: estimate.laborHours, parts: estimate.parts, tax: estimate.tax, jobAddress: String(data.jobAddress || "").trim(), tripMilesOneWay: Number(data.tripMilesOneWay) || 0, estimate: { ...estimate, generatedAt: now(), summary: `Preliminary estimate for ${data.vehicle}. Verify vehicle condition, part fitment, and customer authorization before repair.` } }; order = Mileage.applyMileageToOrder(order, { oneWayMiles: order.tripMilesOneWay, jobAddress: order.jobAddress, rate: shopMileageRate(), taxRate: state.taxSettings.rate }); if (submitButton) submitButton.disabled = true; try { const saved = await pushOrderToApi(order); state.orders.unshift(saved || order); const existingCustomer = state.customers.find(x => x.name.toLowerCase() === customerName.toLowerCase()); const contact = customerContactFields({ name: customerName, phone: data.phone, email: data.email, billingAddress: data.billingAddress }, existingCustomer); if (!existingCustomer || customerContactChanged(existingCustomer, contact)) await saveCustomerRecord(existingCustomer || null, contact); save(); closeModal(); toast(`${id} created successfully`); render() } catch (error) { toast(error.message || "Work order could not be saved"); } finally { if (submitButton) submitButton.disabled = false } } }
 async function commitLinkedInventory(order) { if (order.inventoryDeducted || order.inventoryCommittedAt) return true; const commitments = new Map(), missing = []; for (const line of order.estimate?.lines || []) { const quantity = Number(line.committedQuantity || 0); if (!Number.isFinite(quantity) || quantity <= 0) continue; const item = state.inventory.find(record => record.id === line.inventoryId || (line.inventorySku && record.sku === line.inventorySku)); if (!item) { missing.push(line.inventorySku || line.inventoryId || line.service); continue } const current = commitments.get(item.id) || { item, quantity: 0 }; current.quantity += quantity; commitments.set(item.id, current) } const shortages = [...missing.map(name => `${name} is unavailable`), ...[...commitments.values()].filter(({ item, quantity }) => Number(item.quantity || 0) < quantity).map(({ item, quantity }) => `${item.sku || item.name}: need ${quantity}, have ${Number(item.quantity || 0)}`)]; if (shortages.length) { toast(`Inventory shortage: ${shortages.join("; ")}`); return false } for (const { item, quantity } of commitments.values()) await saveShopEntity("inventory", { ...item, quantity: Math.max(0, Number(item.quantity || 0) - quantity), updatedAt: item.updatedAt || now() }); order.inventoryCommittedAt = now(); order.inventoryDeducted = true; return true }
 function openOrder(id) { const x = state.orders.find(o => o.id === id); if (!x) return; const technicians = state.users.filter(user => user.active && user.techName).map(user => user.techName), canManage = ["admin", "service_writer"].includes(currentUser().role), isAssignedTech = currentUser().role === "technician" && currentUser().techName === x.tech, activeClock = openJobClock(x.id), jobClockControl = isAssignedTech ? `<section class="job-clock-panel"><div><h3>Job time clock</h3><p>${activeClock ? `Clocked in at ${formatTime(activeClock.clockIn)}` : `${formatHours(jobTrackedHours(x.id))} tracked on this job`}</p></div><button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${x.id}">${icon(activeClock ? "square" : "play", 14)} ${activeClock ? "Clock out job" : "Clock in to job"}</button></section>` : "", inventoryLines = (x.estimate?.lines || []).filter(line => line.inventoryId || line.inventorySku), inventoryMarkup = inventoryLines.length ? `<section><h3>Linked inventory</h3>${inventoryLines.map(line => { const item = state.inventory.find(record => record.id === line.inventoryId || (line.inventorySku && record.sku === line.inventorySku)); return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> · ${escapeHtml(item?.name || line.service)} · ${Number(line.committedQuantity || 0)} committed</p>` }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map(t => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, .5, .75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map(h => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} · ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`; showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} · <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money(x.total)}</div><p>${escapeHtml(x.tech)} · ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money(x.labor)} · ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money(x.parts)}<br>Tax: ${money(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(s => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${Mileage.mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || Mileage.mileageCharge(x.tripMiles || Mileage.roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`); bindWorkOrderMileage(".modal"); if (canManage) { const baySelect = document.querySelector("#detail-bay"); if (baySelect) baySelect.value = x.bay || "Unassigned"; document.querySelector("#save-order").onclick = async event => { const button = event.currentTarget, nextStatus = document.querySelector("#detail-status").value, terminal = ["completed", "invoiced"], firstCompletion = terminal.includes(nextStatus) && !terminal.includes(x.status), previous = { status: x.status, tech: x.tech, laborHours: x.laborHours, complaint: x.complaint, notes: x.notes, promise: x.promise, bay: x.bay, mobile: x.mobile, updatedAt: x.updatedAt }; button.disabled = true; try { if (firstCompletion && !await commitLinkedInventory(x)) return; x.status = nextStatus; x.tech = document.querySelector("#detail-tech")?.value || x.tech; x.laborHours = Number(document.querySelector("#detail-hours")?.value || x.laborHours || 0); x.complaint = document.querySelector("#detail-complaint")?.value?.trim() || x.complaint; x.notes = document.querySelector("#detail-notes")?.value?.trim() || ""; x.promise = document.querySelector("#detail-promise")?.value?.trim() || x.promise; x.bay = document.querySelector("#detail-bay")?.value || x.bay; x.mobile = x.bay === "Mobile"; Object.assign(x, Mileage.applyMileageToOrder(x, { oneWayMiles: document.querySelector("#detail-one-way-miles")?.value, jobAddress: document.querySelector("#detail-job-address")?.value, rate: shopMileageRate(), taxRate: state.taxSettings.rate })); syncPayroll(x); const saved = await updateOrderInApi(x); if (saved && typeof saved === "object") Object.assign(x, saved); save(); closeModal(); toast(terminal.includes(x.status) ? `${x.id} completed and labor synced to payroll` : `${x.id} updated`); render() } catch (error) { Object.assign(x, previous); toast(error.message || "Work order could not be saved") } finally { button.disabled = false } }; } document.querySelector("#delete-order")?.addEventListener("click", () => { if (confirm(`Delete ${x.id}?`)) { state.orders = state.orders.filter(o => o.id !== id); state.payrollEntries = state.payrollEntries.filter(line => line.workOrderId !== id); state.jobClockEntries = state.jobClockEntries.filter(line => line.workOrderId !== id); deleteOrderInApi(id); save(); closeModal(); toast(`${id} deleted`); render() } }) }
 function exportCsv() { const rows = [["RO", "Customer", "Vehicle", "Status", "Technician", "Promise", "Total"], ...state.orders.map(x => [x.id, x.customer, x.vehicle, label(x.status), x.tech, x.promise, x.total])], csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n"), link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = "mechpro-work-orders.csv"; link.click(); URL.revokeObjectURL(link.href); toast("Work orders exported") }
@@ -771,7 +750,7 @@ function printCustomerStatement(name) { const invs = state.invoices.filter(i => 
 function openVehicleDetail(id) { const vehicle = state.vehicles.find(v => v.id === id); if (!vehicle) return; const history = linkedOrders(vehicle), photos = vehicle.photoKeys || []; showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map(key => `<img src="${cloudflareConfig.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map(o => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`); document.querySelector("#vd-edit")?.addEventListener("click", () => { closeModal(); openVehicleForm(vehicle) }) }
 const renderCore = render;
 function attachShopOperationsRoute() { const firstNav = document.querySelector(".sidebar .nav"); if (!firstNav || currentUser()?.role === "super_admin" || document.querySelector('.sidebar [data-route="shopops"]')) return; firstNav.insertAdjacentHTML("beforeend", nav("shopops", "blocks", "Shop operations")); const button = firstNav.querySelector('[data-route="shopops"]'); button.onclick = async () => { state.route = "shopops"; save(); render(); await loadShopEntities(); render() } }
-render = function () { applyAppearance(shopProfile().themeMode); if (currentUser() && state.route === "shopops") { const root = document.querySelector("#root"); root.innerHTML = DOMPurify.sanitize(shopOperations(), { USE_PROFILES: { html: true } }); lucide.createIcons(); bind(); bindShopOperations(); bindExpandedFeatures(); attachShopOperationsRoute(); return } renderCore(); bindExpandedFeatures(); attachShopOperationsRoute() };
+render = function () { applyAppearance(shopProfile().themeMode); if (currentUser() && state.route === "shopops") { const root = document.querySelector("#root"); root.innerHTML = safeHtml(shopOperations()); lucide.createIcons(); bind(); bindShopOperations(); bindExpandedFeatures(); attachShopOperationsRoute(); return } renderCore(); bindExpandedFeatures(); attachShopOperationsRoute() };
 
 async function resolveAuthenticatedProfile(session) { const claims = session.claims, normalized = String(claims.email || "").trim().toLowerCase(), role = sessionClaimRole(claims); sessionStorage.setItem(storageKeys.session, JSON.stringify(session)); pendingAuthProfile = null; if (role === "super_admin") { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local) return Object.assign(local, { role: "super_admin", active: true }); const created = { id: `super-admin-${claims.sub}`, name: claims.name || "Platform Administrator", email: normalized, role: "super_admin", title: "Platform Administrator", active: true }; state.users.push(created); save(); return created } let employees = []; try { employees = await apiFetch("/entities/employees") } catch (error) { const local = state.users.find(user => String(user.email || "").trim().toLowerCase() === normalized); if (local?.active) { state.users = sanitizeUsers(state.users); return local } if (error instanceof TypeError) throw new Error("Could not reach MechPro. Sign in from the online desktop window or check your internet connection."); throw error } const active = employees.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (active) { state.users = sanitizeUsers(employees); return active } const inactive = employees.find(user => !user.active && String(user.email || "").trim().toLowerCase() === normalized); if (inactive) { pendingAuthProfile = { email: normalized, role, reason: "deactivated", name: inactive.name || claims.name || normalized }; state.users = sanitizeUsers(employees); return null } if (role === "admin") { const profile = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify({ id: `owner-${sessionClaimShopId(claims)}`, name: claims.name || normalized.split("@")[0], email: normalized, role: "admin", title: "Owner", department: "Administration", active: true, createdAt: now() }) }); state.users = sanitizeUsers([...employees, profile]); return profile } const localSeed = state.users.find(user => user.active && String(user.email || "").trim().toLowerCase() === normalized); if (localSeed) { state.users = sanitizeUsers([...employees.filter(item => String(item.email || "").trim().toLowerCase() !== normalized), localSeed]); return localSeed } pendingAuthProfile = { email: normalized, role, reason: "missing", name: claims.name || normalized.split("@")[0] }; state.users = sanitizeUsers(employees); return null }
 function pendingProfileScreen() { const pending = pendingAuthProfile || {}; return `<main class="login-screen"><section class="login-panel"><div class="brand login-brand"><div class="brand-mark">${icon("wrench")}</div><div><div class="brand-name">MechPro</div><small>Account almost ready</small></div></div><div class="eyebrow">Employee profile required</div><h1>${pending.reason === "deactivated" ? "Your shop profile is deactivated" : "Ask an admin to finish setup"}</h1><p>${pending.reason === "deactivated" ? `The Cloudflare Access identity <strong>${escapeHtml(pending.email || "")}</strong> works, but the matching employee profile is inactive.` : `You signed in as <strong>${escapeHtml(pending.email || "")}</strong> (${escapeHtml(roleLabel[pending.role] || pending.role || "team member")}), but this shop does not have an active employee profile for that email yet.`}</p><div class="service-contract"><p>Ask a shop administrator to open <b>Employees</b> and create (or reactivate) a profile using exactly this email:</p><code>${escapeHtml(pending.email || "")}</code></div><div class="modal-actions" style="justify-content:flex-start;margin-top:18px"><button class="primary" id="pending-sign-out">${icon("log-out", 14)} Sign out</button></div></section></main>` }
@@ -1024,7 +1003,7 @@ if ("serviceWorker" in navigator && isSecureContext && !isDesktopApp) { window.a
 
 ["admin", "technician", "office", "service_writer"].forEach(role => { if (roleRoutes[role] && !roleRoutes[role].includes("home")) roleRoutes[role] = ["home", ...roleRoutes[role]] });
 const shellWithHome = shell;
-function homeQuickAction(route, iconName, labelText, extra = "") { if (route && !canAccess(route)) return ""; return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"} ${extra}>${icon(iconName, 16)}<span>${labelText}</span></button>` }
+function homeQuickAction(route, iconName, labelText) { if (route && !canAccess(route)) return ""; return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"}>${icon(iconName, 16)}<span>${labelText}</span></button>` }
 function homeDashboard() {
   const user = currentUser();
   const model = buildHomeModel({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments, now: new Date() });
@@ -1038,117 +1017,16 @@ function homeDashboard() {
   const appointments = model.todaysAppointments.map(item => `<article class="home-appointment"><strong>${escapeHtml(item.time)} · ${escapeHtml(item.customer)}</strong><small>${escapeHtml(item.service)} · ${escapeHtml(item.bay || "Unassigned")}</small></article>`).join("");
   const activity = model.activity.map(item => `<button class="home-row" type="button" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : "data-route=\"invoices\""}><span class="home-row-icon muted">${icon("activity", 15)}</span><span><strong>${escapeHtml(item.title)} · ${escapeHtml(item.customer || "")}</strong><small>${escapeHtml(item.vehicle || item.meta || "")} · ${escapeHtml(label(item.status))}</small></span></button>`).join("");
   const start = model.isEmpty ? `<section class="home-start"><div><div class="eyebrow">Get started</div><h2>Your shop dashboard is ready</h2><p>Create a work order, book a visit, or open the dispatch board. Metrics, today's jobs, and recent activity fill in as soon as records land.</p></div><div class="home-start-actions"><button class="primary" type="button" data-open-new>${icon("plus", 15)} New work order</button>${canAccess("dispatch") ? `<button class="secondary" type="button" data-route="dispatch">${icon("layout-dashboard", 15)} Open dispatch</button>` : ""}</div></section>` : "";
-  const quick = `<div class="home-command"><button class="primary home-intake" type="button" id="home-intake">${icon("plus", 18)} New Customer Intake</button><div class="home-actions">${homeQuickAction("orders", "clipboard-list", "View Work Orders")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch Board")}${homeQuickAction("shopops", "package", "Parts Requests", 'data-ops-tab="ordering"')}${homeQuickAction("customers", "users", "Customers")}${homeQuickAction("pos", "credit-card", "Card terminal")}${homeQuickAction("reports", "pie-chart", "Reports")}${homeQuickAction("payroll", "landmark", "Payroll")}</div></div>`;
-  return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow()}, ${escapeHtml(firstName)}</h1><p>Start with a customer intake. Work orders, dispatch, parts, and payroll stay one click away.</p></div><div class="head-actions"><button class="primary" type="button" id="home-intake-top">${icon("plus", 15)} New Customer Intake</button><button class="secondary" type="button" id="home-new-ro">New work order</button></div></div>${quick}${stats()}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
+  const quick = `<div class="home-actions">${homeQuickAction("", "plus", "New work order")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch board")}${homeQuickAction("schedule", "calendar-days", "Schedule")}${homeQuickAction("invoices", "receipt-text", "Invoices")}${homeQuickAction("customers", "users", "Customers")}</div>`;
+  return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow()}, ${escapeHtml(firstName)}</h1><p>A live snapshot of open work, parts holds, overdue invoices, and what needs a decision next.</p></div><div class="head-actions"><button class="primary" type="button" id="home-new-ro">${icon("plus", 15)} New work order</button></div></div>${stats()}${quick}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
 }
-function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }); document.querySelectorAll("#home-intake, #home-intake-top").forEach(button => button.addEventListener("click", () => openCustomerIntake())); document.querySelectorAll("[data-ops-tab]").forEach(button => button.addEventListener("click", () => { shopOpsTab = button.dataset.opsTab }, true)) }
-async function loadPosReaders() { try { await Promise.all([loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi()]); const result = await apiFetch("/payments/terminal/readers"); posConfigured = Boolean(result.configured); posPhoneEntry = Boolean(result.phoneEntry); posReaders = result.readers || [] } catch (error) { posReaders = []; toast(error.message || "Card terminal could not be loaded") } if (state.route === "pos") render() }
-function paintPosStatus() { const note = document.querySelector(".pos-status"); if (!note || !posCharge) return; note.dataset.phase = posCharge.phase || ""; note.textContent = posCharge.message || "" }
-async function pollPosCharge() { clearTimeout(posPollTimer); if (!posCharge?.paymentIntentId || state.route !== "pos") return; try { const result = await apiFetch(`/payments/terminal/status?paymentIntentId=${encodeURIComponent(posCharge.paymentIntentId)}&readerId=${encodeURIComponent(posCharge.readerId)}`); posCharge = { ...posCharge, ...result }; paintPosStatus(); if (result.phase === "paid") { await loadPaymentsFromApi(); toast("Card payment recorded"); render(); return } if (result.phase === "declined" || result.phase === "canceled") { render(); return } posPollTimer = setTimeout(pollPosCharge, 2000) } catch (error) { toast(error.message || "The reader status could not be read") } }
-function loadStripeJs() { if (window.Stripe) return Promise.resolve(); return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = "https://js.stripe.com/v3/"; script.onload = () => resolve(); script.onerror = () => reject(new Error("The secure card form could not be loaded")); document.head.appendChild(script) }) }
-async function startPhoneEntry(event) { event.preventDefault(); const form = event.target; const data = Object.fromEntries(new FormData(form)); const button = form.querySelector("#pos-phone-prepare"); button.disabled = true; try { const session = await apiFetch("/payments/terminal/phone", { method: "POST", body: JSON.stringify({ amount: Number(data.amount), targetType: "work_order", targetId: data.orderId }) }); await loadStripeJs(); const stripe = window.Stripe(session.publishableKey); const elements = stripe.elements({ clientSecret: session.clientSecret }); const card = elements.create("payment"); const mount = document.querySelector("#pos-card-element"); mount.replaceChildren(); card.mount(mount); posStripe = { stripe, elements, paymentIntentId: session.paymentIntentId, targetId: data.orderId }; const charge = document.querySelector("#pos-phone-charge"); const status = document.querySelector("#pos-phone-status"); if (charge) charge.hidden = false; form.querySelector("[name=amount]").disabled = true; form.querySelector("[name=orderId]").disabled = true; if (status) { status.hidden = false; status.textContent = session.moto ? "Enter the card from the phone call, then charge it." : "Enter the card from the phone call. This Stripe account is charging it as a keyed card." } } catch (error) { toast(error.message || "The phone card form could not be opened"); button.disabled = false } }
-async function confirmPhoneEntry() { if (!posStripe) return; const button = document.querySelector("#pos-phone-charge"); if (button) button.disabled = true; const result = await posStripe.stripe.confirmPayment({ elements: posStripe.elements, redirect: "if_required", confirmParams: { return_url: location.href } }); if (result.error) { toast(result.error.message || "The card was not approved"); if (button) button.disabled = false; return } try { const recorded = await apiFetch(`/payments/terminal/phone/status?paymentIntentId=${encodeURIComponent(posStripe.paymentIntentId)}`); if (recorded.phase !== "paid") { toast(recorded.message || "The card was not approved"); if (button) button.disabled = false; return } await loadPaymentsFromApi(); posStripe = null; toast("Phone card payment recorded"); render() } catch (error) { toast(error.message || "The phone payment could not be recorded"); if (button) button.disabled = false } }
-async function savePosWriteup() { const order = (state.orders || []).find(item => item.id === posSelectedId); const writeup = recoveryWriteup({ customer: order?.customer, vehicle: order?.vehicle }); if (!order || !writeup.ready) { toast("Choose a work order with a customer and a vehicle"); return } if (String(order.notes || "").includes("Concern: Vehicle immobilized in mud")) { toast("That write-up is already on the work order"); return } order.notes = [order.notes, writeup.text].filter(Boolean).join("\n\n"); try { const saved = await updateOrderInApi(order); Object.assign(order, saved || {}); toast("Technician write-up saved on the work order"); render() } catch (error) { toast("The write-up could not be saved") } }
-function bindPhoneOrder() { document.querySelectorAll("[data-pos-mode]").forEach(button => button.addEventListener("click", () => { posMode = button.dataset.posMode; posStripe = null; render() })); document.querySelector("#pos-phone-form")?.addEventListener("submit", startPhoneEntry); document.querySelector("#pos-phone-charge")?.addEventListener("click", confirmPhoneEntry) }
-function bindCardTerminal() { if (state.route !== "pos") return; bindPhoneOrder(); if (posReaders === null) { posReaders = []; loadPosReaders() } document.querySelector("#pos-order")?.addEventListener("change", event => { posSelectedId = event.target.value; posCharge = null; posStripe = null; render() }); document.querySelector("#pos-save-writeup")?.addEventListener("click", savePosWriteup); const form = document.querySelector("#pos-form"); if (!form) return; document.querySelector("#pos-refresh")?.addEventListener("click", () => { posReaders = null; render() }); document.querySelector("#pos-cancel")?.addEventListener("click", async () => { if (!posCharge?.readerId) return; try { await apiFetch("/payments/terminal/cancel", { method: "POST", body: JSON.stringify({ readerId: posCharge.readerId }) }); posCharge = { ...posCharge, phase: "canceled", message: "The reader was cleared." }; clearTimeout(posPollTimer); render() } catch (error) { toast(error.message || "The reader could not be cleared") } }); form.addEventListener("submit", async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(form)); const button = form.querySelector("#pos-charge"); button.disabled = true; const reuse = posCharge?.targetId === data.orderId && posCharge?.phase === "declined" ? posCharge.paymentIntentId : ""; try { const result = await apiFetch("/payments/terminal/charge", { method: "POST", body: JSON.stringify({ readerId: data.readerId, amount: Number(data.amount), targetType: "work_order", targetId: data.orderId, paymentIntentId: reuse }) }); posCharge = { ...result, targetId: data.orderId }; render() } catch (error) { toast(error.message || "The card charge could not be started"); button.disabled = false } }); if (posCharge?.phase === "waiting") pollPosCharge() }
-const bindPosCore = bind;
-bind = function () { bindPosCore(); bindCardTerminal() };
-function openAssignmentEditor(order) {
-  const assignments = order.assignments?.length ? order.assignments : (order.tech && order.tech !== "Unassigned" ? [{ name: order.tech, role: "primary", sharePercent: 100 }] : []);
-  const techs = state.users.filter(user => user.active !== false && classificationFor(user) === "technician" && (user.techName || user.name));
-  const options = (role) => `<option value="">Select technician</option>${techs.map(user => `<option value="${escapeAttr(user.id)}" ${assignments.find(item => item.role === role)?.employeeId === user.id ? "selected" : ""}>${escapeHtml(user.techName || user.name)}</option>`).join("")}`;
-  const writeIn = assignments.find(item => item.writeIn)?.name || "";
-  showModal(`<form class="modal" id="assignment-form"><div class="modal-head"><h2>Assigned technicians</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Primary technician<select name="primary">${options("primary")}</select></label><label>Primary share %<input name="primaryShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "primary")?.sharePercent ?? 100}"/></label><label>Secondary technician<select name="secondary">${options("secondary")}</select></label><label>Secondary share %<input name="secondaryShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "secondary")?.sharePercent ?? 0}"/></label><label>Apprentice<select name="apprentice">${options("apprentice")}</select></label><label>Apprentice share %<input name="apprenticeShare" type="number" min="0" max="100" step="1" value="${assignments.find(item => item.role === "apprentice")?.sharePercent ?? 0}"/></label><label class="full">Temporary technician name<input name="writeIn" value="${escapeAttr(writeIn)}" placeholder="Subcontractor or temp"/></label></div><p class="form-help">Only technicians appear in the lists. A temporary name is stored on this work order without a payroll rate.</p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Save assignments</button></div></form>`);
-  document.querySelector("#assignment-form").onsubmit = async event => {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.target));
-    const nextAssignments = ["primary", "secondary", "apprentice"].flatMap(role => {
-      if (!data[role]) return [];
-      const user = state.users.find(item => item.id === data[role]);
-      if (!user) return [];
-      return [{ id: `${order.id}-${role}`, employeeId: user.id, name: user.techName || user.name, role, sharePercent: Number(data[`${role}Share`]) || 0, assignedAt: new Date().toISOString() }];
-    });
-    if (String(data.writeIn || "").trim()) nextAssignments.push({ id: `${order.id}-write-in`, name: data.writeIn.trim(), role: nextAssignments.length ? "secondary" : "primary", writeIn: true, sharePercent: 0, hoursWorked: 0, assignedAt: new Date().toISOString() });
-    const updated = applyAssignments(order, nextAssignments, state.users);
-    const saved = await updateOrderInApi({ ...order, ...updated, updatedAt: order.updatedAt });
-    const index = state.orders.findIndex(item => item.id === order.id);
-    if (index >= 0) state.orders[index] = saved;
-    syncPayroll(saved);
-    save();
-    closeModal();
-    toast(`${saved.id} technicians updated`);
-    render();
-  };
-}
-function loadIntakeDraft() { try { const raw = localStorage.getItem(INTAKE_STORAGE_KEY); return raw ? JSON.parse(raw) : null } catch { return null } }
-function saveIntakeDraft(draft) { try { localStorage.setItem(INTAKE_STORAGE_KEY, JSON.stringify(serializableIntake(draft))) } catch { /* private browsing or a full quota keeps the in-memory draft */ } }
-function openCustomerIntake() {
-  const stored = loadIntakeDraft();
-  const draft = stored && stored.customer ? stored : emptyIntakeDraft();
-  showModal('<div class="modal wide intake-modal" id="intake-host"></div>');
-  const backdrop = document.querySelector("#modal-root");
-  if (backdrop) backdrop.onclick = event => { if (event.target === backdrop) event.stopPropagation() };
-  const host = document.querySelector("#intake-host");
-  const profile = shopProfile();
-  mountIntakeWizard(host, {
-    draft,
-    users: state.users,
-    laborRate: Number(profile.laborRate || 165),
-    taxRate: Number(state.taxSettings?.rate || 0),
-    onSave: saveIntakeDraft,
-    onCancel: current => { saveIntakeDraft(current); closeModal() },
-    decodeVin: async vin => {
-      const normalized = String(vin || "").trim().toUpperCase();
-      if (normalized.length !== 17) throw new Error("Enter a 17-character VIN first.");
-      return apiFetch(`/api/vehicles/decode/${encodeURIComponent(normalized)}`);
-    },
-    lookupPlate: async () => ({ available: false, message: profile.plateProviderEnabled ? "Plate lookup is enabled in settings but no provider responded." : "Plate lookup is not connected. Enter the plate for the file, then decode the VIN or type the vehicle." }),
-    analyze: async current => {
-      try {
-        const response = await apiFetch("/api/ai/assistant", { method: "POST", body: JSON.stringify({ message: `Shop intake review only. Vehicle ${current.vehicle?.year || ""} ${current.vehicle?.make || ""} ${current.vehicle?.model || ""}. Concern: ${current.concern?.description || ""}. Codes: ${current.diagnosis?.codes || "none"}.` }) });
-        if (response?.reply || response?.message) return { source: "assistant", notice: "MechPro assistant response. Confirm every test on the vehicle before selling parts.", causes: [{ name: "Assistant notes", detail: response.reply || response.message }] };
-      } catch { /* the assistant stays off unless the shop enables it */ }
-      return localDiagnosticChecklist(current);
-    },
-    onConvert: async current => {
-      const name = [current.customer.firstName, current.customer.lastName].filter(Boolean).join(" ");
-      const display = current.customer.company ? `${name} (${current.customer.company})` : name;
-      const address = [current.customer.address, [current.customer.city, current.customer.state, current.customer.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-      const existing = state.customers.find(item => item.phone === current.customer.phone || (current.customer.email && item.email === current.customer.email));
-      await saveCustomerRecord(existing, { name: display, phone: current.customer.phone, email: current.customer.email, billingAddress: address, billingNotes: `Intake ${current.id}` });
-      const vehicleId = `veh-${Date.now()}`;
-      await saveShopEntity("vehicles", { id: vehicleId, customer: display, vin: current.vehicle.vin, year: current.vehicle.year, make: current.vehicle.make, model: current.vehicle.model, plate: current.vehicle.plate, mileage: current.vehicle.mileage, color: current.vehicle.color });
-      const max = state.orders.reduce((highest, order) => Math.max(highest, Number(String(order.id).replace(/\D/g, "")) || 0), 1040);
-      const record = intakeOrderPayload(current, { id: `RO-${max + 1}`, laborRate: Number(profile.laborRate || 165), taxRate: Number(state.taxSettings?.rate || 0), users: state.users });
-      record.intake.photos = [];
-      for (const photo of current.photos || []) {
-        if (!photo.file) { record.intake.photos.push(photo); continue }
-        try {
-          const fileId = await uploadFileToStorage(photo.file, "intake", photo.file.type || "image/jpeg", { apiFetch });
-          record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, contentType: photo.contentType, takenAt: photo.takenAt, fileId });
-        } catch (error) {
-          record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, takenAt: photo.takenAt, uploadError: error.message || "Upload failed" });
-        }
-      }
-      let saved = record;
-      if (!isOfflineDesktop()) {
-        const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
-        saved = response?.queued ? record : response;
-      }
-      state.orders.unshift(saved);
-      localStorage.removeItem(INTAKE_STORAGE_KEY);
-      save();
-      closeModal();
-      toast(`${saved.id} created from intake`);
-      render();
-    },
-  });
-}
+function bindHomeDashboard() { document.querySelector("#home-new-ro")?.addEventListener("click", openNew); document.querySelectorAll("[data-open-new]").forEach(button => { button.onclick = event => { event.preventDefault(); openNew() } }) }
 const renderHomeCore = render;
-render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = DOMPurify.sanitize(homeDashboard(), { USE_PROFILES: { html: true } }); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
-function applyRemoteList(key, records, entityType = key) { const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
+render = function () { if (currentUser() && state.route === "home") { const root = document.querySelector("#root"); root.innerHTML = safeHtml(homeDashboard()); lucide.createIcons(); bind(); bindExpandedFeatures(); attachShopOperationsRoute(); bindHomeDashboard(); queueMicrotask(checkOnboardingSamples); return } renderHomeCore() };
+let customerListEpoch = 0;
+function applyRemoteList(key, records, entityType = key) { const pending = pendingCreateIdsForCollection(key, readMutationQueue(), shopEntityCollections); const remote = mergeRemoteCollection(key, records, state[key], localSampleRecord, pending); state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue()); save() }
 loadOrdersFromApi = async function () { try { applyRemoteList("orders", await apiFetch("/entities/orders")) } catch (error) { console.error("Failed to load orders from API; using local data", error) } };
-loadCustomersFromApi = async function () { try { applyRemoteList("customers", await apiFetch("/entities/customers")) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
+loadCustomersFromApi = async function () { const epoch = customerListEpoch; try { const records = await apiFetch("/entities/customers"); if (epoch !== customerListEpoch) return; applyRemoteList("customers", records) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
 loadExpensesFromApi = async function () { try { applyRemoteList("expenses", await apiFetch("/entities/expenses")) } catch (error) { console.error("Failed to load expenses from API; using local data", error) } };
 loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type)); const tax = state.shopSettingsRecords.find(item => item.id === "tax"); if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly", ein: String(tax.ein || ""), texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""), webfileNumber: String(tax.webfileNumber || ""), jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null } } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
@@ -1173,39 +1051,25 @@ function employeeFormValue(employee, field, fallback = "") {
 }
 
 async function saveEmployeeRecord(existing, data) {
-  const email = String(existing?.email || data.workEmail || data.email || "").trim().toLowerCase();
   const record = {
     ...(existing || {}),
     id: existing?.id || `user-${Date.now()}`,
     name: data.name.trim(),
-    email,
+    email: String(existing?.email || data.email).trim().toLowerCase(),
     role: data.role,
-    title: String(data.title || "").trim(),
-    techName: String(data.techName || "").trim(),
+    title: data.title.trim(),
+    techName: data.techName.trim(),
     active: existing?.active !== false,
     employeeId: data.employeeId.trim(),
-    phone: String(data.phone || "").trim(),
-    address: String(data.address || "").trim(),
+    phone: data.phone.trim(),
+    address: data.address.trim(),
     startDate: data.startDate,
     employmentType: data.employmentType,
     payRate: Number(data.payRate),
     payFrequency: data.payFrequency,
-    classification: data.classification || classificationFor({ role: data.role, classification: existing?.classification }),
-    payPlan: PAY_PLANS.some(plan => plan.id === data.payPlan) ? data.payPlan : (existing?.payPlan || "hourly"),
-    commissionPercent: Number(data.commissionPercent) || 0,
-    department: String(data.department || "").trim(),
-    emergencyContact: String(data.emergencyContact || "").trim(),
+    department: data.department.trim(),
+    emergencyContact: data.emergencyContact.trim(),
     taxStatus: data.taxStatus,
-    w4FilingStatus: data.w4FilingStatus || existing?.w4FilingStatus || "single",
-    w4Step2Checkbox: String(data.w4Step2Checkbox) === "true",
-    w4DependentCredits: Number(data.w4DependentCredits) || 0,
-    w4OtherIncome: Number(data.w4OtherIncome) || 0,
-    w4Deductions: Number(data.w4Deductions) || 0,
-    w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
-    pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
-    stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
-    federalWithholdingRate: Number(existing?.federalWithholdingRate) || 0,
-    ssn: String(data.ssn || existing?.ssn || "").replace(/\D/g, "").slice(-4),
     createdAt: existing?.createdAt || now(),
     updatedAt: existing?.updatedAt,
   };
@@ -1272,14 +1136,13 @@ async function setEmployeeActive(user) {
 }
 
 async function saveCustomerRecord(existing, data) {
+  customerListEpoch += 1;
+  const contact = customerContactFields(data, existing);
+  if (!contact.name) throw new Error("Customer name is required");
   const record = {
     ...(existing || {}),
+    ...contact,
     id: existing?.id || mutationId(),
-    name: data.name.trim(),
-    phone: data.phone.trim(),
-    email: data.email.trim(),
-    billingAddress: data.billingAddress.trim(),
-    billingNotes: data.billingNotes.trim(),
     vehicles: Number(existing?.vehicles || 0),
     visits: Number(existing?.visits || 0),
     spend: Number(existing?.spend || 0),
@@ -1292,7 +1155,7 @@ async function saveCustomerRecord(existing, data) {
       method: existing ? "PUT" : "POST",
       body: JSON.stringify(record),
     });
-    saved = response?.queued ? record : response;
+    saved = mergeSavedCustomer(record, response);
   }
   const index = existing ? state.customers.indexOf(existing) : -1;
   if (index >= 0) state.customers[index] = saved;
@@ -1333,7 +1196,7 @@ customers = function () {
     const vehicleCount = state.vehicles.filter(vehicle => vehicle.customer === item.name).length;
     const visitCount = state.orders.filter(order => order.customer === item.name).length;
     const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
-    return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} · ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+    return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} · ${escapeHtml(item.email || "No email")}</p>${item.billingAddress ? `<p>${escapeHtml(item.billingAddress)}</p>` : ""}</div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
   }).join("");
   return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
 };
@@ -1551,15 +1414,15 @@ openNew = function () {
           return;
         }
       }
-      let customer = selectedCustomer || state.customers.find(item => item.id === data.selectedCustomerId);
-      if (!customer) {
-        customer = await saveCustomerRecord(null, {
-          name: customerName,
-          phone: String(data.phone || ""),
-          email: String(data.email || ""),
-          billingAddress: String(data.billingAddress || ""),
-          billingNotes: "",
-        });
+      let customer = selectedCustomer || state.customers.find(item => item.id === data.selectedCustomerId) || state.customers.find(item => item.name.toLowerCase() === customerName.toLowerCase());
+      const contact = customerContactFields({
+        name: customerName,
+        phone: data.phone,
+        email: data.email,
+        billingAddress: data.billingAddress,
+      }, customer);
+      if (!customer || customerContactChanged(customer, contact)) {
+        customer = await saveCustomerRecord(customer || null, contact);
       }
       const estimate = readNewOrderEstimate();
       const id = `RO-${Math.max(1040, ...state.orders.map(item => Number(item.id.split("-")[1]) || 0)) + 1}`;
@@ -1608,7 +1471,7 @@ openNew = function () {
 };
 
 orders = function () {
-  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(assignmentSummary(order, state.users))}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+  const rows = filtered().map(order => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
   return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
 };
 
@@ -2108,158 +1971,26 @@ openOrder = function (id) {
   const canEditEstimate = canManage && (!wasApproved || canApprove);
   const defaultLaborRate = estimate.lines.find(line => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
   const editNotice = paidInvoice
-    ? "Invoice already has a payment. Edits still update line items and the invoice total; recorded payments stay on the invoice."
+    ? "Line items are locked because this invoice has a recorded payment."
     : invoice
-      ? "Saving also updates the invoice and clears its signature so it can be re-authorized."
+      ? "Saving also updates the unpaid invoice and clears its signature."
       : wasApproved
         ? "Saving creates a revision and clears the prior customer approval."
-        : "Changes recalculate labor, parts, tax, and total. Closing the dialog autosaves drafts.";
-  const detailsEditor = canManage ? `<section class="job-details-editor"><div class="job-section-head"><div><h3>Work order details</h3><p>Customer, vehicle, complaint, and assignment stay editable through estimate, work, and invoice.</p></div><span class="autosave-hint" id="job-autosave-status">Autosave on</span></div><div class="form-grid"><label>Customer *<select id="job-detail-customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input id="job-detail-phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input id="job-detail-vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input id="job-detail-vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label><label class="full">Customer complaint *<textarea id="job-detail-complaint" rows="3" required>${escapeHtml(order.complaint || "")}</textarea></label><label class="full">Technician / service notes<textarea id="job-detail-notes" rows="3">${escapeHtml(order.notes || "")}</textarea></label><label>Status<select id="job-detail-status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map(status => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select id="job-detail-priority">${["normal", "high", "low"].map(priority => `<option value="${priority}" ${(order.priority || "normal") === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select id="job-detail-tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select id="job-detail-bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map(bay => `<option ${(order.bay || "Unassigned") === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input id="job-detail-promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input id="job-detail-labor-hours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label></div></section>` : "";
-  const canEditEstimate = canManage && (!wasApproved || canApprove);
+        : "Changes recalculate labor, parts, tax, and total before saving.";
   const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find(fee => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
   const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
   const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
   const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} · ${money(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
   const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
-  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${detailsEditor}${estimatePresentation(order, estimate, { locked: false })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
+  showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
   const editorRoot = document.querySelector("#job-estimate-editor");
-  let jobCardDirty = false;
-  let jobCardSaving = false;
-  let jobCardTimer = 0;
-  const setAutosaveStatus = message => {
-    const status = document.querySelector("#job-autosave-status");
-    if (status) status.textContent = message;
-  };
-  const readJobDetails = () => ({
-    customer: document.querySelector("#job-detail-customer")?.value?.trim() || order.customer,
-    phone: document.querySelector("#job-detail-phone")?.value?.trim() || "",
-    vehicle: document.querySelector("#job-detail-vehicle")?.value?.trim() || order.vehicle,
-    vin: (document.querySelector("#job-detail-vin")?.value || "").trim().toUpperCase() || "VIN pending",
-    complaint: document.querySelector("#job-detail-complaint")?.value?.trim() || order.complaint,
-    notes: document.querySelector("#job-detail-notes")?.value?.trim() || "",
-    status: document.querySelector("#job-detail-status")?.value || order.status,
-    priority: document.querySelector("#job-detail-priority")?.value || order.priority || "normal",
-    tech: document.querySelector("#job-detail-tech")?.value || order.tech,
-    bay: document.querySelector("#job-detail-bay")?.value || order.bay,
-    mobile: (document.querySelector("#job-detail-bay")?.value || order.bay) === "Mobile",
-    promise: document.querySelector("#job-detail-promise")?.value?.trim() || order.promise,
-    laborHours: Math.max(0, Number(document.querySelector("#job-detail-labor-hours")?.value) || 0),
-  });
-  const readLaborAssignments = () => {
-    const rows = [...document.querySelectorAll(".labor-assignment-row")];
-    if (!rows.length) return null;
-    return new Map(rows.map(row => [
-      row.dataset.assignmentLine,
-      [...row.querySelectorAll(".line-technician:checked")].map(input => input.value),
-    ]));
-  };
-  const buildRevisedOrder = () => {
-    const details = canManage ? readJobDetails() : {};
-    let nextEstimate = order.estimate;
-    if (editorRoot && document.contains(editorRoot)) {
-      const fromEditor = estimateFromEditor(editorRoot);
-      if (fromEditor.lines.length) {
-        nextEstimate = {
-          ...fromEditor,
-          generatedAt: order.estimate?.generatedAt,
-          summary: order.estimate?.summary || `Estimate for ${details.vehicle || order.vehicle}`,
-        };
-      }
-    }
-    const editedAt = now();
-    let revised = workOrderWithEditedEstimate(order, nextEstimate, editedAt);
-    Object.assign(revised, details, { updatedAt: order.updatedAt });
-    const assignmentsByLine = readLaborAssignments();
-    if (assignmentsByLine && revised.estimate?.lines) {
-      revised.estimate.lines = revised.estimate.lines.map(line => line.type === "labor"
-        ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] }
-        : line);
-    }
-    return { revised, editedAt };
-  };
-  const persistJobCard = async ({ silent = false, reopen = false } = {}) => {
-    if (!canManage || jobCardSaving) return false;
-    if (!jobCardDirty && silent) return true;
-    const { revised, editedAt } = buildRevisedOrder();
-    if (!revised.customer || !revised.vehicle || !revised.complaint) {
-      if (!silent) toast("Customer, vehicle, and complaint are required");
-      return false;
-    }
-    if (editorRoot && document.contains(editorRoot) && !estimateFromEditor(editorRoot).lines.length) {
-      if (!silent) toast("Add at least one labor or part line");
-      return false;
-    }
-    if (invoice && !isOfflineDesktop() && !navigator.onLine) {
-      Object.assign(order, revised);
-      save();
-      jobCardDirty = false;
-      setAutosaveStatus("Saved locally · offline");
-      if (!silent) toast("Saved locally. Reconnect to sync the invoice.");
-      return true;
-    }
-    jobCardSaving = true;
-    setAutosaveStatus("Saving…");
-    const revisedInvoice = invoice ? {
-      ...invoiceWithEditedWorkOrder(invoice, revised, editedAt),
-      // Keep authorization on paid invoices; unpaid edits still clear for re-sign.
-      signature: paidInvoice ? invoice.signature : null,
-    } : null;
-    try {
-      const savedOrder = await updateOrderInApi(revised, { throwOnError: true });
-      Object.assign(order, savedOrder?.queued ? revised : savedOrder);
-      if (revisedInvoice) {
-        const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
-        Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
-      }
-      save();
-      jobCardDirty = false;
-      setAutosaveStatus("Saved");
-      if (!silent) {
-        setModalAutosave(null);
-        closeModal();
-        toast(`${order.id} updated${revisedInvoice ? ` · ${invoice.number} synchronized` : ""}`);
-        if (reopen) openOrder(order.id);
-        else render();
-      }
-      return true;
-    } catch (error) {
-      Object.assign(order, revised);
-      save();
-      jobCardDirty = false;
-      setAutosaveStatus("Saved locally");
-      if (!silent) toast(error.message || "Cloud sync failed — changes kept locally");
-      return false;
-    } finally {
-      jobCardSaving = false;
-    }
-  };
-  const markJobCardDirty = () => {
-    jobCardDirty = true;
-    setAutosaveStatus("Unsaved changes");
-    clearTimeout(jobCardTimer);
-    jobCardTimer = setTimeout(() => { void persistJobCard({ silent: true }) }, 700);
-  };
-  if (canManage) {
-    document.querySelector(".job-details-editor")?.addEventListener("input", markJobCardDirty);
-    document.querySelector(".job-details-editor")?.addEventListener("change", markJobCardDirty);
-    document.querySelector(".labor-assignment-panel")?.addEventListener("change", markJobCardDirty);
-    setModalAutosave(({ reason }) => {
-      clearTimeout(jobCardTimer);
-      if (!jobCardDirty) return;
-      void persistJobCard({ silent: true });
-      if (reason === "close") toast(`${order.id} autosaved`);
-    });
-  }
   if (editorRoot) {
     bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
-    editorRoot.addEventListener("input", markJobCardDirty);
-    editorRoot.addEventListener("change", markJobCardDirty);
-    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length)); bindEstimateEditor(editorRoot); markJobCardDirty() };
-    document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot); markJobCardDirty() };
+    document.querySelector("#job-add-labor").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length)); bindEstimateEditor(editorRoot) };
+    document.querySelector("#job-add-part").onclick = () => { editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length)); bindEstimateEditor(editorRoot) };
     document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, line => {
       editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
       bindEstimateEditor(editorRoot);
-      markJobCardDirty();
     });
     document.querySelector("#save-job-lines").onclick = async event => {
       const next = estimateFromEditor(editorRoot);
@@ -2269,29 +2000,30 @@ openOrder = function (id) {
       }
       if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
       event.currentTarget.disabled = true;
-      jobCardDirty = true;
-      const ok = await persistJobCard({ silent: false, reopen: true });
-      if (!ok) event.currentTarget.disabled = false;
+      const editedAt = now();
+      const revisedOrder = workOrderWithEditedEstimate(order, { ...next, generatedAt: order.estimate.generatedAt, summary: order.estimate.summary }, editedAt);
+      const revisedInvoice = invoice ? invoiceWithEditedWorkOrder(invoice, revisedOrder, editedAt) : null;
+      try {
+        const savedOrder = await updateOrderInApi(revisedOrder, { throwOnError: true });
+        Object.assign(order, savedOrder?.queued ? revisedOrder : savedOrder);
+        if (revisedInvoice) {
+          const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
+          Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
+        }
+        save();
+        closeModal();
+        toast(`${order.id} line items updated${revisedInvoice ? ` · ${invoice.number} synchronized` : ""}`);
+        openOrder(order.id);
+      } catch (error) {
+        event.currentTarget.disabled = false;
+        toast(error.message || "Line items could not be saved");
+      }
     };
   }
   document.querySelectorAll("[data-send-job-estimate]").forEach(button => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
   document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
-  document.querySelector("#start-job-work")?.addEventListener("click", async () => {
-    jobCardDirty = true;
-    const details = readJobDetails();
-    order.status = "in_progress";
-    Object.assign(order, details, { status: "in_progress" });
-    await updateOrderInApi(order);
-    save();
-    setModalAutosave(null);
-    closeModal();
-    toast(`${order.id} moved to in progress`);
-    render();
-  });
-  document.querySelector("#complete-job-card")?.addEventListener("click", async () => {
-    if (jobCardDirty) await persistJobCard({ silent: true });
-    completeJobCard(order);
-  });
+  document.querySelector("#start-job-work")?.addEventListener("click", async () => { order.status = "in_progress"; await updateOrderInApi(order); save(); closeModal(); toast(`${order.id} moved to in progress`); render() });
+  document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
   document.querySelector("#sign-job-invoice")?.addEventListener("click", () => { if (!invoice.signature) onsiteSignatureModal("invoice", invoice) });
   document.querySelectorAll("[data-print-invoice]").forEach(button => button.onclick = () => printInvoice(button.dataset.printInvoice));
   document.querySelector("#print-job-card")?.addEventListener("click", () => printJobCard(order));
@@ -2300,14 +2032,30 @@ openOrder = function (id) {
     document.querySelectorAll(".labor-assignment-row").forEach(row => {
       row.querySelectorAll(".line-technician").forEach(input => { input.checked = selected.has(input.value) });
     });
-    markJobCardDirty();
-    toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line.`);
+    toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line. Save to persist.`);
   });
   document.querySelector("#save-labor-assignments")?.addEventListener("click", async event => {
+    const assignmentsByLine = new Map([...document.querySelectorAll(".labor-assignment-row")].map(row => [
+      row.dataset.assignmentLine,
+      [...row.querySelectorAll(".line-technician:checked")].map(input => input.value),
+    ]));
+    order.estimate.lines = order.estimate.lines.map(line => line.type === "labor"
+      ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] }
+      : line);
     event.currentTarget.disabled = true;
-    jobCardDirty = true;
-    const ok = await persistJobCard({ silent: false, reopen: true });
-    if (!ok) event.currentTarget.disabled = false;
+    try {
+      const saved = !isOfflineDesktop() && !isLocalShell()
+        ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) })
+        : order;
+      state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
+      save();
+      closeModal();
+      toast(`${order.id} technician assignments saved`);
+      openOrder(order.id);
+    } catch (error) {
+      event.currentTarget.disabled = false;
+      toast(error.message || "Technician assignments could not be saved");
+    }
   });
 };
 
@@ -2338,30 +2086,6 @@ loadShopEntities = async function () {
     ? { ...state.taxSettings, ...taxSettings }
     : { ...state.taxSettings, state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly" };
 };
-
-function readHelpSnapshot() {
-  const user = currentUser();
-  if (!user) {
-    return {
-      route: pendingAuthProfile ? "pending-profile" : "login",
-      role: "",
-      subview: "",
-      selectionLabel: "",
-    };
-  }
-  const route = String(state.route || "");
-  let subview = "";
-  if (route === "pos") subview = posMode || "reader";
-  else if (route === "accounting") subview = accountingTab || "";
-  else if (route === "shopops") subview = shopOpsTab || "";
-  else if (route === "ai") subview = aiTab || "";
-  let selectionLabel = "";
-  if (route === "pos" && posSelectedId) {
-    const order = state.orders.find((item) => item.id === posSelectedId);
-    if (order) selectionLabel = `${order.id} · ${order.customer || "No customer"} · ${order.vehicle || "No vehicle"}`;
-  }
-  return { route, role: user.role || "", subview, selectionLabel };
-}
 
 const bindDurableRecordsCore = bind;
 bind = function () {
@@ -2417,15 +2141,6 @@ bind = function () {
   document.querySelector('[data-route="employees"]')?.addEventListener("click", async () => {
     await loadEmployeesFromApi();
     if (state.route === "employees") render();
-  });
-  syncHelp(readHelpSnapshot(), {
-    icon,
-    onNavigate: (route) => {
-      if (!canAccess(route)) return;
-      state.route = route;
-      save();
-      render();
-    },
   });
 };
 
@@ -2521,7 +2236,6 @@ estimateEditorLine = function (line = {}, index = 0, removable = true) {
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
-      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
@@ -2535,19 +2249,17 @@ estimateFromEditor = function (root) {
     const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
     const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
     const inventory = type === "part" ? state.inventory.find(item => item.id === row.querySelector(".job-line-inventory").value) : null;
-    const partNumber = type === "part" ? (row.querySelector(".job-line-part-number")?.value || "").trim() : "";
     return normalizeEstimateLine({
       id: row.dataset.lineId || `line-${Date.now()}-${index}`,
       type,
       description: row.querySelector(".job-line-description").value.trim(),
       notes: row.querySelector(".job-line-notes").value.trim(),
-      partNumber,
       quantity,
       unitPrice,
       hours: type === "labor" ? quantity : 0,
       laborRate: type === "labor" ? unitPrice : 0,
       inventoryId: inventory?.id || null,
-      inventorySku: inventory?.sku || partNumber || "",
+      inventorySku: inventory?.sku || "",
       committedQuantity: type === "part" && inventory ? quantity : 0,
       priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
       laborSource: row.dataset.laborSource || "",
@@ -2580,8 +2292,6 @@ refreshEstimateEditor = function (root) {
     const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
     row.dataset.priceStatus = priceStatus;
     row.querySelector(".job-inventory-field").hidden = type !== "part";
-    const partNumberField = row.querySelector(".job-part-number-field");
-    if (partNumberField) partNumberField.hidden = type !== "part";
     row.querySelector(".job-line-quantity-field").hidden = type === "fee";
     row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
     row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
@@ -2654,83 +2364,13 @@ function applyWorkOrderDraftToForm(form, draft) {
   toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
 }
 
-const NEW_ORDER_DRAFT_KEY = "mechpro:new-work-order-draft:v1";
-function readNewOrderDraftFromForm(form) {
-  if (!form) return null;
-  const data = Object.fromEntries(new FormData(form).entries());
-  const estimate = typeof readNewOrderEstimate === "function" ? readNewOrderEstimate() : null;
-  return {
-    ...data,
-    estimateLines: estimate?.lines || [],
-    savedAt: Date.now(),
-  };
-}
-function applyStoredNewOrderDraft(form, draft) {
-  if (!form || !draft) return;
-  for (const [key, value] of Object.entries(draft)) {
-    if (key === "estimateLines" || key === "savedAt") continue;
-    const field = form.elements[key];
-    if (!field || value == null) continue;
-    if (field.type === "checkbox") field.checked = Boolean(value);
-    else field.value = value;
-  }
-  form.elements.customerSelect?.dispatchEvent(new Event("change"));
-  if (draft.customerSelect && draft.customerSelect !== "__new__") {
-    form.elements.customerSelect.value = draft.customerSelect;
-    form.elements.customerSelect.dispatchEvent(new Event("change"));
-  }
-  if (draft.vehicle) form.elements.vehicle.value = draft.vehicle;
-  if (draft.vin) form.elements.vin.value = draft.vin;
-  if (draft.phone) form.elements.phone.value = draft.phone;
-  if (Array.isArray(draft.estimateLines) && draft.estimateLines.length) {
-    const lines = document.querySelector("#new-estimate-lines");
-    if (lines) {
-      lines.innerHTML = draft.estimateLines.map(line => newOrderEstimateRow(line)).join("");
-      bindEstimateEditor(lines);
-      refreshEstimateEditor(lines);
-    }
-  }
-}
-function bindNewOrderDraftAutosave(form) {
-  if (!form) return;
-  let timer = 0;
-  const persist = () => {
-    try { localStorage.setItem(NEW_ORDER_DRAFT_KEY, JSON.stringify(readNewOrderDraftFromForm(form))) } catch { /* private mode */ }
-  };
-  const schedule = () => {
-    clearTimeout(timer);
-    timer = setTimeout(persist, 400);
-  };
-  form.addEventListener("input", schedule);
-  form.addEventListener("change", schedule);
-  setModalAutosave(() => {
-    clearTimeout(timer);
-    persist();
-  });
-  form.addEventListener("submit", () => {
-    try { localStorage.removeItem(NEW_ORDER_DRAFT_KEY) } catch { /* ignore */ }
-    setModalAutosave(null);
-  }, { capture: true });
-}
-
 const openNewEstimateFillCore = openNew;
 function openNewWithDraft(draft = null) {
   openNewEstimateFillCore();
   const form = document.querySelector("#new-form");
   if (!form) return;
   addEstimateSourceControls(form);
-  if (draft) {
-    applyWorkOrderDraftToForm(form, draft);
-  } else {
-    try {
-      const stored = JSON.parse(localStorage.getItem(NEW_ORDER_DRAFT_KEY) || "null");
-      if (stored && Date.now() - Number(stored.savedAt || 0) < 7 * 24 * 60 * 60 * 1000) {
-        applyStoredNewOrderDraft(form, stored);
-        toast("Restored unsaved work order draft");
-      }
-    } catch { /* ignore corrupt draft */ }
-  }
-  bindNewOrderDraftAutosave(form);
+  if (draft) applyWorkOrderDraftToForm(form, draft);
 }
 openNew = function () { openNewWithDraft() };
 
@@ -3008,17 +2648,6 @@ openOrder = function (id) {
   const order = state.orders.find(item => item.id === id);
   const modalBody = document.querySelector(".job-card-modal .modal-body");
   if (!order || !modalBody) return;
-  const user = currentUser();
-  const assigned = user && orderIncludesTechnician(order, user, state.users);
-  const activeClock = user ? openJobClock(order.id, user.id) : null;
-  const clockRows = (order.assignments || []).map(item => {
-    const tracked = item.employeeId ? clockedHours(state.jobClockEntries, order.id, item.employeeId) : Number(item.hoursWorked || 0);
-    return `<li><strong>${escapeHtml(item.name)}</strong> · ${escapeHtml(item.role)} · ${formatHours(tracked || item.hoursWorked)}</li>`;
-  }).join("");
-  const clockButton = user?.role === "technician" && assigned ? `<button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${escapeAttr(order.id)}" type="button">${activeClock ? "Clock out" : "Clock in"}</button>` : "";
-  modalBody.insertAdjacentHTML("afterbegin", `<section class="job-clock-panel"><div><h3>Assigned technicians</h3><ul class="intake-causes">${clockRows || `<li>${escapeHtml(order.tech || "Unassigned")}</li>`}</ul>${clockButton}</div>${["admin", "service_writer"].includes(user?.role) ? `<button class="secondary" type="button" id="edit-assignments">Edit assignments</button>` : ""}</section>`);
-  document.querySelector("#job-clock")?.addEventListener("click", event => { const workOrderId = event.currentTarget.dataset.workOrderId; openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId) });
-  document.querySelector("#edit-assignments")?.addEventListener("click", () => openAssignmentEditor(order));
   const summary = workOrderPaymentSummary(order);
   modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money(summary.total)}</b></div><div><span>Paid</span><b>${money(summary.paid)}</b></div><div><span>Remaining</span><b>${money(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
   document.querySelector("#record-work-order-payment")?.addEventListener("click", () => recordTargetPayment("work_order", order.id));
@@ -3496,7 +3125,6 @@ ${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-ex
 <label>Jump to week<input type="date" id="payroll-jump" value="${period.key}"/></label>
 </div>
 <div class="payroll-summary"><span>Pay period</span><strong>${period.start} – ${period.end}</strong><span>${liabilities.hours.toFixed(2)} labor hours</span><strong>${money(liabilities.net)} net</strong></div>
-${admin ? technicianTrackerHtml(technicianPerformance(state.orders, state.users, state.jobClockEntries)) : ""}
 ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT withheld (2200)</span><strong>${money(liabilities.federal)}</strong></article><article><span>FICA payable (2210)</span><strong>${money(liabilities.ss)}</strong></article><article><span>Medicare payable (2220)</span><strong>${money(liabilities.med)}</strong></article><article><span>Suggested liabilities</span><strong>${money(liabilities.federal + liabilities.ss + liabilities.med)}</strong><small>Do not auto-journal</small></article></div>` : ''}
 <div class="payroll-grid">${stubs.map(payStubMarkup).join('') || empty('No active payroll employees')}</div>`);
 };
@@ -3643,94 +3271,81 @@ function printEmployeeAnnualForm(userId) {
   }
 }
 
-openEmployee = function (existing = null) {
-  const roleOptions = ["technician", "office", "service_writer", "admin"]
-    .map(role => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role] || role}</option>`)
-    .join("");
-  const employmentOptions = ["Hourly", "Salary", "Contractor"]
-    .map(value => `<option ${existing?.employmentType === value ? "selected" : ""}>${value}</option>`)
-    .join("");
-  const payFreqOptions = ["Weekly", "Biweekly", "Monthly"]
-    .map(value => `<option ${(existing?.payFrequency || "Weekly") === value ? "selected" : ""}>${value}</option>`)
-    .join("");
-  const taxStatusOptions = ["W-2", "1099 Contractor"]
-    .map(value => `<option ${(existing?.taxStatus || "W-2") === value ? "selected" : ""}>${value}</option>`)
-    .join("");
-  const filingStatus = existing?.w4FilingStatus || "single";
-  const filingOptions = [
-    ["single", "Single / Married filing separately"],
-    ["married_joint", "Married filing jointly"],
-    ["head_of_household", "Head of household"],
-  ].map(([value, labelText]) => `<option value="${value}" ${filingStatus === value ? "selected" : ""}>${labelText}</option>`).join("");
-  const step2 = Boolean(existing?.w4Step2Checkbox);
-  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">
+const openEmployeeFilingCore = openEmployee;
+openEmployee = function () {
+  showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon('x')}</button></div><div class="modal-body">
 <h3>Identity & access</h3><div class="form-grid">
-<label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label>
-<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required value="${employeeFormValue(existing, "employeeId")}"/></label>
-<label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label>
-<label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label>
-<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label>
-<label>Role<select name="role">${roleOptions}</select></label>
-<label>Classification<select name="classification">${EMPLOYEE_CLASSIFICATIONS.map(item => `<option value="${item.id}" ${classificationFor(existing || { role: "technician" }) === item.id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
-<label class="full">Technician dispatch name <input name="techName" value="${employeeFormValue(existing, "techName")}"/></label>
+<label>Employee name *<input name="name" required/></label>
+<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label>
+<label>Job title<input name="title"/></label>
+<label>Department<input name="department"/></label>
+<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required/></label>
+<label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label>
+<label class="full">Technician dispatch name <input name="techName"/></label>
 </div>
 <h3>Employment & pay</h3><div class="form-grid">
-<label>Employment type<select name="employmentType">${employmentOptions}</select></label>
-<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label>
-<label>Pay plan<select name="payPlan">${PAY_PLANS.map(plan => `<option value="${plan.id}" ${(existing?.payPlan || "hourly") === plan.id ? "selected" : ""}>${plan.label}</option>`).join("")}</select></label>
-<label>Commission %<input name="commissionPercent" type="number" min="0" max="100" step=".01" value="${Number(existing?.commissionPercent || 0)}"/></label>
-<label>Pay frequency<select name="payFrequency">${payFreqOptions}</select></label>
-<label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", filingIsoDate())}"/></label>
-<label>Tax status<select name="taxStatus">${taxStatusOptions}</select></label>
-<label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label>
-<label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label>
-<label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label>
+<label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label>
+<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label>
+<label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label>
+<label>Start date<input name="startDate" type="date" value="${filingIsoDate()}"/></label>
+<label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label>
+<label>Phone<input name="phone" type="tel"/></label>
+<label class="full">Home address<input name="address"/></label>
+<label class="full">Emergency contact<input name="emergencyContact"/></label>
 </div>
 <h3>Form W-4 / withholding (Pub 15-T 2026)</h3><div class="form-grid">
-<label>Filing status<select name="w4FilingStatus">${filingOptions}</select></label>
-<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false" ${step2 ? "" : "selected"}>No</option><option value="true" ${step2 ? "selected" : ""}>Yes — multiple jobs</option></select></label>
-<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="${Number(existing?.w4DependentCredits || 0)}"/></label>
-<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="${Number(existing?.w4OtherIncome || 0)}"/></label>
-<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="${Number(existing?.w4Deductions || 0)}"/></label>
-<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="${Number(existing?.w4ExtraWithholding || 0)}"/></label>
-<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="${Number(existing?.pretaxDeductionPerPeriod || 0)}"/></label>
-<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="${Number(existing?.stateWithholdingRate || 0)}"/><small>TX = 0</small></label>
-<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX" value="${employeeFormValue(existing, "ssn")}"/></label>
+<label>Filing status<select name="w4FilingStatus"><option value="single">Single / Married filing separately</option><option value="married_joint">Married filing jointly</option><option value="head_of_household">Head of household</option></select></label>
+<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false">No</option><option value="true">Yes — multiple jobs</option></select></label>
+<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="0"/></label>
+<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="0"/></label>
+<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="0"/></label>
+<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="0"/></label>
+<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="0"/></label>
+<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="0"/><small>TX = 0</small></label>
+<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX"/></label>
 </div>
-<div class="ledger-note">${icon("info", 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
-</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon(existing ? "save" : "user-plus", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
-  if (!existing) document.querySelector("#employee-email")?.focus({ preventScroll: true });
-  document.querySelector("#employee-form").onsubmit = async event => {
+<div class="ledger-note">${icon('info', 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages — prefer last 4 until you are ready to file.</div>
+</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon('user-plus', 14)} Create profile</button></div></form>`);
+  document.querySelector('#employee-email')?.focus({ preventScroll: true });
+  document.querySelector('#employee-form').onsubmit = async event => {
     event.preventDefault();
     const form = event.target;
     const data = Object.fromEntries(new FormData(form));
-    const email = String(existing?.email || data.workEmail || "").trim().toLowerCase();
-    const button = form.querySelector("button.primary");
-    if (!email || !email.includes("@")) { toast("Enter a valid work email address"); return; }
-    if (!existing && state.users.some(user => String(user.email || "").toLowerCase() === email)) {
-      toast("An employee profile already uses that email");
-      return;
-    }
-    if (state.users.some(user => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) {
-      toast("An employee already uses that employee ID");
-      return;
-    }
-    if (data.role === "technician" && !String(data.techName || "").trim()) {
-      toast("Add the technician dispatch name");
-      return;
-    }
+    const email = String(data.workEmail || '').trim().toLowerCase();
+    const button = form.querySelector('button.primary');
+    if (!email || !email.includes('@')) { toast('Enter a valid work email address'); return; }
+    if (state.users.some(user => String(user.email || '').toLowerCase() === email)) { toast('An employee profile already uses that email'); return; }
+    if (state.users.some(user => user.employeeId === data.employeeId.trim())) { toast('An employee already uses that employee ID'); return; }
+    if (data.role === 'technician' && !String(data.techName || '').trim()) { toast('Add the technician dispatch name'); return; }
+    const record = {
+      id: `user-${Date.now()}`, name: data.name.trim(), email, role: data.role, title: data.title.trim(), techName: data.techName.trim(),
+      active: true, employeeId: data.employeeId.trim(), phone: data.phone.trim(), address: data.address.trim(), startDate: data.startDate,
+      employmentType: data.employmentType, payRate: Number(data.payRate), payFrequency: data.payFrequency, department: data.department.trim(),
+      emergencyContact: data.emergencyContact.trim(), taxStatus: data.taxStatus,
+      w4FilingStatus: data.w4FilingStatus, w4Step2Checkbox: data.w4Step2Checkbox === 'true',
+      w4DependentCredits: Number(data.w4DependentCredits) || 0, w4OtherIncome: Number(data.w4OtherIncome) || 0,
+      w4Deductions: Number(data.w4Deductions) || 0, w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
+      pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
+      stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
+      federalWithholdingRate: 0,
+      ssn: String(data.ssn || '').replace(/\D/g, '').slice(-4),
+    };
     if (button) button.disabled = true;
     try {
-      const saved = await saveEmployeeRecord(existing, data);
+      const saved = await apiFetch('/entities/employees', { method: 'POST', body: JSON.stringify(record) });
+      const value = saved?.queued ? record : saved || record;
+      state.users.push(value);
+      save();
       closeModal();
-      toast(`${saved.name} profile ${existing ? "updated" : "created"}`);
+      toast(`${value.name || data.name} profile created`);
       render();
     } catch (error) {
-      toast(error.message || "Employee could not be saved");
+      toast(error.message || 'Employee could not be saved');
     } finally {
       if (button) button.disabled = false;
     }
   };
+  void openEmployeeFilingCore;
 };
 
 const bindFilingCore = bindExpandedFeatures;
@@ -3748,10 +3363,10 @@ bindExpandedFeatures = function () {
       }
     };
   });
-  const taxReportForm = document.querySelector('#tax-report-form');
-  if (taxReportForm && !taxReportForm.dataset.filingBound) {
-    taxReportForm.dataset.filingBound = '1';
-    taxReportForm.addEventListener('submit', async event => {
+  const taxForm = document.querySelector('#tax-report-form');
+  if (taxForm && !taxForm.dataset.filingBound) {
+    taxForm.dataset.filingBound = '1';
+    taxForm.addEventListener('submit', async event => {
       event.preventDefault();
       event.stopImmediatePropagation();
       const data = Object.fromEntries(new FormData(event.target));
@@ -3804,12 +3419,17 @@ bindExpandedFeatures = function () {
   document.querySelectorAll('[data-print-w2]').forEach(button => {
     button.onclick = () => printEmployeeAnnualForm(button.dataset.printW2);
   });
+};
 
-  const taxSettingsForm = document.querySelector('#tax-settings-form');
-  if (taxSettingsForm && !taxSettingsForm.dataset.filingEnhanced) {
-    taxSettingsForm.dataset.filingEnhanced = '1';
-    const grid = taxSettingsForm.querySelector('.form-grid') || taxSettingsForm;
-    if (!taxSettingsForm.querySelector('[name=ein]')) {
+/* Patch tax settings form fields when settings page renders — extend save handler */
+const bindFilingTaxSettingsCore = bindExpandedFeatures;
+bindExpandedFeatures = function () {
+  bindFilingTaxSettingsCore();
+  const taxForm = document.querySelector('#tax-settings-form');
+  if (taxForm && !taxForm.dataset.filingEnhanced) {
+    taxForm.dataset.filingEnhanced = '1';
+    const grid = taxForm.querySelector('.form-grid') || taxForm;
+    if (!taxForm.querySelector('[name=ein]')) {
       grid.insertAdjacentHTML('beforeend', `
 <label>Federal EIN<input name="ein" value="${escapeHtml(state.taxSettings.ein || '')}" placeholder="XX-XXXXXXX"/></label>
 <label>TX taxpayer number<input name="texasTaxpayerNumber" value="${escapeHtml(state.taxSettings.texasTaxpayerNumber || '')}" placeholder="1-xxxxxxxxxx-x"/></label>
@@ -3817,7 +3437,7 @@ bindExpandedFeatures = function () {
 <label class="full">Local jurisdictions JSON<small>Array of {code,name,kind,rate,required} — city/transit/county/SPD</small>
 <textarea name="jurisdictionsJson" rows="4">${escapeHtml(JSON.stringify(state.taxSettings.jurisdictions || Filing.DEFAULT_TX_JURISDICTIONS, null, 0))}</textarea></label>`);
     }
-    taxSettingsForm.addEventListener('submit', async event => {
+    taxForm.addEventListener('submit', async event => {
       event.preventDefault();
       event.stopImmediatePropagation();
       const data = Object.fromEntries(new FormData(event.target));
@@ -3917,7 +3537,7 @@ render = function () {
   if (currentUser() && (state.route === "obd" || state.route === "keys")) {
     const root = document.querySelector("#root");
     const markup = state.route === "obd" ? obdBay() : keyProgrammingBay();
-    root.innerHTML = DOMPurify.sanitize(markup, { USE_PROFILES: { html: true } });
+    root.innerHTML = safeHtml(markup);
     lucide.createIcons();
     bind();
     bindExpandedFeatures();
@@ -3927,5 +3547,49 @@ render = function () {
   }
   renderShopOsCore();
 };
+
+// --- Shop AI provider settings (optional bring-your-own Anthropic key) ---
+let shopAiSettings = { loaded: false, loading: false };
+function canManageShopAi() { return ["admin", "owner"].includes(currentUser()?.role || "") }
+async function loadShopAiSettings(force = false) {
+  if (shopAiSettings.loading || (shopAiSettings.loaded && !force)) return;
+  shopAiSettings = { ...shopAiSettings, loading: true };
+  try { shopAiSettings = { ...(await apiFetch("/settings/ai")), loaded: true, loading: false } }
+  catch { shopAiSettings = { hasKey: false, loaded: true, loading: false, unavailable: true } }
+  if (state.route === "settings") render();
+}
+const settingsShopAiCore = settings;
+settings = function () { const page = settingsShopAiCore(); if (isOfflineDesktop()) return page; return page.replace("</main>", `${shopAiPanelHtml(shopAiSettings, { canManage: canManageShopAi(), escapeHtml, icon })}</main>`) };
+const bindShopAiCore = bind;
+bind = function () {
+  bindShopAiCore();
+  if (state.route !== "settings" || !currentUser() || isOfflineDesktop()) return;
+  if (!shopAiSettings.loaded) void loadShopAiSettings();
+  document.querySelector("#shop-ai-key-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.target, button = form.querySelector("button[type=submit]"), apiKey = String(new FormData(form).get("apiKey") || "").trim();
+    if (!apiKey) return;
+    button.disabled = true; button.textContent = "Checking key...";
+    try {
+      const result = await apiFetch("/settings/ai", { method: "PUT", body: JSON.stringify({ apiKey }) });
+      form.reset();
+      shopAiSettings = { ...result, loaded: true, loading: false };
+      toast(result.warning ? `Claude key saved. ${result.warning}` : "Claude key saved. MechPro AI now uses Claude for this shop.");
+      render();
+    } catch (error) { button.disabled = false; button.textContent = shopAiSettings.hasKey ? "Replace key" : "Save key"; toast(error.message || "Could not save the Anthropic key") }
+  });
+  document.querySelector("#shop-ai-remove-key")?.addEventListener("click", async event => {
+    if (!confirm("Remove this shop's Anthropic key? MechPro AI will go back to Cloudflare AI (included).")) return;
+    event.currentTarget.disabled = true;
+    try {
+      const result = await apiFetch("/settings/ai", { method: "DELETE" });
+      shopAiSettings = { ...result, loaded: true, loading: false };
+      toast("Anthropic key removed. Using Cloudflare AI (included).");
+      render();
+    } catch (error) { toast(error.message || "Could not remove the Anthropic key"); render() }
+  });
+};
+const apiFetchShopAiNoticeCore = apiFetch;
+apiFetch = async function (path, options = {}) { const result = await apiFetchShopAiNoticeCore(path, options); if (String(path).startsWith("/ai/assistant") && result?.notice) { toast(result.notice); shopAiSettings = { ...shopAiSettings, loaded: false } } return result };
 
 void startApp();

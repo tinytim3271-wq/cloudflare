@@ -1,7 +1,7 @@
 import {
-  calculateTextCost,
   recordAiUsage,
   runAnthropicTurn,
+  usageCostsForResult,
 } from './ai.mjs';
 import { HttpError, json, requestJson } from './http.mjs';
 
@@ -14,6 +14,18 @@ export class AiChatSession {
   }
 
   async fetch(request) {
+    try {
+      return await this.handleTurn(request);
+    } catch (error) {
+      // Errors thrown inside a Durable Object lose their HttpError status at the
+      // stub boundary, so return them as JSON the Worker can pass through.
+      if (error instanceof HttpError) return json({ message: error.message }, error.status);
+      console.error(JSON.stringify({ message: 'AI chat session failed', error: String(error?.message || error).slice(0, 300) }));
+      return json({ message: 'The MechPro assistant is unavailable' }, 500);
+    }
+  }
+
+  async handleTurn(request) {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
     const shopId = request.headers.get('X-MechPro-Shop-Id');
     const userId = request.headers.get('X-MechPro-User-Id');
@@ -38,17 +50,23 @@ export class AiChatSession {
       requestedModel: body.model,
       autoEscalate: body.autoEscalate === true,
     });
-    const costs = calculateTextCost(this.env, result.family, result.inputTokens, result.outputTokens);
+    const costs = usageCostsForResult(this.env, result);
     await recordAiUsage(this.env, {
       shopId,
       userId,
       channel: 'text',
-      provider: 'anthropic',
+      provider: result.provider || 'anthropic',
       model: result.model,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       ...costs,
-      metadata: { routingReason: result.routingReason, sessionId, source: 'assistant' },
+      metadata: {
+        routingReason: result.routingReason,
+        sessionId,
+        source: 'assistant',
+        keySource: result.keySource || null,
+        ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom, failureKind: result.failureKind } : {}),
+      },
     });
     const nextHistory = [
       ...history,
@@ -65,6 +83,9 @@ export class AiChatSession {
       routingReason: result.routingReason,
       sessionId,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+      provider: result.provider,
+      keySource: result.keySource || null,
+      ...(result.notice ? { notice: result.notice } : {}),
     });
   }
 }

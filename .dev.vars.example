@@ -8,10 +8,16 @@ DIAGNOSTICS_CAPABILITY_SECRET=replace-with-a-different-random-value
 # Base64 DER PKCS#8 ECDSA P-256 private key for /api/diagnostics/authorize
 DIAGNOSTICS_SIGNING_PRIVATE_KEY=replace-with-base64-pkcs8-p256-private-key
 
-# Conversational AI (keep AI_ENABLED=0 until both provider secrets are set).
-AI_ENABLED=0
-ANTHROPIC_API_KEY=replace-with-your-anthropic-api-key
-DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
+# Conversational AI. With no ANTHROPIC_API_KEY the text assistant uses the
+# Workers AI binding from wrangler.jsonc (wrangler dev runs it against your
+# Cloudflare account). Set AI_ENABLED=0 to turn the assistant off locally.
+AI_ENABLED=1
+# Shops can add their own Anthropic key in Shop settings > AI (encrypted with
+# INTEGRATION_ENCRYPTION_KEY). ANTHROPIC_API_KEY is only an optional platform-wide
+# override that makes MechPro pay for Claude for every shop without its own key.
+# ANTHROPIC_API_KEY=replace-with-your-anthropic-api-key
+# SHOP_ANTHROPIC_MODEL=claude-sonnet-5
+# DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 
 # Configure current contracted provider rates before enabling pass-through billing.
 # ANTHROPIC_SONNET_INPUT_USD_PER_MTOK=
@@ -36,3 +42,21 @@ DEEPGRAM_API_KEY=replace-with-your-deepgram-api-key
 # http://127.0.0.1:8787/api/auth/google/callback
 # GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 # GOOGLE_CLIENT_SECRET=replace-with-your-google-client-secret
+
+# PartsTech / MOTOR labor (per-shop credentials are stored encrypted in D1;
+# these optional overrides are only for local stubbing of the API base URL).
+# PARTSTECH_API_BASE=https://api.partstech.com
+
+# QuickBooks Online OAuth app (Intuit Developer). Per-shop tokens are encrypted in D1.
+# Register redirect: https://www.yourcarguy806.com/api/integrations/quickbooks/callback
+# (local: http://127.0.0.1:8787/api/integrations/quickbooks/callback — the SPA posts code/state/realmId)
+# QUICKBOOKS_CLIENT_ID=replace-with-intuit-client-id
+# QUICKBOOKS_CLIENT_SECRET=replace-with-intuit-client-secret
+# QUICKBOOKS_REDIRECT_URI=http://127.0.0.1:8787/qbo/callback
+# QUICKBOOKS_SANDBOX=1
+
+# Labor web fallback (used only when no MOTOR/ALLDATA/ShopKey provider is connected).
+# Brave Search: https://brave.com/search/api/ — results are labeled "web estimate — not book time".
+# LABOR_WEB_SEARCH_PROVIDER=brave
+# LABOR_WEB_SEARCH_API_KEY=replace-with-brave-search-api-key
+# (alias also accepted: BRAVE_SEARCH_API_KEY)
