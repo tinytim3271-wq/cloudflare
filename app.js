@@ -3692,6 +3692,7 @@ button{margin-top:12px;padding:8px 14px}
       button.disabled = true;
       try {
         const result = await apiFetch("/support", { method: "POST", body: JSON.stringify(data) });
+        if (result?.queued) throw new Error("Support tickets require a live connection.");
         toast(`Support ticket ${result.id} submitted`);
         event.target.reset();
       } catch (error) {
@@ -3817,6 +3818,7 @@ button{margin-top:12px;padding:8px 14px}
         await apiFetch("/messaging/send", { method: "POST", body: JSON.stringify({ to, body, customerId: metadata?.customerId, workOrderId: metadata?.workOrderId, messageType: metadata?.type || "message" }) });
         return { mode: "mechpro_sms" };
       } catch (error) {
+        if (error.retryable === false) throw error;
         toast(error.message || "Built-in SMS was unavailable. Opening the device app instead.");
       }
     }
@@ -7202,7 +7204,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (options) root._estimateOptions = options;
     const bindRows = () => {
       root.querySelectorAll("input,textarea,select").forEach((control) => control.oninput = () => refreshEstimateEditor(root));
-      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => refreshEstimateEditor(root));
+      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => {
+        const row = control.closest(".job-estimate-line"), labor = control.value === "labor";
+        row.querySelector(".lookup-labor-time").hidden = !labor;
+        row.querySelector(".labor-source").hidden = !labor;
+        refreshEstimateEditor(root);
+      });
       root.querySelectorAll(".job-line-inventory").forEach((control) => control.onchange = () => {
         const row = control.closest(".job-estimate-line"), item = state.inventory.find((entry) => entry.id === control.value);
         if (item) {
@@ -7215,6 +7222,33 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       root.querySelectorAll(".remove-job-line").forEach((button) => button.onclick = () => {
         button.closest(".job-estimate-line").remove();
         refreshEstimateEditor(root);
+      });
+      root.querySelectorAll(".lookup-labor-time").forEach((button) => button.onclick = async () => {
+        const row = button.closest(".job-estimate-line"), form = root.closest("form");
+        const query2 = row.querySelector(".job-line-description").value.trim();
+        button.disabled = true;
+        try {
+          const result = await apiFetch("/labor-times/search", {
+            method: "POST",
+            body: JSON.stringify({
+              vin: form?.elements.vin?.value || "",
+              query: query2,
+              model: form?.elements.vehicle?.value?.trim() || ""
+            })
+          });
+          const labor = (result.results || [])[0];
+          if (!labor) throw new Error("No labor operation returned");
+          if (labor.hours != null) row.querySelector(".job-line-quantity").value = labor.hours;
+          row.dataset.laborSource = labor.source || "Unverified shop estimate";
+          row.dataset.laborVerified = labor.verified ? "1" : "0";
+          row.querySelector(".labor-source").innerHTML = `<span class="badge ${labor.verified ? "paid" : "estimate"}">${labor.verified ? "Verified" : "Unverified"}</span> ${escapeHtml(row.dataset.laborSource)}`;
+          refreshEstimateEditor(root);
+          toast(labor.verified ? `Verified ${labor.provider} labor time applied` : "No licensed result; keeping the shop estimate unverified");
+        } catch (error) {
+          toast(error.message);
+        } finally {
+          button.disabled = false;
+        }
       });
     };
     root._bindEstimateRows = bindRows;
@@ -9228,8 +9262,9 @@ ${catRows}
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
         const item = normalizeEstimateLine(line, index), part = item.type === "part";
-        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-labor-verified="${item.laborVerified ? "1" : "0"}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+        const laborSource = item.laborSource || "Unverified shop estimate";
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(laborSource)}" data-labor-verified="${item.laborVerified ? "1" : "0"}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong><div><button class="mini-action lookup-labor-time" type="button" ${part ? "hidden" : ""}>${icon("badge-check", 13)} Labor guide</button>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div></div>
     <div class="form-grid">
       <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
@@ -9238,6 +9273,7 @@ ${catRows}
       <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
     </div>
+    <small class="labor-source" ${part ? "hidden" : ""}><span class="badge ${item.laborVerified ? "paid" : "estimate"}">${item.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(laborSource)}</small>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money3(item.total)}</b></div>
   </article>`;
       };
@@ -9433,7 +9469,7 @@ ${catRows}
         const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const summary = invoicePaymentSummary(invoice);
           const bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${escapeAttr(invoice.number)}">${icon("message-square", 13)} Text to pay</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Closeout</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="8">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };

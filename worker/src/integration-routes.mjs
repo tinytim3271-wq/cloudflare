@@ -211,11 +211,12 @@ function dateOnly(value) {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString().slice(0, 10) : parsed.toISOString().slice(0, 10);
 }
 
-async function qboRemoteId(env, shopId, entityType, localId) {
+async function qboRemoteId(env, shopId, entityType, localId, realmId) {
+  if (!realmId) return '';
   const row = await env.DB.prepare(`
     SELECT remote_id FROM integration_sync_records
-    WHERE shop_id = ? AND provider = 'quickbooks' AND entity_type = ? AND local_id = ?
-  `).bind(shopId, entityType, localId).first();
+    WHERE shop_id = ? AND provider = 'quickbooks' AND entity_type = ? AND local_id = ? AND realm_id = ?
+  `).bind(shopId, entityType, localId, realmId).first();
   return row?.remote_id || '';
 }
 
@@ -317,6 +318,12 @@ export async function handleQuickBooks(request, env, context, segments, dependen
       const collection = `${entityType}s`;
       const record = await dependencies.getEntity(env, context.shopId, collection, entityId);
       if (!record) throw new HttpError(404, `${entityType} not found`);
+      const rawTokens = await dependencies.getSecret(env, context.shopId, qboTokenName());
+      let realmId = '';
+      try { realmId = JSON.parse(rawTokens)?.realmId || ''; } catch {}
+      if (await qboRemoteId(env, context.shopId, entityType, entityId, realmId)) {
+        throw new HttpError(409, 'This record is already synced to QuickBooks');
+      }
       const payload = { ...record, ...(body.overrides || {}) };
       let result;
       if (entityType === 'customer') {
@@ -332,7 +339,7 @@ export async function handleQuickBooks(request, env, context, segments, dependen
           customerId = customer?.id || '';
         }
         let quickBooksCustomerId = customerId
-          ? await qboRemoteId(env, context.shopId, 'customer', customerId)
+          ? await qboRemoteId(env, context.shopId, 'customer', customerId, realmId)
           : '';
         if (!quickBooksCustomerId && customer) {
           quickBooksCustomerId = (await qbo.syncCustomer(customer)).syncMetadata.quickBooksId;
@@ -342,8 +349,12 @@ export async function handleQuickBooks(request, env, context, segments, dependen
         }
         if (entityType === 'invoice') {
           const amount = Number(payload.subtotal ?? payload.amount ?? 0);
+          const defaultItemId = env.INTUIT_DEFAULT_ITEM_ID || '';
           const lines = Array.isArray(payload.lines) && payload.lines.length
-            ? payload.lines
+            ? payload.lines.map(line => ({
+                ...line,
+                quickBooksItemId: line.quickBooksItemId || defaultItemId || undefined,
+              }))
             : [{
                 description: `MechPro invoice ${payload.number || entityId}`,
                 quantity: 1,
@@ -363,7 +374,7 @@ export async function handleQuickBooks(request, env, context, segments, dependen
         } else {
           const invoiceId = String(payload.invoiceId || payload.invoiceNumber || '').trim();
           const quickBooksInvoiceId = invoiceId
-            ? await qboRemoteId(env, context.shopId, 'invoice', invoiceId)
+            ? await qboRemoteId(env, context.shopId, 'invoice', invoiceId, realmId)
             : '';
           result = await qbo.syncPayment({
             ...payload,

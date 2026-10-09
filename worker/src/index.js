@@ -32,6 +32,7 @@ import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import {
   LIVE_DIAGNOSTICS_PLANS,
   claimDecision,
+  hasPlanCapability,
   isFoundingPlan,
   isPublicPlan,
   planCapabilities,
@@ -391,12 +392,7 @@ async function requirePlanCapability(context, env, capability) {
   const subscription = await env.DB.prepare(
     'SELECT plan_id, status, current_period_end FROM subscriptions WHERE shop_id = ? LIMIT 1',
   ).bind(context.shopId).first();
-  const planId = String(subscription?.plan_id || '');
-  const periodEnd = subscription?.current_period_end ? Date.parse(subscription.current_period_end) : null;
-  const unexpired = periodEnd === null || (Number.isFinite(periodEnd) && periodEnd > Date.now());
-  const entitled = ['active', 'trialing'].includes(String(subscription?.status || ''))
-    && unexpired && planCapabilities(planId).includes(capability);
-  if (!entitled) {
+  if (!hasPlanCapability(subscription, capability)) {
     throw new HttpError(403, `${capability.replaceAll('_', ' ')} requires an active MechPro plan`);
   }
 }
@@ -2138,7 +2134,11 @@ async function handleBilling(request, env, context, segments) {
         });
         const customerResponse = await fetch('https://api.stripe.com/v1/customers', {
           method: 'POST',
-          headers: { Authorization: `Basic ${btoa(`${stripeKey}:`)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: {
+            Authorization: `Basic ${btoa(`${stripeKey}:`)}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Idempotency-Key': `billing-customer-${context.shopId}`,
+          },
           body: customerParams,
         });
         const created = await customerResponse.json().catch(() => ({}));
@@ -2250,14 +2250,11 @@ async function handleBilling(request, env, context, segments) {
       shopId = customer?.shop_id || '';
     }
     if (shopId) {
-      const duplicate = await env.DB.prepare(`
-        INSERT OR IGNORE INTO billing_events (id, shop_id, event_type, event_json, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).bind(
-        String(event.id || crypto.randomUUID()), shopId, String(event.type || 'unknown'),
-        JSON.stringify(event), new Date().toISOString(),
-      ).run();
-      if (!Number(duplicate.meta?.changes || 0)) return json({ received: true, duplicate: true }, 200);
+      const eventId = String(event.id || crypto.randomUUID());
+      const duplicate = await env.DB.prepare(
+        'SELECT id FROM billing_events WHERE id = ?',
+      ).bind(eventId).first();
+      if (duplicate) return json({ received: true, duplicate: true }, 200);
 
       if (customerId) {
         await env.DB.prepare(`
@@ -2271,7 +2268,7 @@ async function handleBilling(request, env, context, segments) {
       const paymentFailed = event.type === 'invoice.payment_failed';
       if (subscriptionEvent || checkoutEvent || paymentFailed) {
         const existing = await env.DB.prepare(
-          'SELECT plan_id, stripe_subscription_id FROM subscriptions WHERE shop_id = ?',
+          'SELECT plan_id, stripe_subscription_id, current_period_end, current_period_start FROM subscriptions WHERE shop_id = ?',
         ).bind(shopId).first();
         const planId = String(object.metadata?.planId || existing?.plan_id || 'shop');
         const rawStatus = paymentFailed ? 'past_due'
@@ -2283,11 +2280,20 @@ async function handleBilling(request, env, context, segments) {
             ? rawStatus : 'inactive';
         const periodEndSeconds = Number(object.current_period_end || 0);
         const periodStartSeconds = Number(object.current_period_start || 0);
-        const periodEnd = periodEndSeconds > 0 ? new Date(periodEndSeconds * 1000).toISOString() : null;
-        const periodStart = periodStartSeconds > 0 ? new Date(periodStartSeconds * 1000).toISOString() : null;
-        const subscriptionId = checkoutEvent
-          ? String(object.subscription || existing?.stripe_subscription_id || '')
-          : String(object.id || existing?.stripe_subscription_id || '');
+        const periodEnd = paymentFailed
+          ? existing?.current_period_end || null
+          : periodEndSeconds > 0 ? new Date(periodEndSeconds * 1000).toISOString() : null;
+        const periodStart = paymentFailed
+          ? existing?.current_period_start || null
+          : periodStartSeconds > 0 ? new Date(periodStartSeconds * 1000).toISOString() : null;
+        const invoiceSubscription = typeof object.subscription === 'string'
+          ? object.subscription
+          : object.subscription?.id;
+        const subscriptionId = paymentFailed
+          ? String(invoiceSubscription || existing?.stripe_subscription_id || '')
+          : checkoutEvent
+            ? String(object.subscription || existing?.stripe_subscription_id || '')
+            : String(object.id || existing?.stripe_subscription_id || '');
         const nowIso = new Date().toISOString();
         await env.DB.prepare(
           'UPDATE accounts SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE shop_id = ?',
@@ -2309,12 +2315,27 @@ async function handleBilling(request, env, context, segments) {
         `).bind(
           shopId, subscriptionId || null, planId, status, periodEnd, periodStart, nowIso, nowIso,
         ).run();
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO billing_events (id, shop_id, event_type, event_json, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          eventId, shopId, String(event.type || 'unknown'),
+          JSON.stringify(event), new Date().toISOString(),
+        ).run();
         capturePostHogEvent(env, { shopId, userId: `billing-webhook:${shopId}` }, 'subscription_status_changed', {
           plan_id: planId,
           subscription_status: status,
           provider: 'stripe',
           $process_person_profile: false,
         });
+      } else {
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO billing_events (id, shop_id, event_type, event_json, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          eventId, shopId, String(event.type || 'unknown'),
+          JSON.stringify(event), new Date().toISOString(),
+        ).run();
       }
     }
     return json({ received: true, type: event.type || 'unknown', mode: 'processed' }, 202);

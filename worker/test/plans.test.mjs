@@ -7,6 +7,7 @@ import {
   PUBLIC_PLANS,
   claimDecision,
   dollars,
+  hasPlanCapability,
   isPlaceholderPrice,
   planCapabilities,
   stripePriceForPlan,
@@ -58,6 +59,14 @@ test('plan capabilities gate paid integrations', () => {
   assert.deepEqual(planCapabilities('shop').includes('sms'), true);
   assert.deepEqual(planCapabilities('shop_pro').includes('live_diagnostics'), true);
   assert.deepEqual(planCapabilities('unknown'), []);
+});
+
+test('expired and invalid subscription periods do not grant plan capabilities', () => {
+  const now = Date.parse('2026-10-09T00:00:00.000Z');
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'trialing', current_period_end: '2026-10-08T00:00:00.000Z' }, 'sms', now), false);
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'trialing', current_period_end: 'invalid' }, 'sms', now), false);
+  assert.equal(hasPlanCapability({ plan_id: 'shop', status: 'active', current_period_end: '2026-10-10T00:00:00.000Z' }, 'sms', now), true);
+  assert.equal(hasPlanCapability({ plan_id: 'solo', status: 'active' }, 'sms', now), false);
 });
 
 test('a founding claim fails closed when the invite is missing, used, or the cap is full', () => {

@@ -146,6 +146,15 @@ export function planCapabilities(planId) {
   return [...(PLAN_CAPABILITIES[planId] || [])];
 }
 
+export function hasPlanCapability(subscription, capability, now = Date.now()) {
+  const periodEnd = subscription?.current_period_end
+    ? Date.parse(subscription.current_period_end)
+    : null;
+  return ['active', 'trialing'].includes(String(subscription?.status || ''))
+    && (periodEnd === null || (Number.isFinite(periodEnd) && periodEnd > now))
+    && planCapabilities(subscription?.plan_id).includes(capability);
+}
+
 export function claimDecision({ invite, counter, planId }) {
   if (!isFoundingPlan(planId)) return { ok: false, status: 400, message: 'Choose a Founding Member plan.' };
   if (!invite) return { ok: false, status: 404, message: 'This invite link is not valid.' };

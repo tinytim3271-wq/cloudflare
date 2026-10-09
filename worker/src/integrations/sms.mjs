@@ -216,9 +216,15 @@ export async function parseTwilioInboundWebhook(request, env) {
     });
   }
   const parameters = new URLSearchParams(await request.text());
-  const publicUrl = value(env, 'TWILIO_WEBHOOK_URL') || request.url;
+  const publicUrl = new URL(request.url);
   try {
-    new URL(publicUrl);
+    const configuredUrl = value(env, 'TWILIO_WEBHOOK_URL');
+    if (configuredUrl) {
+      const configured = new URL(configuredUrl);
+      publicUrl.protocol = configured.protocol;
+      publicUrl.hostname = configured.hostname;
+      publicUrl.port = configured.port;
+    }
   } catch {
     throw new SmsIntegrationError('TWILIO_WEBHOOK_URL is invalid', {
       code: 'sms_not_configured',
@@ -227,7 +233,7 @@ export async function parseTwilioInboundWebhook(request, env) {
   }
   const valid = await verifyTwilioWebhookSignature({
     authToken,
-    url: publicUrl,
+    url: publicUrl.toString(),
     parameters,
     signature: request.headers.get('X-Twilio-Signature'),
   });

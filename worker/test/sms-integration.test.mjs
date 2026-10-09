@@ -102,8 +102,9 @@ test('unconfigured SMS is hidden and cannot create or use a provider', async () 
   });
 });
 
-test('inbound webhook verifies the configured public URL and normalizes fields', async () => {
-  const publicUrl = 'https://app.example.com/api/integrations/twilio/sms';
+test('inbound webhook binds signatures to the configured origin and requested tenant path', async () => {
+  const publicUrl = 'https://app.example.com/api/messaging/twilio/webhook/shop-1';
+  const workerUrl = 'https://worker.internal.example/api/messaging/twilio/webhook/shop-1';
   const parameters = new URLSearchParams({
     From: '+18065550123',
     To: '+18065550999',
@@ -111,7 +112,7 @@ test('inbound webhook verifies the configured public URL and normalizes fields',
     MessageSid: 'SM-inbound-1',
   });
   const signature = await twilioSignature(ENV.TWILIO_AUTH_TOKEN, publicUrl, parameters);
-  const request = new Request('https://worker.internal.example/sms', {
+  const request = new Request(workerUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -122,7 +123,7 @@ test('inbound webhook verifies the configured public URL and normalizes fields',
 
   assert.deepEqual(await parseTwilioInboundWebhook(request, {
     ...ENV,
-    TWILIO_WEBHOOK_URL: publicUrl,
+    TWILIO_WEBHOOK_URL: 'https://app.example.com',
   }), {
     provider: 'twilio',
     from: '+18065550123',
@@ -131,6 +132,21 @@ test('inbound webhook verifies the configured public URL and normalizes fields',
     messageSid: 'SM-inbound-1',
     classification: 'opt_out',
   });
+
+  const otherTenantRequest = new Request('https://worker.internal.example/api/messaging/twilio/webhook/shop-2', {
+    method: 'POST',
+    headers: { 'X-Twilio-Signature': signature },
+    body: parameters,
+  });
+  await assert.rejects(
+    parseTwilioInboundWebhook(otherTenantRequest, {
+      ...ENV,
+      TWILIO_WEBHOOK_URL: 'https://app.example.com',
+    }),
+    error => error instanceof SmsIntegrationError
+      && error.code === 'invalid_webhook_signature'
+      && error.status === 401,
+  );
 });
 
 test('inbound webhook rejects an invalid Twilio signature', async () => {
