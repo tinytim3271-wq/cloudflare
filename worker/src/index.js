@@ -55,7 +55,6 @@ import { handleShopAiSettings } from './shop-ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
-import { recordPayment as recordPaymentToTarget } from './payments.mjs';
 import {
   handleIntegrationStatus,
   handleLaborIntegration,

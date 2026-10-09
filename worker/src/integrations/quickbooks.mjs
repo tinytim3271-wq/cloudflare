@@ -548,7 +548,6 @@ import { HttpError, json, requestJson } from '../http.mjs';
 const ADMIN_ROLES = ['owner', 'admin', 'super_admin'];
 const USE_ROLES = ['owner', 'admin', 'service_writer', 'office'];
 const AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
-const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
 const SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
 
