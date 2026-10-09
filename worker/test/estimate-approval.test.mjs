@@ -303,10 +303,13 @@ test('the D1 approval write guard allows only one concurrent approval to commit'
                   created_at: '2026-10-07T19:00:00.000Z',
                   created_by: 'staff-1',
                   updated_at: '2026-10-07T19:00:00.000Z',
+                  lines_locked_at: locked ? '2026-10-07T19:01:00.000Z' : null,
+                  approval_status: locked ? 'approved' : null,
                 };
               },
               async run() {
                 assert.match(sql, /json_extract\(data_json, '\$\.estimateApproval\.status'\)/);
+                assert.match(sql, /updated_at = \?/);
                 if (locked) return { meta: { changes: 0 } };
                 locked = true;
                 return { meta: { changes: 1 } };
@@ -325,4 +328,54 @@ test('the D1 approval write guard allows only one concurrent approval to commit'
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1);
   const rejection = outcomes.find(outcome => outcome.status === 'rejected');
   assert.equal(rejection.reason.status, 409);
+});
+
+test('approval write CAS rejects when a concurrent staff edit advanced updated_at', async () => {
+  const statements = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...args) {
+            return {
+              async first() {
+                if (/lines_locked_at|approval_status/i.test(sql)) {
+                  return {
+                    updated_at: '2026-10-07T19:05:00.000Z',
+                    lines_locked_at: null,
+                    approval_status: null,
+                  };
+                }
+                return {
+                  created_at: '2026-10-07T19:00:00.000Z',
+                  created_by: 'staff-1',
+                  updated_at: '2026-10-07T19:00:00.000Z',
+                };
+              },
+              async run() {
+                statements.push({ sql, args });
+                return { meta: { changes: 0 } };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  await assert.rejects(
+    () => putEntity(
+      env,
+      context,
+      'orders',
+      'RO-1200',
+      otherApproval('Phone'),
+      '2026-10-07T19:00:00.000Z',
+      context.userId,
+      { requireUnlockedEstimate: true },
+    ),
+    error => error.status === 409 && /updated elsewhere/i.test(error.message),
+  );
+  assert.equal(statements.length, 1);
+  assert.match(statements[0].sql, /AND updated_at = \?/);
+  assert.equal(statements[0].args.at(-1), '2026-10-07T19:00:00.000Z');
 });
