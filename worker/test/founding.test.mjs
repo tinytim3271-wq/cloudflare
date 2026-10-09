@@ -225,6 +225,32 @@ test('applyPendingFoundingClaim is a no-op when the optional founding schema is 
   assert.doesNotMatch(warnings.mock.calls[0].arguments[0], /owner@shop\.test/);
 });
 
+test('applyPendingFoundingClaim is a no-op when founding invites have no plan column', async (t) => {
+  const warnings = t.mock.method(console, 'warn', () => {});
+  const DB = {
+    prepare(sql) {
+      assert.match(sql, /FROM founding_invites/i);
+      return {
+        bind() {
+          return {
+            async first() {
+              throw new Error('D1_ERROR: no such column: plan_id: SQLITE_ERROR');
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const result = await applyPendingFoundingClaim({ DB }, {
+    email: 'owner@shop.test',
+    shopId: 'shop-abc',
+  });
+
+  assert.equal(result, null);
+  assert.equal(warnings.mock.callCount(), 1);
+});
+
 test('applyPendingFoundingClaim does not hide unrelated database failures', async () => {
   const DB = {
     prepare() {

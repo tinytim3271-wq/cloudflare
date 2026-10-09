@@ -114,17 +114,16 @@ export function normalizePaymentInput(body) {
   };
 }
 
-export async function recordPayment(env, context, body, { paymentId = crypto.randomUUID() } = {}) {
-  const input = normalizePaymentInput(body);
-  const entityType = input.targetType === "invoice" ? "invoices" : "orders";
-  const target = await entityRow(env, context.shopId, entityType, input.targetId);
-  if (!target) throw new HttpError(404, input.targetType === "invoice" ? "Invoice not found" : "Work order not found");
-  if (await entityRow(env, context.shopId, "payments", paymentId)) {
-    throw new HttpError(409, "Payment already recorded");
+export async function chargeTargetSnapshot(env, context, targetType, targetId) {
+  if (!["invoice", "work_order"].includes(targetType)) {
+    throw new HttpError(400, "targetType must be invoice or work_order");
   }
-
-  let invoice = input.targetType === "invoice" ? target : await linkedInvoiceRow(env, context.shopId, input.targetId);
-  let order = input.targetType === "work_order"
+  if (!String(targetId || "").trim()) throw new HttpError(400, "targetId is required");
+  const entityType = targetType === "invoice" ? "invoices" : "orders";
+  const target = await entityRow(env, context.shopId, entityType, targetId);
+  if (!target) throw new HttpError(404, targetType === "invoice" ? "Invoice not found" : "Work order not found");
+  const invoice = targetType === "invoice" ? target : await linkedInvoiceRow(env, context.shopId, targetId);
+  const order = targetType === "work_order"
     ? target
     : target.record.ro
       ? await entityRow(env, context.shopId, "orders", target.record.ro)
@@ -133,16 +132,36 @@ export async function recordPayment(env, context, body, { paymentId = crypto.ran
   const workOrderId = order?.record.id || invoice?.record.ro || "";
   const total = Number(invoice?.record.amount ?? order?.record.total ?? target.record.amount ?? target.record.total);
   if (!Number.isFinite(total) || total < 0) throw new HttpError(409, "The payment target has no valid total");
-
   const priorPayments = await completedPayments(env, context.shopId, invoiceNumber, workOrderId);
   const priorRecorded = roundMoney(priorPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-  const legacyPaid = input.targetType === "invoice"
+  const legacyPaid = targetType === "invoice"
     && target.record.status === "paid"
     && priorRecorded === 0
     && target.record.paymentStatus == null;
-  const before = paymentStatus(total, legacyPaid ? total : priorRecorded);
+  return {
+    target,
+    invoice,
+    order,
+    invoiceNumber,
+    workOrderId,
+    customer: target.record.customer || invoice?.record.customer || order?.record.customer || "",
+    vehicle: order?.record.vehicle || target.record.vehicle || "",
+    before: paymentStatus(total, legacyPaid ? total : priorRecorded),
+  };
+}
+
+export async function recordPayment(env, context, body, { paymentId = crypto.randomUUID() } = {}) {
+  const input = normalizePaymentInput(body);
+  if (await entityRow(env, context.shopId, "payments", paymentId)) {
+    throw new HttpError(409, "Payment already recorded");
+  }
+  const snapshot = await chargeTargetSnapshot(env, context, input.targetType, input.targetId);
+  const { target } = snapshot;
+  let { invoice, order } = snapshot;
+  const { invoiceNumber, workOrderId } = snapshot;
+  const before = snapshot.before;
   if (input.amount > before.balance) throw new HttpError(409, "Payment amount exceeds the remaining balance");
-  const summary = paymentStatus(total, before.paid + input.amount);
+  const summary = paymentStatus(before.total, before.paid + input.amount);
   const now = new Date().toISOString();
   const payment = {
     targetType: input.targetType,

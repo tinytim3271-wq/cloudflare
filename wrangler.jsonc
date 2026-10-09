@@ -7,8 +7,13 @@
   // The Worker serves /api/* and proxies the shop app from Pages.
   "workers_dev": false,
   "vars": {
-    // Conversational AI remains disabled until provider secrets and billing rates are configured.
-    "AI_ENABLED": "0",
+    // Conversational AI: a shop's own Anthropic key (Shop settings > AI) answers first,
+    // then the optional platform ANTHROPIC_API_KEY secret, otherwise the included
+    // Workers AI binding below.
+    "AI_ENABLED": "1",
+    "WORKERS_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    // Default Claude model for shops that bring their own Anthropic key.
+    "SHOP_ANTHROPIC_MODEL": "claude-sonnet-5",
     "ANTHROPIC_SONNET_MODEL": "claude-sonnet-5",
     "ANTHROPIC_OPUS_MODEL": "claude-opus-5",
     "DEEPGRAM_LISTEN_MODEL": "nova-3",
@@ -20,7 +25,7 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "allowed_sender_addresses": ["noreply@yourcarguy806.com"]
+      "remote": true
     }
   ],
   "d1_databases": [
@@ -38,6 +43,9 @@
       "preview_bucket_name": "mechpro-files-preview"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
   "durable_objects": {
     "bindings": [
       {

@@ -5,6 +5,19 @@ export const SHOP_SUPPLIES_RULES = Object.freeze({
   shopSuppliesCap: 20,
 });
 
+export const AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
+  code: 'after-midnight',
+  type: 'fee',
+  description: 'a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.',
+  quantity: 1,
+  unitPrice: 200,
+  amount: 200,
+});
+
+export function afterMidnightFeeLine(id = 'fee-after-midnight') {
+  return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
+}
+
 export function isDeclinedEstimateLine(line) {
   return line?.approvalStatus === 'declined';
 }
@@ -28,15 +41,22 @@ export function orderHasTechnician(order = {}, technician = {}) {
   const names = [technician.name, technician.techName].filter(Boolean);
   if (order.tech && names.includes(order.tech)) return true;
   const id = String(technician.id || '');
+  if (Array.isArray(order.assignments) && order.assignments.some(item => (
+    (id && item.employeeId === id) || names.includes(item.name)
+  ))) return true;
   return Boolean(id && (order.estimate?.lines || []).some(line => (
     line.type === 'labor' && normalizeTechnicianIds(line).includes(id)
   )));
 }
 
 export function normalizeEstimateLine(line = {}, index = 0) {
-  const type = line.type === 'part' ? 'part' : 'labor';
-  const quantity = Math.max(0, Number(line.quantity ?? (type === 'part' ? 1 : line.hours)) || 0);
-  const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === 'part' ? line.price : line.laborRate)) || 0);
+  const type = ['part', 'fee'].includes(line.type) ? line.type : 'labor';
+  const quantity = type === 'fee'
+    ? 1
+    : Math.max(0, Number(line.quantity ?? (type === 'part' ? 1 : line.hours)) || 0);
+  const unitPrice = Math.max(0, Number(line.unitPrice ?? (
+    type === 'part' ? line.price : type === 'fee' ? line.amount : line.laborRate
+  )) || 0);
   const hours = type === 'labor' ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
   const laborRate = type === 'labor' ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
   const total = type === 'labor'
@@ -46,7 +66,9 @@ export function normalizeEstimateLine(line = {}, index = 0) {
     ...line,
     id: String(line.id || `line-${index + 1}`),
     type,
-    description: String(line.description || line.service || line.name || (type === 'part' ? 'Part' : 'Labor')),
+    description: String(line.description || line.service || line.name || (
+      type === 'part' ? 'Part' : type === 'fee' ? 'Fee' : 'Labor'
+    )),
     notes: String(line.notes || line.explanation || ''),
     partNumber: type === 'part' ? String(line.partNumber || line.part_number || line.inventorySku || '') : '',
     quantity,
@@ -94,7 +116,10 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
   const parts = roundMoney(billableLines
     .filter(line => line.type === 'part')
     .reduce((sum, line) => sum + line.total, 0));
-  const feeTotal = roundMoney(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+  const lineFees = roundMoney(billableLines
+    .filter(line => line.type === 'fee')
+    .reduce((sum, line) => sum + line.total, 0));
+  const feeTotal = roundMoney(lineFees + normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
   const subtotal = roundMoney(labor + parts + feeTotal);
   const safeTaxRate = Math.max(0, Number(taxRate) || 0);
   const tax = roundMoney(subtotal * safeTaxRate / 100);
@@ -104,6 +129,8 @@ export function calculateEstimate(lines = [], taxRate = 0, fees = []) {
     labor,
     laborHours: roundMoney(billableLines.reduce((sum, line) => sum + line.hours, 0)),
     parts,
+    lineFees,
+    feeTotal,
     subtotal,
     taxRate: safeTaxRate,
     tax,

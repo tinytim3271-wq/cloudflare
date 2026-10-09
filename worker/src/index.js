@@ -13,6 +13,7 @@ import {
   validShopId,
   validVin,
 } from './domain.mjs';
+import { payrollLinesForOrder } from '../../src/modules/technician-assignment.js';
 import {
   base64UrlEncode,
   constantTimeEqual,
@@ -23,10 +24,13 @@ import {
   verifyAccessJwt,
   verifyGoogleIdToken,
 } from './security.mjs';
+import { createPartstechHandlers } from './integrations/partstech.mjs';
+import { createLaborGuideHandlers } from './integrations/labor-guide.mjs';
+import { createQuickbooksHandlers } from './integrations/quickbooks.mjs';
 import { HttpError, json, parseJson, requestJson } from './http.mjs';
 import { storeUploadedFile } from './routes/files.mjs';
 import { PROGRAMMING_MODES, mintCapabilityToken, procedureSpec } from './diagnostics.mjs';
-import { canSendLoginEmail, deliverLoginEmail, handleSendLogin } from './login-email.mjs';
+import { canSendLoginEmail, deliverLoginEmail, handleSendLogin, signInDeliveryFailure } from './login-email.mjs';
 import { revokeSessionsForUserIds, syncAccessUser } from './access-users.mjs';
 import { applyPendingFoundingClaim, claimBatchOutcome } from './founding.mjs';
 import {
@@ -40,13 +44,14 @@ import {
 } from './plans.mjs';
 import {
   calculateVoiceCost,
-  calculateTextCost,
   isAiEnabled,
   readAudioWithinLimit,
   recordAiUsage,
   runAnthropicTurn,
   transcribeDeepgramAudio,
+  usageCostsForResult,
 } from './ai.mjs';
+import { handleShopAiSettings } from './shop-ai.mjs';
 import { AiChatSession } from './chat-session.mjs';
 import { AiVoiceSession } from './voice-session.mjs';
 import { createCustomerDocumentLink, handleCustomerDocument } from './customer-documents.mjs';
@@ -61,6 +66,19 @@ import {
   handleSupport,
   handleTwilioWebhook,
 } from './integration-routes.mjs';
+import { handleCustomerLookup } from './customer-search.mjs';
+import { chargeTargetSnapshot, recordPayment as recordPaymentToTarget } from './payments.mjs';
+import { handleTerminalRoutes, stripeKeyMode, terminalPaymentRecord } from './terminal.mjs';
+import {
+  approvalRecorder,
+  normalizeEstimateApproval,
+  validateEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
+import {
+  approvedEstimate,
+  normalizeEstimateLine,
+  normalizeTechnicianIds,
+} from '../../src/modules/estimate-workflow.js';
 
 export { AiChatSession, AiVoiceSession };
 
@@ -436,13 +454,22 @@ async function listEntities(env, shopId, type, { limit = 0, cursor = '' } = {}) 
   };
 }
 
-async function putEntity(env, context, type, id, body, expectedUpdatedAt = null, createdBy = context.userId) {
+export async function putEntity(
+  env,
+  context,
+  type,
+  id,
+  body,
+  expectedUpdatedAt = null,
+  createdBy = context.userId,
+  { requireUnlockedEstimate = false } = {},
+) {
   const now = new Date().toISOString();
   const existing = await env.DB.prepare(
     'SELECT created_at, created_by, updated_at FROM entities WHERE shop_id = ? AND entity_type = ? AND entity_id = ?',
   ).bind(context.shopId, type, id).first();
   if (expectedUpdatedAt && existing && existing.updated_at !== expectedUpdatedAt) {
-    throw new HttpError(409, 'Record changed while this device was offline');
+    throw new HttpError(409, 'Record was updated elsewhere. Reload before saving again.');
   }
   const record = {
     ...body,
@@ -452,6 +479,43 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
     createdAt: body.createdAt || existing?.created_at || now,
     updatedAt: now,
   };
+  if (requireUnlockedEstimate) {
+    // CAS on updated_at inside the same UPDATE as the unlock guard. The early
+    // If-Match check above is not atomic with this write, so a concurrent staff
+    // line edit can otherwise slip in and be overwritten by a stale approval.
+    const casToken = expectedUpdatedAt || existing?.updated_at || null;
+    let sql = `
+      UPDATE entities
+      SET data_json = ?, updated_at = ?
+      WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
+        AND COALESCE(json_extract(data_json, '$.linesLockedAt'), '') = ''
+        AND COALESCE(json_extract(data_json, '$.estimateApproval.status'), '')
+          NOT IN ('approved', 'declined')
+    `;
+    const binds = [JSON.stringify(record), now, context.shopId, type, id];
+    if (casToken) {
+      sql += ' AND updated_at = ?';
+      binds.push(casToken);
+    }
+    const outcome = await env.DB.prepare(sql).bind(...binds).run();
+    if (!outcome?.meta?.changes) {
+      const current = await env.DB.prepare(`
+        SELECT updated_at,
+          json_extract(data_json, '$.linesLockedAt') AS lines_locked_at,
+          json_extract(data_json, '$.estimateApproval.status') AS approval_status
+        FROM entities
+        WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
+      `).bind(context.shopId, type, id).first();
+      if (current && (
+        String(current.lines_locked_at || '')
+        || ['approved', 'declined'].includes(String(current.approval_status || ''))
+      )) {
+        throw new HttpError(409, 'This estimate has already been approved or declined');
+      }
+      throw new HttpError(409, 'Record was updated elsewhere. Reload before saving again.');
+    }
+    return record;
+  }
   await env.DB.prepare(`
     INSERT INTO entities (shop_id, entity_type, entity_id, data_json, created_by, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -460,6 +524,127 @@ async function putEntity(env, context, type, id, body, expectedUpdatedAt = null,
       updated_at = excluded.updated_at
   `).bind(context.shopId, type, id, JSON.stringify(record), record.createdBy, record.createdAt, now).run();
   return record;
+}
+
+const ESTIMATE_APPROVAL_WRITE_ROLES = new Set(['owner', 'admin', 'service_writer']);
+
+function preserveRecordedApproval(body, existingOrder) {
+  const requestedLines = new Map((body.estimate?.lines || []).map((line, index) => [
+    normalizeEstimateLine(line, index).id,
+    line,
+  ]));
+  const estimate = {
+    ...existingOrder.estimate,
+    lines: (existingOrder.estimate?.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      const requested = requestedLines.get(normalized.id);
+      if (normalized.type !== 'labor' || !Array.isArray(requested?.technicianIds)) return line;
+      return { ...line, technicianIds: normalizeTechnicianIds(requested) };
+    }),
+  };
+  return {
+    ...body,
+    estimate,
+    labor: existingOrder.labor,
+    laborHours: existingOrder.laborHours,
+    parts: existingOrder.parts,
+    tax: existingOrder.tax,
+    total: existingOrder.total,
+    linesLockedAt: existingOrder.linesLockedAt,
+    estimateApproval: existingOrder.estimateApproval,
+  };
+}
+
+export function validatedOrderApproval(body, context, existingOrder = null, timestamp = new Date().toISOString()) {
+  const requestedApproval = body?.estimateApproval;
+  const existingApproval = normalizeEstimateApproval(existingOrder?.estimateApproval);
+  if (existingApproval?.status === 'approved') {
+    const explicitRevision = requestedApproval == null
+      && body.estimateRevisionPending === true
+      && !body.linesLockedAt;
+    if (explicitRevision && !ESTIMATE_APPROVAL_WRITE_ROLES.has(context.role)) {
+      throw new HttpError(403, 'This role cannot revise an approved estimate');
+    }
+    return explicitRevision ? body : preserveRecordedApproval(body, existingOrder);
+  }
+  if (!requestedApproval || requestedApproval.status !== 'approved') return body;
+  if (!existingOrder) throw new HttpError(409, 'Create the work order before recording approval');
+  if (existingOrder.linesLockedAt || existingOrder.estimateApproval?.status === 'declined') {
+    throw new HttpError(409, 'Revise the locked estimate before recording a new approval');
+  }
+  if (!ESTIMATE_APPROVAL_WRITE_ROLES.has(context.role)) {
+    throw new HttpError(403, 'This role cannot record estimate approvals');
+  }
+
+  const sourceLines = existingOrder.estimate?.lines || [];
+  if (!sourceLines.length) throw new HttpError(409, 'Add estimate lines before recording approval');
+  const decisions = requestedApproval.decisions && typeof requestedApproval.decisions === 'object'
+    ? requestedApproval.decisions
+    : {};
+  const lineIds = sourceLines.map((line, index) => normalizeEstimateLine(line, index).id);
+  if (lineIds.some(id => !['approved', 'declined'].includes(decisions[id]))) {
+    throw new HttpError(400, 'Approve or decline every estimate line');
+  }
+  if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+    throw new HttpError(400, 'Approval decisions do not match this estimate');
+  }
+
+  const estimate = approvedEstimate(existingOrder.estimate, decisions);
+  if (!estimate.approvedLineCount) {
+    throw new HttpError(400, 'Approve at least one line or decline the estimate');
+  }
+  const recordedBy = approvalRecorder(context);
+  let approval;
+  try {
+    approval = validateEstimateApproval({
+      ...requestedApproval,
+      approvedAt: timestamp,
+      recordedBy,
+      decisions,
+    });
+  } catch (error) {
+    throw new HttpError(400, error.message || 'Estimate approval is invalid');
+  }
+  if (approval.type === 'signature' && approval.signatureKey && context.shopId
+    && !String(approval.signatureKey).startsWith(`shops/${context.shopId}/`)) {
+    throw new HttpError(400, 'Signature does not belong to this shop');
+  }
+  if (approval.type !== 'signature') {
+    delete approval.signatureKey;
+    delete approval.signatureDataUrl;
+    delete approval.signedAt;
+  }
+
+  const result = {
+    ...body,
+    estimate,
+    labor: estimate.labor,
+    laborHours: estimate.laborHours,
+    parts: estimate.parts,
+    tax: estimate.tax,
+    total: estimate.total,
+    status: existingOrder.estimateRevisionPreviousStatus || 'approved',
+    linesLockedAt: timestamp,
+    estimateApproval: approval,
+    estimateRevisionPending: false,
+  };
+  delete result.estimateRevisionPreviousStatus;
+  return result;
+}
+
+export async function verifyOrderApprovalSignature(env, context, approval) {
+  const normalized = normalizeEstimateApproval(approval);
+  if (normalized?.status !== 'approved' || normalized.type !== 'signature' || !normalized.signatureKey) return;
+  if (context.shopId && !String(normalized.signatureKey).startsWith(`shops/${context.shopId}/`)) {
+    throw new HttpError(400, 'Signature does not belong to this shop');
+  }
+  if (!env.FILES?.head) throw new HttpError(503, 'Signature storage is unavailable');
+  const object = await env.FILES.head(normalized.signatureKey);
+  if (!object) throw new HttpError(400, 'Stored signature was not found');
+  const contentType = String(object.httpMetadata?.contentType || object.contentType || '').toLowerCase();
+  if (contentType !== 'image/png') {
+    throw new HttpError(400, 'Stored signature must be a PNG image');
+  }
 }
 
 function members(record) {
@@ -603,6 +788,7 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'POST' && !id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    if (type === 'orders') body = validatedOrderApproval(body, context);
     const naturalId = type === 'invoices' ? body.number : type === 'customers' ? body.name : null;
     const newId = String(body.id || naturalId || crypto.randomUUID());
     if (type === 'conversations') {
@@ -634,6 +820,17 @@ async function handleEntities(request, env, context, segments, analytics) {
   }
   if (request.method === 'PUT' && id) {
     let body = normalizeEntityPayload(sourceType, await requestJson(request));
+    let requireUnlockedEstimate = false;
+    if (type === 'orders') {
+      const existingOrder = await getEntity(env, context.shopId, type, id);
+      requireUnlockedEstimate = Boolean(
+        existingOrder
+        && body.estimateApproval?.status === 'approved'
+        && existingOrder.estimateApproval?.status !== 'approved',
+      );
+      body = validatedOrderApproval(body, context, existingOrder);
+      if (requireUnlockedEstimate) await verifyOrderApprovalSignature(env, context, body.estimateApproval);
+    }
     if (type === 'chatmessages') throw new HttpError(405, 'Chat messages cannot be edited');
     if (type === 'conversations') {
       const existing = await getEntity(env, context.shopId, type, id);
@@ -644,7 +841,16 @@ async function handleEntities(request, env, context, segments, analytics) {
       body = { ...body, memberEmails, creatorEmail: existing.creatorEmail };
     }
     if (type === 'employees') await syncAccessUser(env, context, body);
-    const saved = await putEntity(env, context, type, id, body, request.headers.get('If-Match'));
+    const saved = await putEntity(
+      env,
+      context,
+      type,
+      id,
+      body,
+      request.headers.get('If-Match'),
+      context.userId,
+      { requireUnlockedEstimate },
+    );
     captureForContext(analytics, context, 'entity_updated', { entity_type: type });
     capturePostHogEvent(env, context, 'entity_updated', {
       entity_type: type,
@@ -988,27 +1194,23 @@ async function handleOnboarding(request, env, context, analytics) {
 async function handlePayroll(request, env, context, analytics) {
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   requireRole(context, ['admin', 'office']);
-  const [orders, employees] = await Promise.all([
+  const [orders, employees, clocks] = await Promise.all([
     listEntities(env, context.shopId, 'orders'),
     listEntities(env, context.shopId, 'employees'),
+    listEntities(env, context.shopId, 'jobclockentries'),
   ]);
   const now = new Date();
   const day = (now.getUTCDay() + 6) % 7;
   const monday = new Date(now);
   monday.setUTCDate(now.getUTCDate() - day);
   const period = monday.toISOString().slice(0, 10);
-  const entries = orders.flatMap(order => {
-    if (!['completed', 'invoiced'].includes(order.status)) return [];
-    const employee = employees.find(item => item.active && item.techName === order.tech);
-    const hours = Number(order.laborHours ?? (Number(order.labor || 0) / 165));
-    if (!employee || !hours) return [];
-    return [{
-      id: `${period}#${order.id}`, workOrderId: order.id, employeeId: employee.id,
-      periodKey: period, hours, rate: Number(employee.payRate || 0),
-      grossPay: employee.employmentType === 'Hourly' ? Math.round(hours * Number(employee.payRate || 0) * 100) / 100 : 0,
-      syncedAt: now.toISOString(),
-    }];
-  });
+  const entries = orders.flatMap(order => payrollLinesForOrder({
+    order,
+    users: employees,
+    clocks,
+    periodKey: period,
+    nowIso: now.toISOString(),
+  }).map(entry => ({ ...entry, syncedAt: now.toISOString() })));
   for (const entry of entries) await putEntity(env, context, 'payrollentries', entry.id, entry);
   captureForContext(analytics, context, 'payroll_synced', {
     period,
@@ -1060,17 +1262,22 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     autoEscalate: options.autoEscalate,
     allowEstimatePreparation: options.source !== 'agentphone',
   });
-  const costs = calculateTextCost(env, result.family, result.inputTokens, result.outputTokens);
+  const costs = usageCostsForResult(env, result);
   await recordAiUsage(env, {
     shopId,
     userId: options.userId || null,
     channel: options.channel || 'text',
-    provider: 'anthropic',
+    provider: result.provider || 'anthropic',
     model: result.model,
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     ...costs,
-    metadata: { routingReason: result.routingReason, source: options.source || 'assistant' },
+    metadata: {
+      routingReason: result.routingReason,
+      source: options.source || 'assistant',
+      keySource: result.keySource || null,
+      ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom, failureKind: result.failureKind } : {}),
+    },
   });
   return {
     text: result.text,
@@ -1078,6 +1285,8 @@ async function aiAnswer(env, shopId, message, history = [], options = {}) {
     modelFamily: result.family,
     routingReason: result.routingReason,
     usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+    keySource: result.keySource || null,
+    ...(result.notice ? { notice: result.notice } : {}),
   };
 }
 
@@ -1449,6 +1658,77 @@ async function handlePaymentRecord(request, env, context, analytics) {
   return json(result, 201);
 }
 
+function stripeWebhookUrlForShop(request, shopId) {
+  const url = new URL(request.url);
+  return `${url.origin}/api/payments/webhook/${encodeURIComponent(shopId)}`;
+}
+
+async function handleStripeStatus(request, env, context) {
+  if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'super_admin']);
+  const shopId = context.shopId;
+  if (!shopId) throw new HttpError(400, 'Shop context is required');
+  const [secretKey, webhookSecret, publishableKey] = await Promise.all([
+    getIntegrationSecret(env, shopId, 'stripe-secret-key'),
+    getIntegrationSecret(env, shopId, 'stripe-webhook-secret'),
+    getIntegrationSecret(env, shopId, 'stripe-publishable-key'),
+  ]);
+  const configured = Boolean(secretKey && webhookSecret);
+  return json({
+    configured,
+    shopId,
+    provider: 'stripe',
+    webhookUrl: stripeWebhookUrlForShop(request, shopId),
+    hasSecretKey: Boolean(secretKey),
+    hasWebhookSecret: Boolean(webhookSecret),
+    hasPublishableKey: Boolean(publishableKey),
+  });
+}
+
+async function handleStripeConfigure(request, env, context, analytics) {
+  if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+  requireRole(context, ['admin', 'super_admin']);
+  const shopId = context.shopId;
+  if (!shopId) throw new HttpError(400, 'Shop context is required');
+  const body = await requestJson(request);
+  const secretKey = String(body.secretKey || '').trim();
+  const webhookSecret = String(body.webhookSecret || '').trim();
+  const publishableKey = String(body.publishableKey || '').trim();
+  const updatingSecrets = Boolean(secretKey || webhookSecret);
+  if (updatingSecrets) {
+    if (!/^sk_(test|live)_/.test(secretKey) || !/^whsec_/.test(webhookSecret)) {
+      throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
+    }
+    await Promise.all([
+      saveIntegrationSecret(env, shopId, 'stripe-secret-key', secretKey),
+      saveIntegrationSecret(env, shopId, 'stripe-webhook-secret', webhookSecret),
+    ]);
+  }
+  if (publishableKey) {
+    if (!/^pk_(test|live)_/.test(publishableKey)) throw new HttpError(400, 'Publishable key must start with pk_test_ or pk_live_');
+    const secret = secretKey || await getIntegrationSecret(env, shopId, 'stripe-secret-key');
+    if (!secret) throw new HttpError(409, 'Save the Stripe secret key before the publishable key');
+    if (stripeKeyMode(secret) !== stripeKeyMode(publishableKey)) {
+      throw new HttpError(400, 'Publishable key must be test or live to match the secret key');
+    }
+    await saveIntegrationSecret(env, shopId, 'stripe-publishable-key', publishableKey);
+  }
+  if (!updatingSecrets && !publishableKey) {
+    throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
+  }
+  captureForContext(analytics, context, 'stripe_configured', { shop_id: shopId, provider: 'stripe' });
+  capturePostHogEvent(env, context, 'stripe_payments_configured', {
+    shop_id: shopId,
+    actor_role: context.role,
+  });
+  return json({
+    configured: true,
+    shopId,
+    provider: 'stripe',
+    webhookUrl: stripeWebhookUrlForShop(request, shopId),
+  });
+}
+
 async function handleStripeWebhook(request, env, shopId, analytics) {
   analytics.distinctId = `stripe-webhook:${shopId}`;
   if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
@@ -1491,6 +1771,16 @@ async function handleStripeWebhook(request, env, shopId, analytics) {
         processor: 'stripe',
         $process_person_profile: false,
       });
+    }
+  }
+  if (event.type === 'payment_intent.succeeded') {
+    const record = terminalPaymentRecord(event.data?.object, shopId);
+    if (record) {
+      try {
+        await recordPaymentToTarget(env, { shopId, userId: 'stripe-webhook' }, record.body, { paymentId: record.paymentId });
+      } catch (error) {
+        if (error?.status !== 409) throw error;
+      }
     }
   }
   return json({ received: true });
@@ -1601,14 +1891,20 @@ async function handleAdmin(request, env, context, segments, analytics) {
     const body = await requestJson(request);
     const secretKey = String(body.secretKey || '').trim();
     const webhookSecret = String(body.webhookSecret || '').trim();
-    if (!/^sk_(test|live)_/.test(secretKey) || !/^whsec_/.test(webhookSecret)) {
+    const publishableKey = String(body.publishableKey || '').trim();
+    if (!/^sk_(test|live)_/.test(secretKey) || secretKey.length < 30 || !/^whsec_/.test(webhookSecret)) {
       throw new HttpError(400, 'Valid Stripe secret and webhook signing keys are required');
     }
-    await Promise.all([
+    if (publishableKey && (!/^pk_(test|live)_/.test(publishableKey) || stripeKeyMode(secretKey) !== stripeKeyMode(publishableKey))) {
+      throw new HttpError(400, 'Publishable key must be test or live to match the secret key');
+    }
+    const writes = [
       saveIntegrationSecret(env, target, 'stripe-secret-key', secretKey),
       saveIntegrationSecret(env, target, 'stripe-webhook-secret', webhookSecret),
-    ]);
-    return json({ configured: true, shopId: target, provider: 'stripe' });
+    ];
+    if (publishableKey) writes.push(saveIntegrationSecret(env, target, 'stripe-publishable-key', publishableKey));
+    await Promise.all(writes);
+    return json({ configured: true, shopId: target, provider: 'stripe', hasPublishableKey: Boolean(publishableKey) });
   }
   if (request.method === 'POST' && ['reset-password', 'set-password'].includes(action)) {
     throw new HttpError(501, 'Passwords are managed by the Cloudflare Access identity provider');
@@ -1787,8 +2083,16 @@ function desktopHandoffPage(token) {
 </html>`;
 }
 
-function googleRedirectUri(request) {
-  return new URL('/api/auth/google/callback', new URL(request.url).origin).toString();
+function googleAuthOrigin(request, env) {
+  const configured = String(env.GOOGLE_REDIRECT_ORIGIN || '').trim();
+  if (configured) return new URL(configured).origin;
+  const hostname = new URL(request.url).hostname.replace(/^www\./, '');
+  if (hostname === 'yourcarguy806.com') return 'https://www.yourcarguy806.com';
+  return new URL(request.url).origin;
+}
+
+function googleRedirectUri(request, env) {
+  return new URL('/api/auth/google/callback', googleAuthOrigin(request, env)).toString();
 }
 
 async function handleGoogleSignIn(request, env) {
@@ -1800,10 +2104,18 @@ async function handleGoogleSignIn(request, env) {
   const verifier = randomBase64Url(48);
   const returnTo = safeReturnPath(requestUrl.searchParams.get('returnTo') || '/');
   const desktop = requestUrl.searchParams.get('desktop') === '1';
+  const origin = googleAuthOrigin(request, env);
+  if (requestUrl.origin !== origin) {
+    const next = new URL(`${requestUrl.pathname}${requestUrl.search}`, origin);
+    return new Response(null, {
+      status: 302,
+      headers: { Location: next.toString(), 'Cache-Control': 'no-store' },
+    });
+  }
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorizationUrl.search = new URLSearchParams({
     client_id: clientId,
-    redirect_uri: googleRedirectUri(request),
+    redirect_uri: googleRedirectUri(request, env),
     response_type: 'code',
     scope: 'openid email profile',
     state,
@@ -1842,7 +2154,7 @@ async function handleGoogleCallback(request, env) {
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: googleRedirectUri(request),
+      redirect_uri: googleRedirectUri(request, env),
       grant_type: 'authorization_code',
       code_verifier: verifier,
     }),
@@ -2000,7 +2312,7 @@ async function handleMagicLink(request, env) {
     }
   } catch (error) {
     await env.DB.prepare('DELETE FROM login_tokens WHERE token_hash = ?').bind(tokenHash).run();
-    throw error instanceof HttpError ? error : new HttpError(502, 'Unable to deliver the sign-in email');
+    throw signInDeliveryFailure(error);
   }
   const payload = {
     ok: true,
@@ -2476,6 +2788,9 @@ async function route(request, env, analytics) {
   analytics.distinctId = context.userId;
   await requireActiveAccount(context, env);
   if (path === '/auth/session') return handleAuthSession(request, context, analytics);
+  if (segments[0] === 'customers' && ['search', 'duplicates'].includes(segments[1])) {
+    return handleCustomerLookup(request, env, context, segments[1]);
+  }
   if (segments[0] === 'entities') return handleEntities(request, env, context, segments, analytics);
   if (segments[0] === 'vehicles' && segments[1] === 'decode') return handleVin(request, env, context, segments[2]);
   if (path === '/mileage/calculate') return handleMileageCalculate(request, env, context);
@@ -2507,17 +2822,59 @@ async function route(request, env, analytics) {
     });
   }
   if (segments[0] === 'support') return handleSupport(request, env, context);
+  if (segments[0] === 'integrations' && segments[1] === 'partstech') {
+    return createPartstechHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'labor-guide') {
+    return createLaborGuideHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
+  if (segments[0] === 'integrations' && segments[1] === 'quickbooks') {
+    return createQuickbooksHandlers({
+      saveSecret: saveIntegrationSecret,
+      getSecret: (shopId, name) => getIntegrationSecret(env, shopId, name),
+      deleteSecret: deleteIntegrationSecret,
+      requireRole,
+      recordAudit: recordDiagnosticAudit,
+    })(request, env, context, segments);
+  }
   if (path === '/onboarding/start') return handleOnboarding(request, env, context, analytics);
   if (path === '/payroll/sync') return handlePayroll(request, env, context, analytics);
   if (path === '/tax-report') return handleTaxReport(request, env, context);
+  if (path === '/settings/ai') return handleShopAiSettings(request, env, context, { recordAudit: recordDiagnosticAudit });
   if (path === '/ai/assistant') return handleAssistant(request, env, context, analytics);
   if (path === '/ai/transcribe') return handleVoiceTranscription(request, env, context);
   if (path === '/ai/voice/session') return handleVoiceSession(request, env, context);
   if (path === '/agentphone/configure') return handleAgentPhoneConfigure(request, env, context, analytics);
   if (segments[0] === 'files') return handleFiles(request, env, context, segments, analytics);
   if (path === '/document-links') return createCustomerDocumentLink(request, env, context);
+  if (path.startsWith('/payments/terminal')) {
+    return handleTerminalRoutes(request, env, context, {
+      requireRole,
+      json,
+      requestJson,
+      chargeTargetSnapshot,
+      recordPayment: recordPaymentToTarget,
+      fetchImpl: fetch,
+      getStripeKey: (workerEnv, shopId) => getIntegrationSecret(workerEnv, shopId, 'stripe-secret-key'),
+      getPublishableKey: (workerEnv, shopId) => getIntegrationSecret(workerEnv, shopId, 'stripe-publishable-key'),
+    });
+  }
   if (path === '/payments/record') return handlePaymentRecord(request, env, context, analytics);
   if (path === '/payments/checkout-session') return handleCheckout(request, env, context, analytics);
+  if (path === '/payments/stripe/status') return handleStripeStatus(request, env, context);
+  if (path === '/payments/stripe/configure') return handleStripeConfigure(request, env, context, analytics);
   if (path === '/subscription/entitlement') return handleEntitlement(request, env, context);
   if (segments[0] === 'admin' && segments[1] === 'accounts') return handleAdmin(request, env, context, segments, analytics);
   throw new HttpError(404, 'Not found');

@@ -178,21 +178,26 @@ export function computeFica(opts) {
  */
 export function computePayPeriodTaxes(user, grossPay, ytd = {}) {
   const is1099 = String(user.taxStatus || '').includes('1099');
+  const filingStatus = normalizeFilingStatus(user.w4FilingStatus || user.filingStatus || 'single');
+  const pretax = Math.max(0, Number(user.pretaxDeductionPerPeriod) || 0);
   if (is1099) {
     return {
       gross: roundCents(grossPay),
+      pretax: 0,
       federal: 0,
       socialSecurity: 0,
       medicare: 0,
       state: 0,
       employerSocialSecurity: 0,
       employerMedicare: 0,
+      socialSecurityWages: 0,
       net: roundCents(grossPay),
       method: '1099 — no employment tax withholding',
+      filingStatus,
+      adjustedAnnualWage: 0,
       is1099: true,
     };
   }
-  const pretax = Math.max(0, Number(user.pretaxDeductionPerPeriod) || 0);
   const fit = computeFederalWithholding({
     grossPay,
     payFrequency: user.payFrequency || 'Weekly',

@@ -178,6 +178,7 @@ export const sidebarCatalog = [
       { route: 'orders', icon: 'clipboard-list', label: 'Work orders', count: 'orders' },
       { route: 'customers', icon: 'users', label: 'Customers' },
       { route: 'invoices', icon: 'receipt-text', label: 'Invoices', count: 'overdue' },
+      { route: 'pos', icon: 'credit-card', label: 'Card terminal' },
       { route: 'chat', icon: 'messages-square', label: 'Team chat', count: 'unread' },
     ],
   },

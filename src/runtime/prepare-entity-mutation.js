@@ -4,6 +4,18 @@ function defaultMutationId() {
   return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/** Attach If-Match so online PUTs get the same optimistic-concurrency check as offline flush. */
+export function withOptimisticConcurrencyHeaders(options = {}, expectedUpdatedAt = null) {
+  if (!expectedUpdatedAt) return options;
+  return {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      'If-Match': expectedUpdatedAt,
+    },
+  };
+}
+
 export function prepareEntityMutation(path, options, createMutationId = defaultMutationId) {
   const method = String(options.method || 'GET').toUpperCase();
   const isEntityMutation = path.startsWith('/entities/') && ['POST', 'PUT', 'DELETE'].includes(method);

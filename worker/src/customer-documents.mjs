@@ -4,6 +4,10 @@ import {
   declinedEstimate,
   normalizeEstimateLine,
 } from '../../src/modules/estimate-workflow.js';
+import {
+  approvalSummary,
+  normalizeEstimateApproval,
+} from '../../src/modules/estimate-approval.js';
 import { HttpError, json, requestJson } from './http.mjs';
 
 const LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -40,7 +44,7 @@ function entityTypeForDocument(type) {
 
 async function entityRow(env, shopId, entityType, documentId) {
   return env.DB.prepare(`
-    SELECT data_json, created_by, created_at
+    SELECT data_json, created_by, created_at, updated_at
     FROM entities
     WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
   `).bind(shopId, entityType, documentId).first();
@@ -144,12 +148,12 @@ function lineRows(document, type) {
     const item = normalizeEstimateLine(line, index);
     const detail = item.type === 'part'
       ? `${item.quantity} × ${money(item.unitPrice)}${item.inventorySku ? ` · ${escapeHtml(item.inventorySku)}` : ''}`
-      : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
+      : item.type === 'fee' ? `Flat fee · ${money(item.total)}` : `${item.hours.toFixed(2)} hr × ${money(item.laborRate)}`;
     const choices = type === 'estimate'
       ? `<fieldset class="decision"><legend>Choose this line</legend><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="approved" checked> Approve</label><label><input type="radio" name="decision-${escapeHtml(item.id)}" value="declined"> Decline</label></fieldset>`
       : '';
     return `<article class="line" data-line-id="${escapeHtml(item.id)}">
-      <div class="line-type">${item.type === 'part' ? 'Part' : 'Labor'}</div>
+      <div class="line-type">${item.type === 'part' ? 'Part' : item.type === 'fee' ? 'Fee' : 'Labor'}</div>
       <div><strong>${escapeHtml(item.description)}</strong><small>${escapeHtml(detail)}</small>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}</div>
       <b>${escapeHtml(money(item.total))}</b>
       ${choices}
@@ -162,9 +166,15 @@ function customerDocumentPage(link, document, nonce) {
   const isEstimate = type === 'estimate';
   const estimate = isEstimate ? document.estimate || calculateEstimate([], 0) : document;
   const number = isEstimate ? document.estimateNumber || document.id : document.number;
-  const complete = Boolean(link.consumed_at);
+  const savedApproval = isEstimate ? normalizeEstimateApproval(document.estimateApproval) : null;
+  const complete = Boolean(link.consumed_at || (isEstimate && estimateAlreadyLocked(document)));
+  const completedDetail = savedApproval?.status === 'approved'
+    ? approvalSummary(savedApproval)
+    : link.consumed_at
+      ? `This ${type} was ${link.result || 'completed'} on ${new Date(link.consumed_at).toLocaleString()}.`
+      : `This ${type} is no longer awaiting a response.`;
   const status = complete
-    ? `<section class="notice complete"><strong>Response recorded</strong><p>This ${type} was ${escapeHtml(link.result || 'completed')} on ${escapeHtml(new Date(link.consumed_at).toLocaleString())}.</p></section>`
+    ? `<section class="notice complete"><strong>Response recorded</strong><p>${escapeHtml(completedDetail)}</p></section>`
     : '';
   const controls = complete ? '' : `
     <section class="signature">
@@ -250,36 +260,47 @@ async function limitedResponseJson(request) {
   }
 }
 
-async function saveEntity(env, link, document, { requireUnlockedEstimate = false } = {}) {
+async function saveEntity(env, link, document, {
+  requireUnlockedEstimate = false,
+  expectedUpdatedAt = null,
+} = {}) {
+  const casToken = expectedUpdatedAt || document.updatedAt || null;
   const updatedAt = new Date().toISOString();
   document.updatedAt = updatedAt;
   // Per-link claim is not enough when email + SMS mint two tokens for one RO:
   // both can pass the unlocked read, claim different link rows, and last-write
   // the order. Fail closed unless this UPDATE still sees an unlocked estimate.
+  // Also CAS on updated_at so a concurrent staff line edit cannot be overwritten
+  // by a customer approval that loaded a stale estimate snapshot.
   let sql = `
     UPDATE entities SET data_json = ?, updated_at = ?
     WHERE shop_id = ? AND entity_type = ? AND entity_id = ?
   `;
+  const binds = [
+    JSON.stringify(document),
+    updatedAt,
+    link.shop_id,
+    entityTypeForDocument(link.document_type),
+    link.document_id,
+  ];
   if (requireUnlockedEstimate) {
     sql += `
       AND COALESCE(json_extract(data_json, '$.linesLockedAt'), '') = ''
       AND COALESCE(json_extract(data_json, '$.estimateApproval.status'), '')
         NOT IN ('approved', 'declined')
     `;
+    if (casToken) {
+      sql += ' AND updated_at = ?';
+      binds.push(casToken);
+    }
   }
-  const outcome = await env.DB.prepare(sql).bind(
-    JSON.stringify(document),
-    updatedAt,
-    link.shop_id,
-    entityTypeForDocument(link.document_type),
-    link.document_id,
-  ).run();
+  const outcome = await env.DB.prepare(sql).bind(...binds).run();
   if (requireUnlockedEstimate && !outcome?.meta?.changes) {
     throw new HttpError(409, 'This estimate has already been approved or declined');
   }
 }
 
-async function recordResponse(request, env, link, document) {
+async function recordResponse(request, env, link, document, expectedUpdatedAt = null) {
   if (link.consumed_at) throw new HttpError(409, 'This link has already been used');
   if (new Date(link.expires_at).getTime() <= Date.now()) throw new HttpError(410, 'This link has expired');
   if (link.document_type === 'estimate' && estimateAlreadyLocked(document)) {
@@ -307,7 +328,10 @@ async function recordResponse(request, env, link, document) {
       respondedAt: timestamp,
       decisions: declined.decisions,
     };
-    await saveEntity(env, link, document, { requireUnlockedEstimate: true });
+    await saveEntity(env, link, document, {
+      requireUnlockedEstimate: true,
+      expectedUpdatedAt,
+    });
     await invalidateSiblingDocumentLinks(env, link, 'declined', timestamp);
     return json({ ok: true, status: 'declined' });
   }
@@ -317,19 +341,25 @@ async function recordResponse(request, env, link, document) {
   const decisions = body.decisions && typeof body.decisions === 'object' ? body.decisions : {};
   let nextEstimate = null;
   if (link.document_type === 'estimate') {
-    const missingDecision = (document.estimate?.lines || [])
-      .map((line, index) => normalizeEstimateLine(line, index))
-      .some(line => !['approved', 'declined'].includes(decisions[line.id]));
+    const lineIds = (document.estimate?.lines || [])
+      .map((line, index) => normalizeEstimateLine(line, index).id);
+    const missingDecision = lineIds.some(id => !['approved', 'declined'].includes(decisions[id]));
     if (missingDecision) throw new HttpError(400, 'Approve or decline every estimate line');
+    if (Object.keys(decisions).some(id => !lineIds.includes(id))) {
+      throw new HttpError(400, 'Approval decisions do not match this estimate');
+    }
     nextEstimate = approvedEstimate(document.estimate || {}, decisions);
     if (!nextEstimate.approvedLineCount) throw new HttpError(400, 'Approve at least one line or decline the estimate');
   }
   const signatureKey = await storeSignature(env, link, body.signatureDataUrl);
   const timestamp = new Date().toISOString();
   const signature = {
+    type: 'signature',
     authorizationName,
     signatureKey,
     signedAt: timestamp,
+    approvedAt: timestamp,
+    recordedBy: { id: 'customer', name: authorizationName, email: '' },
     source: 'remote',
   };
   const result = link.document_type === 'estimate' ? 'approved' : 'signed';
@@ -347,7 +377,10 @@ async function recordResponse(request, env, link, document) {
     document.estimateApproval = { status: 'approved', ...signature, decisions };
     document.estimateRevisionPending = false;
     delete document.estimateRevisionPreviousStatus;
-    await saveEntity(env, link, document, { requireUnlockedEstimate: true });
+    await saveEntity(env, link, document, {
+      requireUnlockedEstimate: true,
+      expectedUpdatedAt,
+    });
     await invalidateSiblingDocumentLinks(env, link, result, timestamp);
   } else {
     document.signature = signature;
@@ -365,7 +398,9 @@ export async function handleCustomerDocument(request, env, token) {
   const row = await entityRow(env, link.shop_id, entityTypeForDocument(link.document_type), link.document_id);
   const document = parseEntity(row);
   if (!document) throw new HttpError(404, 'Document not found');
-  if (request.method === 'POST') return recordResponse(request, env, link, document);
+  if (request.method === 'POST') {
+    return recordResponse(request, env, link, document, row.updated_at || document.updatedAt || null);
+  }
   if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
   const nonce = randomToken();
   return new Response(customerDocumentPage(link, document, nonce), {
