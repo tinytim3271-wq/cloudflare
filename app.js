@@ -5608,7 +5608,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function render() {
     const root = document.querySelector("#root");
     if (!currentUser()) {
-      root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen();
+      root.innerHTML = DOMPurify.sanitize(pendingAuthProfile ? pendingProfileScreen() : loginScreen(), { USE_PROFILES: { html: true } });
       lucide.createIcons();
       bind();
       return;
@@ -5620,7 +5620,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     if (typeof imports === "function") views.imports = imports;
     if (typeof employees === "function") views.employees = employees;
     if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView;
-    root.innerHTML = (views[state.route] || views.home || views.dispatch)();
+    root.innerHTML = DOMPurify.sanitize((views[state.route] || views.home || views.dispatch)(), { USE_PROFILES: { html: true } });
     const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
     if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) {
       const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav");
