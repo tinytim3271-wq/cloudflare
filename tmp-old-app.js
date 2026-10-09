@@ -356,16 +356,6 @@
   function defaultMutationId() {
     return globalThis.crypto?.randomUUID?.() || `mutation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
-  function withOptimisticConcurrencyHeaders(options = {}, expectedUpdatedAt = null) {
-    if (!expectedUpdatedAt) return options;
-    return {
-      ...options,
-      headers: {
-        ...options.headers || {},
-        "If-Match": expectedUpdatedAt
-      }
-    };
-  }
   function prepareEntityMutation(path, options, createMutationId = defaultMutationId) {
     const method = String(options.method || "GET").toUpperCase();
     const isEntityMutation = path.startsWith("/entities/") && ["POST", "PUT", "DELETE"].includes(method);
@@ -585,18 +575,6 @@
         const providedNumber = cleanText(value(row, "number", "invoice", "invoice_number"), 40).toUpperCase();
         const status = normalizeStatus(value(row, "status")) || "sent";
         const date = isoDate(value(row, "date", "issued", "invoice_date")) || today;
-        const closeoutRaw = value(
-          row,
-          "closeout_date",
-          "closeout",
-          "closed_date",
-          "closed_at",
-          "paid_date",
-          "paid_at",
-          "completed_date",
-          "completed_at"
-        );
-        const closedAt = isoDate(closeoutRaw) || (closeoutRaw ? "" : date);
         const dueRaw = value(row, "due", "due_date");
         const due = isoDate(dueRaw) || (dueRaw ? "" : addDays(date, 14));
         const rateRaw = value(row, "tax_rate", "taxrate");
@@ -606,7 +584,6 @@
         if (!customer) error = "Customer is required";
         else if (!Number.isFinite(amount) || amount < 0) error = "A numeric invoice amount is required";
         else if (rateRaw !== "" && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100)) error = "Tax rate must be between 0 and 100";
-        else if (closeoutRaw && !closedAt) error = "Closeout date must be a real date";
         else if (dueRaw && !due) error = "Due date must be a real date";
         else if (!INVOICE_STATUSES.includes(status)) error = "Status must be sent, overdue, or paid";
         else if (providedNumber && seenInvoices.has(providedNumber.toLowerCase())) skipped += 1;
@@ -627,11 +604,8 @@
             taxRate,
             status,
             date,
-            closedAt,
-            closeoutSource: closeoutRaw ? "source_closeout_date" : "invoice_date",
             due,
             lines: [],
-            importSource: "csv",
             createdAt
           };
         }
@@ -727,9 +701,9 @@
         invoices: {
           title: "Invoices",
           icon: "receipt",
-          columns: "number, customer, ro, date, closeout_date, due, status, subtotal, tax_rate, tax, amount",
+          columns: "number, customer, ro, date, due, status, subtotal, tax_rate, tax, amount",
           required: "customer, amount",
-          sample: "number,customer,ro,date,closeout_date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-01,2026-09-15,paid,100.00,8.25,8.25,108.25"
+          sample: "number,customer,ro,date,due,status,subtotal,tax_rate,tax,amount\nINV-2042,Demo Customer,RO-1053,2026-09-01,2026-09-15,sent,100.00,8.25,8.25,108.25"
         },
         estimates: {
           title: "Estimates",
@@ -1926,645 +1900,6 @@
     }
   });
 
-  // src/modules/partstech.js
-  function partstechConnectionStatus(record) {
-    if (!record || typeof record !== "object") {
-      return { connected: false, status: "not_connected", label: "PartsTech not connected" };
-    }
-    const hasUser = Boolean(record.userId && record.userKey);
-    const hasPartner = Boolean(record.partnerId && record.partnerKey);
-    if (!hasUser || !hasPartner) {
-      return { connected: false, status: "not_connected", label: "PartsTech not connected" };
-    }
-    return {
-      connected: true,
-      status: "connected",
-      label: "PartsTech connected",
-      userId: record.userId,
-      partnerId: record.partnerId,
-      storeId: record.storeId || null,
-      connectedAt: record.connectedAt || null
-    };
-  }
-  function partstechPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
-    const status = partstechConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>User ${escapeHtml4(status.userId || "")}${status.storeId ? ` \xB7 store ${escapeHtml4(status.storeId)}` : ""}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Connect PartsTech with partner and user API keys. Search, quote, and order stay server-side; unconfigured shops fail closed.</span></div></div>`;
-    const form = canSave ? `<form id="partstech-connect-form" class="form-grid">
-        <label>Partner ID<input name="partnerId" autocomplete="off" value="${escapeHtml4(account.partnerId || "")}" required/></label>
-        <label>Partner API key<input name="partnerKey" type="password" autocomplete="new-password" required/></label>
-        <label>User ID<input name="userId" autocomplete="off" value="${escapeHtml4(account.userId || "")}" required/></label>
-        <label>User API key<input name="userKey" type="password" autocomplete="new-password" required/></label>
-        <label>Default store ID<input name="storeId" value="${escapeHtml4(account.storeId || "")}" placeholder="Optional"/></label>
-        <button class="primary" type="submit">${icon2("save", 14)} Save PartsTech</button>
-        ${status.connected ? `<button class="secondary danger" type="button" id="partstech-disconnect">${icon2("log-out", 14)} Disconnect</button>` : ""}
-      </form>` : '<p class="ops-note">Ask an owner or admin to connect PartsTech.</p>';
-    const search = `<form id="partstech-search-form" class="form-grid">
-      <label class="full">Keyword or part number<input name="keyword" placeholder="brake pad" ${status.connected ? "" : "disabled"}/></label>
-      <label>VIN<input name="vin" placeholder="Optional VIN" ${status.connected ? "" : "disabled"}/></label>
-      <label>Store ID<input name="storeId" value="${escapeHtml4(account.storeId || "")}" ${status.connected ? "" : "disabled"}/></label>
-      <button class="primary" type="submit" ${status.connected ? "" : "disabled"}>${icon2("search", 14)} Quote parts</button>
-    </form>
-    <div id="partstech-results" class="data-panel"></div>`;
-    return `<section class="settings-panel partstech-ordering">
-    <div class="statement-head"><div><div class="eyebrow">Parts ordering</div><h2>PartsTech</h2><p>Search and quote parts through PartsTech, add lines to the estimate, then place the order. Credentials are encrypted in D1.</p></div>${icon2("package", 20)}</div>
-    ${banner}
-    ${form}
-    ${search}
-  </section>`;
-  }
-  var init_partstech = __esm({
-    "src/modules/partstech.js"() {
-    }
-  });
-
-  // src/modules/labor-guide.js
-  function normalizeProvider(value2) {
-    const provider = String(value2 || "manual").trim().toLowerCase();
-    return LABOR_GUIDE_PROVIDERS.includes(provider) ? provider : null;
-  }
-  function bookCredentialsReady(provider, record = {}) {
-    if (provider === "motor") {
-      return Boolean(
-        record.apiKey || record.userId && record.userKey && record.partnerId && record.partnerKey || record.viaPartstech === true
-      );
-    }
-    if (provider === "alldata" || provider === "shopkey") {
-      return Boolean(record.apiKey || record.username && record.password || record.subscriptionId);
-    }
-    return false;
-  }
-  function isBookLaborProvider(provider) {
-    return BOOK_LABOR_PROVIDERS.includes(String(provider || "").toLowerCase());
-  }
-  function laborGuideConnectionStatus(record) {
-    if (!record || typeof record !== "object") {
-      return {
-        connected: false,
-        provider: null,
-        status: "not_connected",
-        label: "Labor guide not connected",
-        webFallbackEligible: true
-      };
-    }
-    const provider = normalizeProvider(record.provider) || "manual";
-    if (provider === "manual") {
-      return {
-        connected: false,
-        provider: "manual",
-        status: "manual",
-        label: PROVIDER_LABELS.manual,
-        webFallbackEligible: true
-      };
-    }
-    if (!isBookLaborProvider(provider)) {
-      return {
-        connected: false,
-        provider: null,
-        status: "not_connected",
-        label: "Labor guide not connected",
-        webFallbackEligible: true
-      };
-    }
-    const ready = bookCredentialsReady(provider, record);
-    return ready ? {
-      connected: true,
-      provider,
-      status: "connected",
-      label: `${PROVIDER_LABELS[provider]} connected`,
-      connectedAt: record.connectedAt || null,
-      viaPartstech: provider === "motor" ? Boolean(record.viaPartstech) : false,
-      webFallbackEligible: false
-    } : {
-      connected: false,
-      provider,
-      status: "not_connected",
-      label: `${PROVIDER_LABELS[provider]} not connected`,
-      webFallbackEligible: true
-    };
-  }
-  function createManualLaborEntry({
-    description = "Labor",
-    hours = 0,
-    laborRate = 0,
-    notes = "",
-    id = `labor-manual-${Date.now()}`
-  } = {}) {
-    const safeHours = Math.max(0, Number(hours) || 0);
-    const safeRate = Math.max(0, Number(laborRate) || 0);
-    return {
-      id: String(id),
-      type: "labor",
-      description: String(description || "Labor"),
-      notes: String(notes || ""),
-      hours: safeHours,
-      laborRate: safeRate,
-      quantity: safeHours,
-      unitPrice: safeRate,
-      total: Math.round(safeHours * safeRate * 100) / 100,
-      approvalStatus: "pending",
-      source: "manual",
-      laborGuide: { provider: "manual" }
-    };
-  }
-  function laborGuidePanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
-    const status = laborGuideConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Book times from the connected provider</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Manual entry always works. With no MOTOR / ALLDATA / ShopKey connection, lookup uses a labeled web average (${escapeHtml4(WEB_ESTIMATE_LABEL)}) when search is configured \u2014 never as book time.</span></div></div>`;
-    const form = canSave ? `<form id="labor-guide-connect-form" class="form-grid">
-        <label>Provider<select name="provider">
-          <option value="motor" ${account.provider === "motor" ? "selected" : ""}>MOTOR (PartsTech)</option>
-          <option value="alldata" ${account.provider === "alldata" ? "selected" : ""}>ALLDATA</option>
-          <option value="shopkey" ${account.provider === "shopkey" ? "selected" : ""}>ShopKey</option>
-          <option value="manual" ${!account.provider || account.provider === "manual" ? "selected" : ""}>Manual only</option>
-        </select></label>
-        <label class="toggle-field full"><input type="checkbox" name="viaPartstech" ${account.viaPartstech !== false ? "checked" : ""}/><span>For MOTOR: use the shop's PartsTech credentials</span></label>
-        <button class="primary" type="submit">${icon2("save", 14)} Save labor guide</button>
-        ${status.connected ? `<button class="secondary danger" type="button" id="labor-guide-disconnect">${icon2("log-out", 14)} Disconnect provider</button>` : ""}
-      </form>` : '<p class="ops-note">Ask an owner or admin to connect a labor guide.</p>';
-    const searchEnabled = true;
-    const search = `<form id="labor-guide-search-form" class="form-grid">
-      <label class="full">Operation keyword<input name="keyword" placeholder="front brake pads" ${searchEnabled ? "" : "disabled"}/></label>
-      <label>Year<input name="year" placeholder="2022"/></label>
-      <label>Make<input name="make" placeholder="Ford"/></label>
-      <label>Model<input name="model" placeholder="F-150"/></label>
-      <label>Engine<input name="engine" placeholder="5.0L"/></label>
-      <label>VIN<input name="vin"/></label>
-      <label>Labor rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml4(account.defaultLaborRate || "")}"/></label>
-      <button class="primary" type="submit">${icon2("search", 14)} Look up labor times</button>
-    </form>
-    <p class="ops-note">Connected book providers return guide times. Otherwise results are labeled <b>${escapeHtml4(WEB_ESTIMATE_LABEL)}</b> with source links, or \u201Cno estimate found\u201D.</p>
-    <form id="manual-labor-form" class="form-grid">
-      <label class="full">Manual labor description<input name="description" required placeholder="Diagnose noise"/></label>
-      <label>Hours<input name="hours" type="number" step=".1" min="0" value="1" required/></label>
-      <label>Rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml4(account.defaultLaborRate || "165")}" required/></label>
-      <button class="secondary" type="submit">${icon2("plus", 14)} Add manual labor line</button>
-    </form>
-    <div id="labor-guide-results" class="data-panel"></div>`;
-    return `<section class="settings-panel labor-guide">
-    <div class="statement-head"><div><div class="eyebrow">Labor guide</div><h2>Times &amp; operations</h2><p>Pluggable labor guide: MOTOR, ALLDATA, ShopKey, manual entry, and labeled web fallback when no book provider is connected.</p></div>${icon2("timer", 20)}</div>
-    ${banner}
-    ${form}
-    ${search}
-  </section>`;
-  }
-  var LABOR_GUIDE_PROVIDERS, BOOK_LABOR_PROVIDERS, WEB_ESTIMATE_LABEL, PROVIDER_LABELS;
-  var init_labor_guide = __esm({
-    "src/modules/labor-guide.js"() {
-      LABOR_GUIDE_PROVIDERS = Object.freeze(["manual", "motor", "alldata", "shopkey"]);
-      BOOK_LABOR_PROVIDERS = Object.freeze(["motor", "alldata", "shopkey"]);
-      WEB_ESTIMATE_LABEL = "web estimate \u2014 not book time";
-      PROVIDER_LABELS = Object.freeze({
-        manual: "Manual labor entry",
-        motor: "MOTOR labor guide",
-        alldata: "ALLDATA labor guide",
-        shopkey: "ShopKey labor guide"
-      });
-    }
-  });
-
-  // src/modules/shop-ai-settings.js
-  function shopAiStatusLabel(status = {}) {
-    if (status.hasKey) return `Using Claude with your key ${status.maskedKey || MASK}`;
-    return "Using Cloudflare AI (included)";
-  }
-  function shopAiPanelHtml(status = {}, { canManage = false, escapeHtml: escapeHtml4 = (value2) => String(value2 ?? ""), icon: icon2 = () => "" } = {}) {
-    const loading = !status.loaded;
-    const keyError = Boolean(status.hasKey && status.status === "key_error");
-    const statusText = loading ? "Checking AI provider..." : shopAiStatusLabel(status);
-    const statusHtml = `<p class="shop-ai-status ${status.hasKey ? "is-claude" : "is-included"}" id="shop-ai-status">${icon2(status.hasKey ? "sparkles" : "cloud", 14)} <strong>${escapeHtml4(statusText)}</strong></p>`;
-    const errorHtml = keyError ? `<p class="form-help shop-ai-error" role="alert">${escapeHtml4(status.lastError || "Your Claude key stopped working.")} Answers use Cloudflare AI until the key is fixed or replaced.</p>` : "";
-    const unavailableHtml = status.unavailable ? '<p class="form-help">AI settings could not be loaded right now.</p>' : "";
-    const removeButton = status.hasKey ? `<button class="secondary" type="button" id="shop-ai-remove-key">${icon2("trash-2", 14)} Remove key</button>` : "";
-    const form = canManage ? `<form class="form-grid" id="shop-ai-key-form" autocomplete="off"><label class="full">Anthropic API key<input name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-..." required/></label><div class="full"><button class="primary" type="submit">${icon2("key-round", 14)} ${status.hasKey ? "Replace key" : "Save key"}</button>${removeButton}<small class="form-help">MechPro tests the key with a tiny request before saving. It is encrypted on the server and never shown again; only the last 4 characters are displayed.</small></div></form>` : '<p class="form-help">Only shop owners and admins can add or change the AI key.</p>';
-    return `<section class="settings-panel shop-ai-settings" id="shop-ai-settings"><div class="statement-head"><div><div class="eyebrow">AI</div><h2>MechPro AI provider</h2><p>${escapeHtml4(SHOP_AI_PROMPT)}</p><p><a href="${ANTHROPIC_CONSOLE_URL}" target="_blank" rel="noopener noreferrer">Get an Anthropic API key at console.anthropic.com</a></p></div>${icon2("sparkles", 20)}</div>${statusHtml}${errorHtml}${unavailableHtml}${form}</section>`;
-  }
-  var ANTHROPIC_CONSOLE_URL, SHOP_AI_PROMPT, MASK;
-  var init_shop_ai_settings = __esm({
-    "src/modules/shop-ai-settings.js"() {
-      ANTHROPIC_CONSOLE_URL = "https://console.anthropic.com/settings/keys";
-      SHOP_AI_PROMPT = "Want higher-quality AI answers? Add your own Anthropic (Claude) API key. Usage is billed by Anthropic to your account, usually just pennies to a few dollars a month.";
-      MASK = "\u2022\u2022\u2022\u2022";
-    }
-  });
-
-  // src/modules/quickbooks.js
-  function quickbooksConnectionStatus(record) {
-    if (!record || typeof record !== "object") {
-      return { connected: false, status: "not_connected", label: "QuickBooks Online not connected" };
-    }
-    const connected = Boolean(record.realmId && (record.refreshToken || record.accessToken));
-    if (!connected) {
-      return { connected: false, status: "not_connected", label: "QuickBooks Online not connected" };
-    }
-    return {
-      connected: true,
-      status: "connected",
-      label: "QuickBooks Online connected",
-      realmId: record.realmId,
-      connectedAt: record.connectedAt || null,
-      tokenExpiresAt: record.tokenExpiresAt || null
-    };
-  }
-  function quickbooksPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
-    const status = quickbooksConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Company ${escapeHtml4(status.realmId || "")}</span></div></div>` : `<div class="messaging-status idle">${icon2("landmark", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Connect QuickBooks Online with OAuth 2.0. Sync stays fail-closed until authorized.</span></div></div>`;
-    const actions = canSave ? `<div class="messaging-actions">
-        ${status.connected ? `<button class="secondary" type="button" id="qbo-sync-now">${icon2("refresh-cw", 14)} Sync customers / invoices / payments</button>
-             <button class="secondary danger" type="button" id="qbo-disconnect">${icon2("log-out", 14)} Disconnect QuickBooks</button>` : `<button class="primary" type="button" id="qbo-connect">${icon2("link", 14)} Connect QuickBooks Online</button>`}
-      </div>` : '<p class="ops-note">Ask an owner or admin to connect QuickBooks Online.</p>';
-    return `<section class="settings-panel quickbooks-panel">
-    <div class="statement-head"><div><div class="eyebrow">Accounting</div><h2>QuickBooks Online</h2><p>OAuth connect/disconnect and idempotent sync of customers, invoices, and payments.</p></div>${icon2("book", 20)}</div>
-    ${banner}
-    ${actions}
-    <div id="qbo-sync-status" class="ops-note"></div>
-  </section>`;
-  }
-  var init_quickbooks = __esm({
-    "src/modules/quickbooks.js"() {
-    }
-  });
-
-  // src/modules/estimate-workflow.js
-  function afterMidnightFeeLine(id = "fee-after-midnight") {
-    return { ...AFTER_MIDNIGHT_FEE_PRESET, id };
-  }
-  function isDeclinedEstimateLine(line) {
-    return line?.approvalStatus === "declined";
-  }
-  function billableEstimateLines(lines = []) {
-    return lines.filter((line) => !isDeclinedEstimateLine(line));
-  }
-  function normalizeTechnicianIds(line = {}) {
-    const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
-    return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
-  }
-  function estimatePartPriceStatus(previousStatus, unitPrice) {
-    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
-  }
-  function normalizeEstimateLine(line = {}, index = 0) {
-    const type = ["part", "fee"].includes(line.type) ? line.type : "labor";
-    const quantity = type === "fee" ? 1 : Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
-    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : type === "fee" ? line.amount : line.laborRate)) || 0);
-    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
-    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
-    const total = type === "labor" ? roundMoney2(hours * laborRate) : roundMoney2(quantity * unitPrice);
-    return {
-      ...line,
-      id: String(line.id || `line-${index + 1}`),
-      type,
-      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : type === "fee" ? "Fee" : "Labor")),
-      notes: String(line.notes || line.explanation || ""),
-      partNumber: type === "part" ? String(line.partNumber || line.part_number || line.inventorySku || "") : "",
-      quantity,
-      unitPrice,
-      hours,
-      laborRate,
-      total,
-      technicianIds: type === "labor" ? normalizeTechnicianIds(line) : [],
-      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
-    };
-  }
-  function laborLinePrintRows(lines = [], technicians = []) {
-    const names = new Map(technicians.map((technician) => [
-      String(technician.id || ""),
-      String(technician.name || technician.techName || technician.id || "Technician unavailable")
-    ]));
-    return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
-      const technicianIds = normalizeTechnicianIds(line);
-      const assignments = !technicianIds.length ? [null] : technicianIds;
-      return assignments.map((technicianId, index) => ({
-        line,
-        technicianId,
-        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
-        lineTotal: index === 0 ? line.total : null
-      }));
-    });
-  }
-  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
-    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
-    const billableLines = billableEstimateLines(normalizedLines);
-    const normalizedFees = fees.map((fee) => ({
-      ...fee,
-      description: String(fee.description || "Fee"),
-      amount: roundMoney2(Math.max(0, Number(fee.amount) || 0))
-    }));
-    const labor = roundMoney2(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
-    const parts = roundMoney2(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
-    const lineFees = roundMoney2(billableLines.filter((line) => line.type === "fee").reduce((sum, line) => sum + line.total, 0));
-    const feeTotal = roundMoney2(lineFees + normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
-    const subtotal = roundMoney2(labor + parts + feeTotal);
-    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
-    const tax = roundMoney2(subtotal * safeTaxRate / 100);
-    return {
-      lines: normalizedLines,
-      fees: normalizedFees,
-      labor,
-      laborHours: roundMoney2(billableLines.reduce((sum, line) => sum + line.hours, 0)),
-      parts,
-      lineFees,
-      feeTotal,
-      subtotal,
-      taxRate: safeTaxRate,
-      tax,
-      total: roundMoney2(subtotal + tax)
-    };
-  }
-  function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
-    const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
-    let fees = estimate.fees || [];
-    let totals = calculateEstimate(lines, taxRate, fees);
-    const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
-    if (repriceSupplies && hasSuppliesFee) {
-      const supplies = totals.labor > 0 ? roundMoney2(Math.min(
-        SHOP_SUPPLIES_RULES.shopSuppliesCap,
-        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
-      )) : 0;
-      fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
-      totals = calculateEstimate(lines, taxRate, fees);
-    }
-    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
-    const discountAmount = roundMoney2(totals.subtotal * discountPercent / 100);
-    const subtotal = roundMoney2(totals.subtotal - discountAmount);
-    const tax = roundMoney2(subtotal * taxRate / 100);
-    return {
-      ...totals,
-      grossSubtotal: totals.subtotal,
-      discountPercent,
-      discountReason: String(estimate.discountReason || ""),
-      discountAmount,
-      subtotal,
-      tax,
-      total: roundMoney2(subtotal + tax)
-    };
-  }
-  function approvedEstimate(estimate = {}, decisions = {}) {
-    const lines = (estimate.lines || []).map((line, index) => {
-      const normalized = normalizeEstimateLine(line, index);
-      return {
-        ...normalized,
-        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
-      };
-    });
-    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
-    const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
-    return {
-      ...estimate,
-      ...totals,
-      lines,
-      approvedLineCount: approvedLines.length,
-      declinedLineCount: lines.length - approvedLines.length
-    };
-  }
-  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
-    const source = order.estimate || {};
-    const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
-    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
-    const due = new Date(issuedAt);
-    due.setDate(due.getDate() + 14);
-    const amount = source.lines?.length ? estimate.total : roundMoney2(order.total ?? estimate.total);
-    return {
-      id: number,
-      number,
-      ro: order.id,
-      customer: order.customer,
-      vehicle: order.vehicle,
-      amount,
-      grossSubtotal: estimate.grossSubtotal,
-      subtotal: estimate.subtotal,
-      discountPercent: estimate.discountPercent,
-      discountAmount: estimate.discountAmount,
-      discountReason: estimate.discountReason,
-      fees: estimate.fees,
-      tax: estimate.tax,
-      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
-      status: "sent",
-      date: issuedAt.toISOString().slice(0, 10),
-      due: due.toISOString().slice(0, 10),
-      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
-      sourceEstimateApproval: order.estimateApproval || null,
-      createdAt: issuedAt.toISOString()
-    };
-  }
-  function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
-    const hadApproval = Boolean(
-      order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status)
-    );
-    return {
-      ...order,
-      estimate: {
-        ...estimate,
-        ...recalculated,
-        summary: estimate.summary || order.estimate?.summary || "",
-        generatedAt: estimate.generatedAt || order.estimate?.generatedAt || editedAt,
-        revisedAt: editedAt
-      },
-      labor: recalculated.labor,
-      laborHours: recalculated.laborHours,
-      parts: recalculated.parts,
-      tax: recalculated.tax,
-      total: recalculated.total,
-      estimateApproval: hadApproval ? null : order.estimateApproval,
-      linesLockedAt: hadApproval ? null : order.linesLockedAt,
-      estimateRevisionPending: hadApproval || Boolean(order.estimateRevisionPending),
-      estimateRevisionPreviousStatus: hadApproval ? order.status : order.estimateRevisionPreviousStatus,
-      updatedAt: order.updatedAt
-    };
-  }
-  function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const source = order.estimate || {};
-    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
-    return {
-      ...invoice,
-      amount: estimate.total,
-      subtotal: estimate.subtotal,
-      tax: estimate.tax,
-      taxRate: estimate.taxRate,
-      fees: estimate.fees,
-      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
-      signature: null,
-      sourceEstimateApproval: null,
-      revisedAt: editedAt
-    };
-  }
-  var roundMoney2, SHOP_SUPPLIES_RULES, AFTER_MIDNIGHT_FEE_PRESET;
-  var init_estimate_workflow = __esm({
-    "src/modules/estimate-workflow.js"() {
-      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
-      SHOP_SUPPLIES_RULES = Object.freeze({
-        shopSuppliesRate: 3,
-        shopSuppliesCap: 20
-      });
-      AFTER_MIDNIGHT_FEE_PRESET = Object.freeze({
-        code: "after-midnight",
-        type: "fee",
-        description: "a $200 flat fee for labor performed between midnight and 6 AM, itemized as its own line on the work order.",
-        quantity: 1,
-        unitPrice: 200,
-        amount: 200
-      });
-    }
-  });
-
-  // src/modules/repair-order-flow.js
-  function isoNow(value2) {
-    if (value2 instanceof Date) return value2.toISOString();
-    if (typeof value2 === "string" && Number.isFinite(Date.parse(value2))) return value2;
-    return (/* @__PURE__ */ new Date()).toISOString();
-  }
-  function normalizeFlowStatus(status) {
-    const value2 = String(status || "").trim().toLowerCase();
-    return REPAIR_FLOW_STATUSES.includes(value2) ? value2 : null;
-  }
-  function canTransitionRepairFlow(from, to) {
-    const current = normalizeFlowStatus(from) || "intake";
-    const next = normalizeFlowStatus(to);
-    if (!next) return false;
-    if (current === next) return true;
-    return (TRANSITIONS[current] || []).includes(next);
-  }
-  function appendFlowAuditEvent(order = {}, event = {}, at = /* @__PURE__ */ new Date()) {
-    const timestamp = isoNow(at);
-    const entry = {
-      at: timestamp,
-      type: String(event.type || "note").trim() || "note",
-      from: event.from ? String(event.from) : null,
-      to: event.to ? String(event.to) : null,
-      actorId: event.actorId ? String(event.actorId) : null,
-      actorName: event.actorName ? String(event.actorName) : null,
-      note: String(event.note || "").trim().slice(0, 500),
-      meta: event.meta && typeof event.meta === "object" ? event.meta : void 0
-    };
-    const flowAudit = [...order.flowAudit || [], entry].slice(-200);
-    return { ...order, flowAudit, updatedAt: timestamp };
-  }
-  function advanceRepairFlowStatus(order = {}, nextStatus, actor = {}, at = /* @__PURE__ */ new Date()) {
-    const current = normalizeFlowStatus(order.flowStatus || order.status) || "intake";
-    const next = normalizeFlowStatus(nextStatus);
-    if (!next) throw new Error("Unknown repair-flow status");
-    if (!canTransitionRepairFlow(current, next)) {
-      throw new Error(`Cannot move repair flow from ${current} to ${next}`);
-    }
-    const stamped = appendFlowAuditEvent(order, {
-      type: "status",
-      from: current,
-      to: next,
-      actorId: actor.id || actor.userId,
-      actorName: actor.name || actor.email,
-      note: actor.note || ""
-    }, at);
-    return {
-      ...stamped,
-      flowStatus: next,
-      status: next === "estimate_draft" ? "estimate" : next
-    };
-  }
-  function inspectionFindingsToEstimateLines(inspection = {}, options = {}) {
-    const laborRate = Math.max(0, Number(options.laborRate) || 0);
-    const items = Array.isArray(inspection.items) ? inspection.items : [];
-    const lines = [];
-    let index = 0;
-    for (const item of items) {
-      const status = String(item.status || "").toLowerCase();
-      if (!FINDING_STATUSES.has(status)) continue;
-      index += 1;
-      const label2 = String(item.label || item.name || `Finding ${index}`).trim();
-      const note = String(item.note || item.measurement || "").trim();
-      lines.push(normalizeEstimateLine({
-        id: `insp-${inspection.id || "dvi"}-${item.id || index}`,
-        type: "labor",
-        description: label2,
-        notes: [status, note].filter(Boolean).join(" \u2014 "),
-        hours: Number(item.suggestedHours) > 0 ? Number(item.suggestedHours) : 0,
-        laborRate,
-        source: "inspection",
-        inspectionItemId: item.id || null,
-        inspectionStatus: status,
-        photoKeys: Array.isArray(item.photoKeys) ? item.photoKeys : void 0
-      }, index - 1));
-    }
-    const photoKeys = Array.isArray(inspection.photoKeys) ? inspection.photoKeys.filter(Boolean) : [];
-    return {
-      lines,
-      photoKeys,
-      recommendations: String(inspection.recommendations || "").trim(),
-      inspectionId: inspection.id || null,
-      catalogId: inspection.catalogId || null
-    };
-  }
-  function estimateFromInspection(inspection = {}, options = {}, at = /* @__PURE__ */ new Date()) {
-    const built = inspectionFindingsToEstimateLines(inspection, options);
-    const taxRate = Math.max(0, Number(options.taxRate) || 0);
-    const estimate = calculateEstimate(built.lines, taxRate, options.fees || []);
-    return {
-      ...estimate,
-      summary: built.recommendations || options.summary || "",
-      generatedAt: isoNow(at),
-      sourceInspectionId: built.inspectionId,
-      sourceCatalogId: built.catalogId,
-      photoKeys: built.photoKeys
-    };
-  }
-  function applyEstimateFromInspection(order = {}, inspection = {}, options = {}, actor = {}, at = /* @__PURE__ */ new Date()) {
-    const estimate = estimateFromInspection(inspection, {
-      laborRate: options.laborRate ?? order.laborRate,
-      taxRate: options.taxRate ?? order.estimate?.taxRate,
-      fees: options.fees || order.estimate?.fees || [],
-      summary: options.summary
-    }, at);
-    let next = {
-      ...order,
-      estimate,
-      labor: estimate.labor,
-      laborHours: estimate.laborHours,
-      parts: estimate.parts,
-      tax: estimate.tax,
-      total: estimate.total,
-      inspectionId: inspection.id || order.inspectionId || null,
-      inspectionPhotoKeys: estimate.photoKeys
-    };
-    next = advanceRepairFlowStatus(next, "estimate_draft", actor, at);
-    return appendFlowAuditEvent(next, {
-      type: "estimate_from_inspection",
-      actorId: actor.id || actor.userId,
-      actorName: actor.name || actor.email,
-      note: `Built estimate from inspection ${inspection.id || ""}`.trim(),
-      meta: { inspectionId: inspection.id || null, lineCount: estimate.lines.length }
-    }, at);
-  }
-  var REPAIR_FLOW_STATUSES, TRANSITIONS, FINDING_STATUSES;
-  var init_repair_order_flow = __esm({
-    "src/modules/repair-order-flow.js"() {
-      init_estimate_workflow();
-      REPAIR_FLOW_STATUSES = Object.freeze([
-        "intake",
-        "inspecting",
-        "estimate_draft",
-        "awaiting_approval",
-        "approved",
-        "declined",
-        "in_progress",
-        "waiting_parts",
-        "completed",
-        "invoiced",
-        "paid"
-      ]);
-      TRANSITIONS = Object.freeze({
-        intake: ["inspecting", "estimate_draft"],
-        inspecting: ["estimate_draft", "awaiting_approval"],
-        estimate_draft: ["awaiting_approval", "declined"],
-        awaiting_approval: ["approved", "declined", "estimate_draft"],
-        approved: ["in_progress", "waiting_parts", "completed", "invoiced"],
-        declined: ["estimate_draft"],
-        in_progress: ["waiting_parts", "completed", "invoiced"],
-        waiting_parts: ["in_progress", "completed"],
-        completed: ["invoiced"],
-        invoiced: ["paid"],
-        paid: []
-      });
-      FINDING_STATUSES = /* @__PURE__ */ new Set(["soon", "critical", "attention", "fail", "monitor"]);
-    }
-  });
-
   // src/modules/file-upload.js
   async function uploadErrorMessage(response) {
     const fallback = `Upload to storage failed (${response.status})`;
@@ -2616,82 +1951,6 @@
   var init_ai_workflow = __esm({
     "src/modules/ai-workflow.js"() {
       init_mileage();
-    }
-  });
-
-  // src/modules/customer-intake.js
-  function normalizeCustomerSearch(value2) {
-    return String(value2 || "").trim().replace(/\s+/g, " ");
-  }
-  function shouldSearchCustomers(value2) {
-    return normalizeCustomerSearch(value2).length >= CUSTOMER_SEARCH_MIN_LENGTH;
-  }
-  function matchesName(name, query2) {
-    const source = String(name || "").toLocaleLowerCase();
-    return normalizeCustomerSearch(query2).toLocaleLowerCase().split(" ").every((token) => source.includes(token));
-  }
-  function vehicleLabel(vehicle) {
-    return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ") || vehicle.vehicle || vehicle.description || "Vehicle on file";
-  }
-  function enrichCustomer(customer, vehicles) {
-    const linkedVehicles = vehicles.filter((vehicle) => customer.id && vehicle.customerId === customer.id || String(vehicle.customer || "").toLocaleLowerCase() === String(customer.name || "").toLocaleLowerCase()).map((vehicle) => ({ ...vehicle, label: vehicleLabel(vehicle) }));
-    return {
-      ...customer,
-      id: String(customer.id || customer.name || ""),
-      vehicles: linkedVehicles,
-      vehicleCount: linkedVehicles.length || Number(customer.vehicles || 0),
-      recentVehicle: linkedVehicles[0] || null
-    };
-  }
-  function uniqueCustomers(customers2) {
-    const seen = /* @__PURE__ */ new Set();
-    return customers2.filter((customer) => {
-      const key = String(customer.id || customer.name || "").trim().toLocaleLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-  function localCustomerMatches(query2, customers2 = [], vehicles = []) {
-    if (!shouldSearchCustomers(query2)) return [];
-    return uniqueCustomers(customers2).filter((customer) => matchesName(customer.name, query2)).sort((left, right) => String(left.name).localeCompare(String(right.name))).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
-  }
-  function customerContactFields(data = {}, existing = null) {
-    const source = data && typeof data === "object" ? data : {};
-    const notesProvided = Object.prototype.hasOwnProperty.call(source, "billingNotes") && source.billingNotes != null;
-    return {
-      name: String(source.name ?? existing?.name ?? "").trim(),
-      phone: String(source.phone ?? "").trim(),
-      email: String(source.email ?? "").trim(),
-      billingAddress: String(source.billingAddress ?? "").trim(),
-      billingNotes: notesProvided ? String(source.billingNotes).trim() : String(existing?.billingNotes || "").trim()
-    };
-  }
-  function customerContactChanged(existing, fields) {
-    if (!existing) return true;
-    return CONTACT_FIELDS.some((key) => String(existing[key] || "").trim() !== String(fields?.[key] || "").trim());
-  }
-  function mergeSavedCustomer(record, response) {
-    if (!response || response.queued) return record;
-    const saved = { ...record, ...response, id: response.id || record.id };
-    for (const key of CONTACT_FIELDS) {
-      if (response[key] == null) saved[key] = record[key] ?? "";
-    }
-    return saved;
-  }
-  function likelyDuplicateCustomers({ phone = "", email = "" }, customers2 = [], vehicles = []) {
-    const phoneDigits = String(phone || "").replace(/\D/g, "");
-    const normalizedEmail = String(email || "").trim().toLocaleLowerCase();
-    if (!phoneDigits && !normalizedEmail) return [];
-    return uniqueCustomers(customers2).filter((customer) => phoneDigits && String(customer.phone || "").replace(/\D/g, "") === phoneDigits || normalizedEmail && String(customer.email || "").trim().toLocaleLowerCase() === normalizedEmail).slice(0, CUSTOMER_SEARCH_RESULT_LIMIT).map((customer) => enrichCustomer(customer, vehicles));
-  }
-  var CUSTOMER_SEARCH_MIN_LENGTH, CUSTOMER_SEARCH_DEBOUNCE_MS, CUSTOMER_SEARCH_RESULT_LIMIT, CONTACT_FIELDS;
-  var init_customer_intake = __esm({
-    "src/modules/customer-intake.js"() {
-      CUSTOMER_SEARCH_MIN_LENGTH = 3;
-      CUSTOMER_SEARCH_DEBOUNCE_MS = 275;
-      CUSTOMER_SEARCH_RESULT_LIMIT = 8;
-      CONTACT_FIELDS = ["name", "phone", "email", "billingAddress", "billingNotes"];
     }
   });
 
@@ -3131,17 +2390,6 @@ button{margin-top:12px;padding:8px 14px}
       init_withholding();
       init_jurisdictions();
       init_forms();
-    }
-  });
-
-  // src/modules/customer-metrics.js
-  function customerLifetimeSpend(customer, invoices2 = []) {
-    const linked = invoices2.filter((invoice) => invoice.customer === customer?.name);
-    if (!linked.length) return Number(customer?.spend || 0);
-    return Math.round(linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0) * 100) / 100;
-  }
-  var init_customer_metrics = __esm({
-    "src/modules/customer-metrics.js"() {
     }
   });
 
@@ -3603,17 +2851,17 @@ button{margin-top:12px;padding:8px 14px}
     legacyPaid = false
   } = {}) {
     const history = paymentsForTarget(payments2, targetType, targetId, linkedTargetId);
-    const recordedPaid = roundMoney3(history.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-    const amount = roundMoney3(total);
+    const recordedPaid = roundMoney2(history.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+    const amount = roundMoney2(total);
     const paid = legacyPaid && recordedPaid === 0 ? amount : Math.min(amount, recordedPaid);
-    const balance = roundMoney3(Math.max(0, amount - paid));
+    const balance = roundMoney2(Math.max(0, amount - paid));
     const status = balance === 0 && amount > 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
     return { total: amount, paid, balance, status, history };
   }
-  var roundMoney3;
+  var roundMoney2;
   var init_payments = __esm({
     "src/modules/payments.js"() {
-      roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      roundMoney2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
     }
   });
 
@@ -4526,6 +3774,214 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/modules/estimate-workflow.js
+  function isDeclinedEstimateLine(line) {
+    return line?.approvalStatus === "declined";
+  }
+  function billableEstimateLines(lines = []) {
+    return lines.filter((line) => !isDeclinedEstimateLine(line));
+  }
+  function normalizeTechnicianIds(line = {}) {
+    const source = Array.isArray(line.technicianIds) ? line.technicianIds : line.technicianId ? [line.technicianId] : [];
+    return [...new Set(source.map((value2) => String(value2 || "").trim()).filter(Boolean))];
+  }
+  function estimatePartPriceStatus(previousStatus, unitPrice) {
+    return previousStatus === "pending" && Number(unitPrice) <= 0 ? "pending" : "priced";
+  }
+  function normalizeEstimateLine(line = {}, index = 0) {
+    const type = line.type === "part" ? "part" : "labor";
+    const quantity = Math.max(0, Number(line.quantity ?? (type === "part" ? 1 : line.hours)) || 0);
+    const unitPrice = Math.max(0, Number(line.unitPrice ?? (type === "part" ? line.price : line.laborRate)) || 0);
+    const hours = type === "labor" ? Math.max(0, Number(line.hours ?? quantity) || 0) : 0;
+    const laborRate = type === "labor" ? Math.max(0, Number(line.laborRate ?? unitPrice) || 0) : 0;
+    const total = type === "labor" ? roundMoney3(hours * laborRate) : roundMoney3(quantity * unitPrice);
+    return {
+      ...line,
+      id: String(line.id || `line-${index + 1}`),
+      type,
+      description: String(line.description || line.service || line.name || (type === "part" ? "Part" : "Labor")),
+      notes: String(line.notes || line.explanation || ""),
+      partNumber: type === "part" ? String(line.partNumber || line.part_number || line.inventorySku || "") : "",
+      quantity,
+      unitPrice,
+      hours,
+      laborRate,
+      total,
+      technicianIds: type === "labor" ? normalizeTechnicianIds(line) : [],
+      approvalStatus: ["approved", "declined"].includes(line.approvalStatus) ? line.approvalStatus : "pending"
+    };
+  }
+  function laborLinePrintRows(lines = [], technicians = []) {
+    const names = new Map(technicians.map((technician) => [
+      String(technician.id || ""),
+      String(technician.name || technician.techName || technician.id || "Technician unavailable")
+    ]));
+    return lines.map((line, index) => normalizeEstimateLine(line, index)).filter((line) => line.type === "labor").flatMap((line) => {
+      const technicianIds = normalizeTechnicianIds(line);
+      const assignments = !technicianIds.length ? [null] : technicianIds;
+      return assignments.map((technicianId, index) => ({
+        line,
+        technicianId,
+        technicianName: technicianId ? names.get(technicianId) || "Technician unavailable" : "Unassigned",
+        lineTotal: index === 0 ? line.total : null
+      }));
+    });
+  }
+  function calculateEstimate(lines = [], taxRate = 0, fees = []) {
+    const normalizedLines = lines.map((line, index) => normalizeEstimateLine(line, index));
+    const billableLines = billableEstimateLines(normalizedLines);
+    const normalizedFees = fees.map((fee) => ({
+      ...fee,
+      description: String(fee.description || "Fee"),
+      amount: roundMoney3(Math.max(0, Number(fee.amount) || 0))
+    }));
+    const labor = roundMoney3(billableLines.filter((line) => line.type === "labor").reduce((sum, line) => sum + line.total, 0));
+    const parts = roundMoney3(billableLines.filter((line) => line.type === "part").reduce((sum, line) => sum + line.total, 0));
+    const feeTotal = roundMoney3(normalizedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    const subtotal = roundMoney3(labor + parts + feeTotal);
+    const safeTaxRate = Math.max(0, Number(taxRate) || 0);
+    const tax = roundMoney3(subtotal * safeTaxRate / 100);
+    return {
+      lines: normalizedLines,
+      fees: normalizedFees,
+      labor,
+      laborHours: roundMoney3(billableLines.reduce((sum, line) => sum + line.hours, 0)),
+      parts,
+      subtotal,
+      taxRate: safeTaxRate,
+      tax,
+      total: roundMoney3(subtotal + tax)
+    };
+  }
+  function calculateShopTotals(lines, estimate, { repriceSupplies = false } = {}) {
+    const taxRate = Math.max(0, Number(estimate.taxRate) || 0);
+    let fees = estimate.fees || [];
+    let totals = calculateEstimate(lines, taxRate, fees);
+    const hasSuppliesFee = fees.some((fee) => /shop supplies/i.test(fee.description));
+    if (repriceSupplies && hasSuppliesFee) {
+      const supplies = totals.labor > 0 ? roundMoney3(Math.min(
+        SHOP_SUPPLIES_RULES.shopSuppliesCap,
+        totals.labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
+      )) : 0;
+      fees = fees.map((fee) => /shop supplies/i.test(fee.description) ? { ...fee, amount: supplies } : fee).filter((fee) => !/shop supplies/i.test(fee.description) || fee.amount > 0);
+      totals = calculateEstimate(lines, taxRate, fees);
+    }
+    const discountPercent = Math.min(100, Math.max(0, Number(estimate.discountPercent) || 0));
+    const discountAmount = roundMoney3(totals.subtotal * discountPercent / 100);
+    const subtotal = roundMoney3(totals.subtotal - discountAmount);
+    const tax = roundMoney3(subtotal * taxRate / 100);
+    return {
+      ...totals,
+      grossSubtotal: totals.subtotal,
+      discountPercent,
+      discountReason: String(estimate.discountReason || ""),
+      discountAmount,
+      subtotal,
+      tax,
+      total: roundMoney3(subtotal + tax)
+    };
+  }
+  function approvedEstimate(estimate = {}, decisions = {}) {
+    const lines = (estimate.lines || []).map((line, index) => {
+      const normalized = normalizeEstimateLine(line, index);
+      return {
+        ...normalized,
+        approvalStatus: decisions[normalized.id] === "declined" ? "declined" : "approved"
+      };
+    });
+    const approvedLines = lines.filter((line) => line.approvalStatus === "approved");
+    const totals = calculateShopTotals(approvedLines, estimate, { repriceSupplies: true });
+    return {
+      ...estimate,
+      ...totals,
+      lines,
+      approvedLineCount: approvedLines.length,
+      declinedLineCount: lines.length - approvedLines.length
+    };
+  }
+  function invoiceRecordForOrder(order, issuedAt = /* @__PURE__ */ new Date()) {
+    const source = order.estimate || {};
+    const estimate = calculateShopTotals(source.lines || [], source, { repriceSupplies: true });
+    const number = `INV-${String(order.id || issuedAt.getTime()).replace(/^RO-/i, "").replace(/[^A-Za-z0-9-]/g, "")}`;
+    const due = new Date(issuedAt);
+    due.setDate(due.getDate() + 14);
+    const amount = source.lines?.length ? estimate.total : roundMoney3(order.total ?? estimate.total);
+    return {
+      id: number,
+      number,
+      ro: order.id,
+      customer: order.customer,
+      vehicle: order.vehicle,
+      amount,
+      grossSubtotal: estimate.grossSubtotal,
+      subtotal: estimate.subtotal,
+      discountPercent: estimate.discountPercent,
+      discountAmount: estimate.discountAmount,
+      discountReason: estimate.discountReason,
+      fees: estimate.fees,
+      tax: estimate.tax,
+      taxRate: Math.max(0, Number(estimate.taxRate) || 0),
+      status: "sent",
+      date: issuedAt.toISOString().slice(0, 10),
+      due: due.toISOString().slice(0, 10),
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
+      sourceEstimateApproval: order.estimateApproval || null,
+      createdAt: issuedAt.toISOString()
+    };
+  }
+  function workOrderWithEditedEstimate(order = {}, estimate = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const recalculated = calculateEstimate(estimate.lines || [], estimate.taxRate, estimate.fees || []);
+    const hadApproval = Boolean(
+      order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status)
+    );
+    return {
+      ...order,
+      estimate: {
+        ...estimate,
+        ...recalculated,
+        summary: estimate.summary || order.estimate?.summary || "",
+        generatedAt: estimate.generatedAt || order.estimate?.generatedAt || editedAt,
+        revisedAt: editedAt
+      },
+      labor: recalculated.labor,
+      laborHours: recalculated.laborHours,
+      parts: recalculated.parts,
+      tax: recalculated.tax,
+      total: recalculated.total,
+      estimateApproval: hadApproval ? null : order.estimateApproval,
+      linesLockedAt: hadApproval ? null : order.linesLockedAt,
+      estimateRevisionPending: hadApproval || Boolean(order.estimateRevisionPending),
+      estimateRevisionPreviousStatus: hadApproval ? order.status : order.estimateRevisionPreviousStatus,
+      updatedAt: order.updatedAt
+    };
+  }
+  function invoiceWithEditedWorkOrder(invoice = {}, order = {}, editedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const source = order.estimate || {};
+    const estimate = calculateEstimate(source.lines || [], source.taxRate, source.fees || []);
+    return {
+      ...invoice,
+      amount: estimate.total,
+      subtotal: estimate.subtotal,
+      tax: estimate.tax,
+      taxRate: estimate.taxRate,
+      fees: estimate.fees,
+      lines: billableEstimateLines(estimate.lines).map((line, index) => normalizeEstimateLine(line, index)),
+      signature: null,
+      sourceEstimateApproval: null,
+      revisedAt: editedAt
+    };
+  }
+  var roundMoney3, SHOP_SUPPLIES_RULES;
+  var init_estimate_workflow = __esm({
+    "src/modules/estimate-workflow.js"() {
+      roundMoney3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      SHOP_SUPPLIES_RULES = Object.freeze({
+        shopSuppliesRate: 3,
+        shopSuppliesCap: 20
+      });
+    }
+  });
+
   // src/modules/estimate-templates.js
   function calculateShopEstimate(lines = [], {
     taxRate = 0,
@@ -4622,8 +4078,7 @@ button{margin-top:12px;padding:8px 14px}
       laborRate: resolvedLaborRate,
       laborSource: String(labor.source || "Customer conversation; verify before authorization")
     }));
-    const feeLines = draft.afterMidnightFee ? [afterMidnightFeeLine("assistant-fee-after-midnight")] : [];
-    const totals = calculateShopEstimate([...partLines, ...laborLines, ...feeLines], {
+    const totals = calculateShopEstimate([...partLines, ...laborLines], {
       laborRate: resolvedLaborRate,
       taxRate,
       discountPercent: draft.discountPercent,
@@ -4861,7 +4316,7 @@ button{margin-top:12px;padding:8px 14px}
     if (person && company) return `${person} (${company})`;
     return person || company;
   }
-  function vehicleLabel2(draft = {}) {
+  function vehicleLabel(draft = {}) {
     const vehicle = draft.vehicle || {};
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
   }
@@ -4871,7 +4326,7 @@ button{margin-top:12px;padding:8px 14px}
   }
   function missingVehicleFields(draft = {}) {
     const vehicle = draft.vehicle || {};
-    const identity = vehicleLabel2(draft);
+    const identity = vehicleLabel(draft);
     const missing = [];
     if (!identity && !String(vehicle.vin || "").trim()) missing.push("vehicle");
     return missing;
@@ -4962,7 +4417,7 @@ button{margin-top:12px;padding:8px 14px}
       id,
       customer: customerDisplayName(draft),
       phone: String(draft.customer?.phone || "").trim(),
-      vehicle: vehicleLabel2(draft) || "Vehicle pending",
+      vehicle: vehicleLabel(draft) || "Vehicle pending",
       vin: String(draft.vehicle?.vin || "").trim().toUpperCase() || "VIN pending",
       complaint: String(draft.concern?.description || "").trim() || "Customer concern pending",
       status,
@@ -5087,7 +4542,7 @@ ${analysis ? `<section class="ai-notice"><span>${escapeHtml3(analysis.notice || 
       const selected = (draft.assignments || []).find((item) => item.role === role);
       return `<option value="${escapeAttr3(user.id)}" ${selected?.employeeId === user.id ? "selected" : ""}>${escapeHtml3(technicianName(user))}</option>`;
     }).join("")}`;
-    return `<dl class="intake-review"><div><dt>Customer</dt><dd>${escapeHtml3(customerDisplayName(draft) || "Missing")}</dd></div><div><dt>Vehicle</dt><dd>${escapeHtml3(vehicleLabel2(draft) || draft.vehicle.vin || "Missing")}</dd></div><div><dt>Concern</dt><dd>${escapeHtml3(draft.concern.description || "Missing")}</dd></div><div><dt>Photos</dt><dd>${(draft.photos || []).length}</dd></div></dl>
+    return `<dl class="intake-review"><div><dt>Customer</dt><dd>${escapeHtml3(customerDisplayName(draft) || "Missing")}</dd></div><div><dt>Vehicle</dt><dd>${escapeHtml3(vehicleLabel(draft) || draft.vehicle.vin || "Missing")}</dd></div><div><dt>Concern</dt><dd>${escapeHtml3(draft.concern.description || "Missing")}</dd></div><div><dt>Photos</dt><dd>${(draft.photos || []).length}</dd></div></dl>
 <div class="form-grid"><label>Primary technician<select name="assign-primary">${options("primary")}</select></label><label>Secondary technician<select name="assign-secondary">${options("secondary")}</select></label><label>Apprentice<select name="assign-apprentice">${options("apprentice")}</select></label></div>
 ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) => `<span>${escapeHtml3(problem)}</span>`).join("")}</div>`}
 <p class="form-help">Convert copies this intake onto one work order. Customer, vehicle, photos, estimate, and diagnostic notes are not typed again.</p>`;
@@ -5329,78 +4784,6 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     }
   });
 
-  // src/modules/work-order-editor.js
-  function customersWithSelected(customers2 = [], selected = "") {
-    const records = Array.isArray(customers2) ? customers2 : [];
-    const selectedName = String(selected || "");
-    if (!selectedName || records.some((customer) => customer?.name === selectedName)) return records;
-    return [{ name: selectedName }, ...records];
-  }
-  function customLaborDraft(id, laborRate) {
-    return {
-      id,
-      type: "labor",
-      description: "",
-      descriptionPlaceholder: "Custom labor",
-      hours: 1,
-      laborRate: Number(laborRate) || 0
-    };
-  }
-  function estimateEditorDescription(line = {}, normalizedDescription = "") {
-    const placeholder = String(line.descriptionPlaceholder || "");
-    return {
-      value: placeholder ? String(line.description || "") : String(normalizedDescription || ""),
-      placeholder
-    };
-  }
-  function normalizedFeeText(value2) {
-    return String(value2 || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  }
-  function isAfterMidnightFeeLine(line = {}) {
-    if (line.code === "after-midnight") return true;
-    const text = normalizedFeeText(`${line.description || line.service || ""} ${line.notes || line.explanation || ""}`);
-    const hasTime = /\bmidnight\b|\bovernight\b|\blate night\b|\bafter 12(?: 00)? a?m\b/.test(text);
-    const hasCharge = /\bfee\b|\bsurcharge\b|\bdifferen(?:tial|tail)\b|\bdifferentail\b/.test(text);
-    return line.type !== "part" && hasTime && hasCharge;
-  }
-  function isLegacyAfterMidnightLine(line = {}) {
-    return line.code !== "after-midnight" && line.type !== "fee" && isAfterMidnightFeeLine(line);
-  }
-  function afterMidnightFeeFingerprint(lines = []) {
-    return JSON.stringify((Array.isArray(lines) ? lines : []).filter(isAfterMidnightFeeLine).map((line) => ({
-      id: String(line.id || ""),
-      description: String(line.description || ""),
-      unitPrice: Number(line.unitPrice ?? line.amount) || 0
-    })).sort((left, right) => left.id.localeCompare(right.id)));
-  }
-  function terminalOrderChangesAfterMidnightFee(status, beforeLines = [], afterLines = []) {
-    if (!["completed", "invoiced"].includes(String(status || ""))) return false;
-    return afterMidnightFeeFingerprint(beforeLines) !== afterMidnightFeeFingerprint(afterLines);
-  }
-  function invoicePrintLineItems(invoice = {}) {
-    const lineItems = (Array.isArray(invoice.lines) ? invoice.lines : []).map((line) => {
-      const type = ["part", "fee"].includes(line?.type) ? line.type : "labor";
-      const amount = Math.max(0, Number(line?.total) || 0);
-      return {
-        type,
-        description: String(line?.description || line?.service || (type === "fee" ? "Fee" : type === "part" ? "Part" : "Labor")),
-        detail: type === "fee" ? "Flat fee" : type === "part" ? `${Math.max(0, Number(line?.quantity) || 0)} \xD7 ${Math.max(0, Number(line?.unitPrice) || 0).toFixed(2)}` : `${Math.max(0, Number(line?.hours) || 0).toFixed(2)} hr \xD7 ${Math.max(0, Number(line?.laborRate) || 0).toFixed(2)}`,
-        amount
-      };
-    });
-    const feeItems = (Array.isArray(invoice.fees) ? invoice.fees : []).map((fee) => ({
-      type: "fee",
-      description: String(fee?.description || "Fee"),
-      detail: "Fee",
-      amount: Math.max(0, Number(fee?.amount) || 0)
-    }));
-    return [...lineItems, ...feeItems];
-  }
-  var init_work_order_editor = __esm({
-    "src/modules/work-order-editor.js"() {
-    }
-  });
-
   // src/modules/shop-os/bay.js
   function signedEstimateForOrder(order, estimates = []) {
     if (!order?.id) return null;
@@ -5463,156 +4846,8 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     }
   });
 
-  // src/modules/estimate-approval.js
-  function pngCrc32(bytes, start, end) {
-    let crc = 4294967295;
-    for (let index = start; index < end; index++) {
-      crc ^= bytes[index];
-      for (let bit = 0; bit < 8; bit++) {
-        crc = crc >>> 1 ^ (crc & 1 ? 3988292384 : 0);
-      }
-    }
-    return (crc ^ 4294967295) >>> 0;
-  }
-  function validPngDataUrl(value2) {
-    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(value2 || ""));
-    if (!match || match[1].length > Math.ceil(SIGNATURE_DATA_LIMIT * 4 / 3) + 4) return false;
-    try {
-      const binary = globalThis.atob(match[1]);
-      if (binary.length < 45 || binary.length > SIGNATURE_DATA_LIMIT) return false;
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      if (![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)) return false;
-      const view = new DataView(bytes.buffer);
-      let offset = 8;
-      let sawHeader = false;
-      let sawImageData = false;
-      while (offset + 12 <= bytes.length) {
-        const length = view.getUint32(offset);
-        const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
-        const nextOffset = offset + 12 + length;
-        if (nextOffset > bytes.length) return false;
-        const storedCrc = view.getUint32(offset + 8 + length);
-        if (pngCrc32(bytes, offset + 4, offset + 8 + length) !== storedCrc) return false;
-        if (!sawHeader) {
-          if (type !== "IHDR" || length !== 13) return false;
-          const width = view.getUint32(offset + 8);
-          const height = view.getUint32(offset + 12);
-          if (!width || !height) return false;
-          sawHeader = true;
-        }
-        if (type === "IDAT" && length > 0) sawImageData = true;
-        if (type === "IEND") {
-          return length === 0 && sawHeader && sawImageData && nextOffset === bytes.length;
-        }
-        offset = nextOffset;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }
-  function approvalRecorder(user = {}) {
-    return {
-      id: String(user.id || user.userId || "").trim(),
-      name: String(user.name || user.email || "Staff member").trim(),
-      email: String(user.email || "").trim().toLowerCase()
-    };
-  }
-  function normalizeEstimateApproval(approval) {
-    if (!approval || typeof approval !== "object") return approval || null;
-    if (approval.status !== "approved") return { ...approval };
-    const inferredType = approval.type || "signature";
-    return {
-      ...approval,
-      type: String(inferredType).trim().toLowerCase(),
-      customLabel: trimmed(approval.customLabel, APPROVAL_CUSTOM_LABEL_MAX),
-      authorizationName: trimmed(approval.authorizationName, 100),
-      approvedAt: String(approval.approvedAt || approval.signedAt || "").trim(),
-      note: trimmed(approval.note, APPROVAL_NOTE_MAX),
-      recordedBy: approval.recordedBy && typeof approval.recordedBy === "object" ? approvalRecorder(approval.recordedBy) : approval.recordedBy ? approvalRecorder({ name: approval.recordedBy }) : null
-    };
-  }
-  function validateEstimateApproval(approval) {
-    const normalized = normalizeEstimateApproval(approval);
-    if (!normalized || normalized.status !== "approved") return normalized;
-    if (!APPROVAL_TYPE_VALUES.has(normalized.type)) {
-      throw new Error("Choose a valid estimate approval type");
-    }
-    if (!normalized.authorizationName) {
-      throw new Error("Approver name is required");
-    }
-    if (normalized.type === "signature") {
-      const signatureKey = String(normalized.signatureKey || "").trim();
-      const signatureDataUrl = String(normalized.signatureDataUrl || "");
-      if (!signatureKey && !validPngDataUrl(signatureDataUrl)) {
-        throw new Error("A stored signature is required for signature approval");
-      }
-      if (!normalized.signedAt || !Number.isFinite(Date.parse(normalized.signedAt))) {
-        throw new Error("Signature timestamp is required");
-      }
-    }
-    if (normalized.type === "other" && !normalized.customLabel) {
-      throw new Error("Custom approval type is required when Other is selected");
-    }
-    if (String(approval?.customLabel || "").trim().length > APPROVAL_CUSTOM_LABEL_MAX) {
-      throw new Error(`Custom approval type must be ${APPROVAL_CUSTOM_LABEL_MAX} characters or fewer`);
-    }
-    if (String(approval?.note || "").trim().length > APPROVAL_NOTE_MAX) {
-      throw new Error(`Approval note must be ${APPROVAL_NOTE_MAX} characters or fewer`);
-    }
-    if (!normalized.approvedAt || !Number.isFinite(Date.parse(normalized.approvedAt))) {
-      throw new Error("Approval timestamp is required");
-    }
-    if (normalized.type !== "signature" && !normalized.recordedBy?.name) {
-      throw new Error("The staff member recording this approval is required");
-    }
-    return normalized;
-  }
-  function approvalTypeLabel(approval) {
-    const normalized = normalizeEstimateApproval(approval);
-    if (!normalized) return "";
-    if (normalized.type === "other") return normalized.customLabel || "Other";
-    return ESTIMATE_APPROVAL_TYPES.find((option) => option.value === normalized.type)?.label || "Signature";
-  }
-  function approvalSummary(approval, formatDate = (value2) => new Date(value2).toLocaleString()) {
-    const normalized = normalizeEstimateApproval(approval);
-    if (!normalized || normalized.status !== "approved") return "";
-    const when = normalized.approvedAt ? formatDate(normalized.approvedAt) : "";
-    if (normalized.type === "signature") {
-      return [`Signed by ${normalized.authorizationName || "customer"}`, when].filter(Boolean).join(" \u2014 ");
-    }
-    const method = normalized.type === "other" ? `Approved: ${normalized.customLabel || "Other"}` : `Approved by ${approvalTypeLabel(normalized).replace(/ approval$/i, "").toLowerCase()}`;
-    const approver = normalized.authorizationName ? ` \u2014 ${normalized.authorizationName}` : "";
-    const note = normalized.note ? ` (${normalized.note})` : "";
-    const recorder = normalized.recordedBy?.name ? `recorded by ${normalized.recordedBy.name}` : "";
-    return [`${method}${approver}${note}`, when, recorder].filter(Boolean).join(", ");
-  }
-  var APPROVAL_CUSTOM_LABEL_MAX, APPROVAL_NOTE_MAX, ESTIMATE_APPROVAL_TYPES, APPROVAL_TYPE_VALUES, SIGNATURE_DATA_LIMIT, trimmed;
-  var init_estimate_approval = __esm({
-    "src/modules/estimate-approval.js"() {
-      APPROVAL_CUSTOM_LABEL_MAX = 120;
-      APPROVAL_NOTE_MAX = 300;
-      ESTIMATE_APPROVAL_TYPES = Object.freeze([
-        { value: "signature", label: "Signature" },
-        { value: "phone", label: "Phone approval" },
-        { value: "in_person", label: "In-person approval" },
-        { value: "email", label: "Email approval" },
-        { value: "text", label: "Text approval" },
-        { value: "other", label: "Other" }
-      ]);
-      APPROVAL_TYPE_VALUES = new Set(ESTIMATE_APPROVAL_TYPES.map((option) => option.value));
-      SIGNATURE_DATA_LIMIT = 1024 * 1024;
-      trimmed = (value2, maxLength) => String(value2 || "").trim().slice(0, maxLength);
-    }
-  });
-
   // src/runtime/legacy.js
   var legacy_exports = {};
-  function safeHtml(markup) {
-    const html = String(markup ?? "");
-    if (typeof DOMPurify === "undefined" || typeof DOMPurify.sanitize !== "function") return html;
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ["target"] });
-  }
   function empty(message) {
     return emptyState2(message);
   }
@@ -5826,108 +5061,6 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     const config = state.messagingSettings;
     return shell(`${heading("Delivery infrastructure", "Messaging service", "Connect this shop's own secure delivery service for automatic email and SMS.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "circle-alert", 17)}<div><strong>${config.enabled ? "Shop messaging service active" : "Native device messaging is active"}</strong><span>${config.enabled ? "Estimate and customer messages will post to the configured shop endpoint." : "Messages currently open the device email or SMS app."}</span></div></div><div class="service-contract"><h2>Shop-managed delivery endpoint</h2><p>Configure a secure endpoint owned by the subscribing shop. It stores SMTP and SMS provider credentials server-side; MechPro never stores or exposes those credentials in the browser.</p><code>POST /messages<br>{ channel: "email" | "sms", to, subject, body, metadata }</code></div><form class="form-grid" id="messaging-form"><label class="full">Secure service endpoint *<input name="endpoint" type="url" value="${config.endpoint}" placeholder="https://messaging.yourshop.com/messages"/></label><label>Sender email<input name="senderEmail" type="email" value="${config.senderEmail}" placeholder="service@yourshop.com"/></label><label>Sender phone<input name="senderPhone" type="tel" value="${config.senderPhone}" placeholder="+18065550100"/></label><label class="full">Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this endpoint for customer email and SMS delivery</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="test-messaging">${icon("send", 14)} Test configuration</button><button class="primary" type="submit">${icon("save", 14)} Save messaging service</button></div></form></section>`);
   }
-  async function loadIntegrationStatus() {
-    try {
-      integrationStatus = await apiFetch("/integrations/status");
-    } catch (error) {
-      integrationStatus = { error: error.message };
-    }
-  }
-  function integrationState(name, configured) {
-    return `<div class="messaging-status ${configured ? "ready" : "idle"}">${icon(configured ? "circle-check" : "circle-alert", 17)}<div><strong>${escapeHtml(name)}</strong><span>${configured ? "Configured and available" : "Not configured \u2014 this feature stays disabled until credentials are added"}</span></div></div>`;
-  }
-  function integrations() {
-    if (!integrationStatus) void loadIntegrationStatus().then(render);
-    const status = integrationStatus || {};
-    const labor = status.labor || {}, parts = status.parts || {}, qbo = status.quickbooks || {};
-    const laborRows = laborLookupResults.map((item) => `<tr><td>${escapeHtml(item.description || "Labor operation")}</td><td><b>${item.hours == null ? "Enter manually" : `${Number(item.hours).toFixed(2)} h`}</b></td><td>${escapeHtml(item.source)}</td><td><span class="badge ${item.verified ? "paid" : "estimate"}">${item.verified ? "Verified" : "Unverified"}</span></td></tr>`).join("");
-    const partsOutput = partsLookupResult ? `<pre class="service-contract">${escapeHtml(JSON.stringify(partsLookupResult, null, 2))}</pre>` : "";
-    return shell(`${heading("Connected services", "Integrations", "Licensed labor, supplier ordering, accounting, and messaging connections.", false)}
-    <section class="messaging-panel"><h2>Licensed labor guide</h2>${integrationState("MOTOR", labor.motor?.configured)}${integrationState("ALLDATA", labor.alldata?.configured)}
-      <form class="form-grid" id="labor-lookup-form"><label>VIN<input name="vin" maxlength="17"/></label><label>Year<input name="year" type="number" min="1886" max="2200"/></label><label>Make<input name="make"/></label><label>Model<input name="model"/></label><label class="full">Operation<input name="query" required placeholder="Front brake pads and rotors"/></label><div class="full"><button class="primary" type="submit">${icon("search", 14)} Find labor time</button></div></form>
-      ${laborRows ? `<div class="data-panel"><table><thead><tr><th>Operation</th><th>Hours</th><th>Source</th><th>Status</th></tr></thead><tbody>${laborRows}</tbody></table></div>` : ""}</section>
-    <section class="messaging-panel"><h2>Parts ordering</h2>${integrationState("PartsTech", parts.partstech?.configured || parts.partstech?.hasPunchout)}${integrationState("Nexpart", parts.nexpart?.configured || parts.nexpart?.hasPunchout)}
-      <form class="form-grid" id="parts-search-form"><label>Provider<select name="provider"><option value="partstech">PartsTech</option><option value="nexpart">Nexpart</option></select></label><label>Action<select name="operation"><option value="search">Search</option><option value="quote">Quote</option><option value="order">Place order</option></select></label><label>Part / keyword or quote ID<input name="query" required/></label><label>VIN<input name="vin" maxlength="17"/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("send", 14)} Send to provider</button><button class="secondary" type="button" id="parts-punchout">${icon("external-link", 14)} Open punch-out</button></div></form>${partsOutput}</section>
-    <section class="messaging-panel"><h2>QuickBooks Online</h2>${integrationState("Intuit app", qbo.configured)}<p>Connect an administrator-approved Intuit app, then sync customers, invoices, and payments one way from MechPro.</p><button class="primary" id="quickbooks-connect" ${qbo.configured ? "" : "disabled"}>${icon("plug-zap", 14)} Connect QuickBooks</button><form class="form-grid" id="quickbooks-sync-form"><label>Record type<select name="entityType"><option value="customer">Customer</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></label><label>MechPro record ID<input name="entityId" required placeholder="customer-123 or INV-2041"/></label><div class="full"><button class="secondary" type="submit">${icon("refresh-cw", 14)} Sync to QuickBooks</button></div></form></section>`);
-  }
-  function support() {
-    if (!integrationStatus) void loadIntegrationStatus().then(render);
-    const statusUrl = integrationStatus?.support?.statusPageUrl;
-    return shell(`${heading("Help", "Help & support", "Self-service answers and a direct ticket path for shop-impacting issues.", false)}
-    <section class="messaging-panel"><div class="statement-head"><div><div class="eyebrow">Help center</div><h2>Common questions</h2></div>${icon("life-buoy", 20)}</div>
-      <details><summary>Why does a labor time say unverified?</summary><p>MOTOR or ALLDATA has not returned a licensed operation. Confirm the vehicle and operation, then enter shop time manually.</p></details>
-      <details><summary>Why is texting unavailable?</summary><p>The platform Twilio number, webhook, and A2P 10DLC campaign must be configured. Customers who text STOP remain blocked until they text START.</p></details>
-      <details><summary>How do I connect accounting?</summary><p>An admin opens Integrations, connects the approved Intuit app, and syncs MechPro records one way to QuickBooks Online.</p></details>
-      <details><summary>How do I import existing shop data?</summary><p>Use Import data for supported CSV files. Request assisted migration below for mapping, validation, and reconciliation.</p></details>
-      ${statusUrl ? `<p><a class="secondary" href="${escapeAttr(statusUrl)}" target="_blank" rel="noopener noreferrer">${icon("activity", 14)} Service status</a></p>` : ""}</section>
-    <section class="messaging-panel"><h2>Contact support</h2><form class="form-grid" id="support-ticket-form"><label>Category<select name="category"><option value="technical">Technical issue</option><option value="billing">Billing</option><option value="onboarding">Onboarding</option><option value="data_migration">Data migration</option><option value="feedback">Feedback</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="urgent">Urgent \u2014 shop blocked</option></select></label><label class="full">Subject<input name="subject" maxlength="160" required/></label><label class="full">What happened?<textarea name="description" maxlength="8000" required placeholder="Include the affected work order, expected result, and exact error. Do not include passwords or card data."></textarea></label><div class="full"><button class="primary" type="submit">${icon("send", 14)} Submit ticket</button></div></form></section>`);
-  }
-  function bindIntegrations() {
-    document.querySelector("#labor-lookup-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      try {
-        const result = await apiFetch("/labor-times/search", { method: "POST", body: JSON.stringify(data) });
-        laborLookupResults = result.results || [];
-        render();
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-    document.querySelector("#parts-search-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      if (data.operation === "order" && !confirm(`Place this ${data.provider} order? The supplier may charge the connected account.`)) return;
-      try {
-        partsLookupResult = await apiFetch(`/parts/${encodeURIComponent(data.provider)}/${encodeURIComponent(data.operation)}`, { method: "POST", body: JSON.stringify({ query: data.query, quoteId: data.query, vin: data.vin }) });
-        render();
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-    document.querySelector("#parts-punchout")?.addEventListener("click", async () => {
-      const provider = document.querySelector("#parts-search-form [name=provider]").value;
-      try {
-        const result = await apiFetch(`/parts/${encodeURIComponent(provider)}/punchout`);
-        window.open(result.url, "_blank", "noopener,noreferrer");
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-    document.querySelector("#quickbooks-connect")?.addEventListener("click", async () => {
-      try {
-        const result = await apiFetch("/quickbooks/connect", { method: "POST", body: "{}" });
-        window.location.assign(result.authorizationUrl);
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-    document.querySelector("#quickbooks-sync-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      try {
-        const result = await apiFetch("/quickbooks/sync", { method: "POST", body: JSON.stringify(data) });
-        toast(`Synced as QuickBooks ID ${result.syncMetadata?.quickBooksId || "created"}`);
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-    document.querySelector("#support-ticket-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const button = event.target.querySelector("button[type=submit]"), data = Object.fromEntries(new FormData(event.target));
-      button.disabled = true;
-      try {
-        const result = await apiFetch("/support", { method: "POST", body: JSON.stringify(data) });
-        if (result?.queued) throw new Error("Support tickets require a live connection.");
-        toast(`Support ticket ${result.id} submitted`);
-        event.target.reset();
-      } catch (error) {
-        toast(error.message);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  }
   function openGlobalAssistant() {
     showModal(`<div class="modal wide global-assistant-modal"><div class="modal-head"><h2>MechPro Assistant</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">${liveAssistant()}</div></div>`);
     bindLiveAssistant();
@@ -5977,7 +5110,7 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     return String(text || "").toLowerCase();
   }
   function estimateLocal(vehicle, service, notes = "") {
-    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 140), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
+    const source = aiKeywords(`${service} ${notes}`), laborRate = Number(shopProfile().laborRate ?? 165), brake = /brake|rotor|pad/.test(source), oil = /oil|lube/.test(source), ac = /a\/c|air.?condition/.test(source), lines = brake ? [{ service: "Front brake pads and rotor service", hours: 2, parts: 285, notes: "Includes hardware inspection and brake bedding road test." }] : oil ? [{ service: "Synthetic oil and filter service", hours: 0.5, parts: 68, notes: "Includes multipoint inspection and fluid top-off." }] : ac ? [{ service: "A/C performance diagnosis", hours: 1.5, parts: 35, notes: "Pressure test and airflow inspection; repair parts quoted after diagnosis." }] : [{ service, hours: 1.5, parts: 110, notes: "Preliminary estimate; verify condition and part fitment before approval." }];
     const detail = lines.map((line) => ({ ...line, labor: line.hours * laborRate, total: line.hours * laborRate + line.parts })), totals = calculateShopEstimate(detail.flatMap((line, index) => [{ id: `labor-${index}`, type: "labor", description: line.service, notes: line.notes, hours: line.hours, laborRate }, ...line.parts ? [{ id: `part-${index}`, type: "part", description: `${line.service} parts`, quantity: 1, unitPrice: line.parts }] : []]), { taxRate: state.taxSettings.rate });
     return { kind: "estimate", vehicle, lines: detail, fees: totals.fees, subtotal: totals.subtotal, tax: totals.tax, total: totals.total, summary: `Preliminary estimate for ${vehicle}. Confirm parts availability and inspect the vehicle before final authorization.` };
   }
@@ -6038,16 +5171,6 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
   }
   async function deliverShopMessage({ channel, to, subject, body, metadata }) {
     const config = state.messagingSettings;
-    if (channel === "sms" && !integrationStatus) await loadIntegrationStatus();
-    if (channel === "sms" && integrationStatus?.sms?.enabled) {
-      try {
-        await apiFetch("/messaging/send", { method: "POST", body: JSON.stringify({ to, body, customerId: metadata?.customerId, workOrderId: metadata?.workOrderId, messageType: metadata?.type || "message" }) });
-        return { mode: "mechpro_sms" };
-      } catch (error) {
-        if (error.retryable === false) throw error;
-        toast(error.message || "Built-in SMS was unavailable. Opening the device app instead.");
-      }
-    }
     if (config.enabled && config.endpoint) {
       try {
         const response = await fetch(config.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, to, subject, body, metadata, from: channel === "email" ? config.senderEmail : config.senderPhone, shopName: config.shopName }) });
@@ -6336,7 +5459,7 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
         if (item.conflict) continue;
         let response;
         try {
-          response = await authorizedApiRequest(item.path, withOptimisticConcurrencyHeaders({ method: item.method, body: item.body }, item.expectedUpdatedAt));
+          response = await authorizedApiRequest(item.path, { method: item.method, body: item.body, headers: item.expectedUpdatedAt ? { "If-Match": item.expectedUpdatedAt } : {} });
         } catch {
           break;
         }
@@ -6363,11 +5486,6 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
   }
   async function apiFetch(path, options = {}) {
     if (isOfflineDesktop()) {
-      if (String(path).startsWith("/ai/")) {
-        const aiError = new Error("MechPro AI runs in the cloud. This offline copy keeps records on this computer only, so sign in to the online version at yourcarguy806.com to use the assistant.");
-        aiError.retryable = false;
-        throw aiError;
-      }
       const method = String(options.method || "GET").toUpperCase();
       if (method === "GET" || method === "HEAD") {
         const offlineError = new Error("This copy of MechPro keeps shop records on this computer.");
@@ -6379,10 +5497,9 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     if (readMutationQueue().some((item) => !item.conflict) && navigator.onLine && !flushingMutationQueue) void flushMutationQueue();
     const mutation = prepareMutation(path, options);
     try {
-      const response = await authorizedApiRequest(path, withOptimisticConcurrencyHeaders(mutation.options, mutation.expectedUpdatedAt));
+      const response = await authorizedApiRequest(path, mutation.options);
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})), error = new Error(payload.message || `API request failed: ${response.status}`);
-        error.status = response.status;
         error.retryable = response.status >= 500;
         throw error;
       }
@@ -6394,6 +5511,14 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
         return { queued: true };
       }
       throw error;
+    }
+  }
+  async function pushCustomerToApi(record) {
+    record.id || (record.id = mutationId());
+    try {
+      await apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) });
+    } catch (error) {
+      console.error("Failed to sync customer to API", error);
     }
   }
   async function loadCustomersFromApi() {
@@ -6440,6 +5565,13 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     } catch (error) {
       console.error("Failed to load orders from API; using local data", error);
       cloudSyncStatus = authSession() ? "offline" : "local";
+    }
+  }
+  async function pushInvoiceToApi(record) {
+    try {
+      await apiFetch("/entities/invoices", { method: "POST", body: JSON.stringify(record) });
+    } catch (error) {
+      console.error("Failed to sync invoice to API", error);
     }
   }
   async function updateInvoiceInApi(record, { throwOnError = false } = {}) {
@@ -6585,20 +5717,15 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     return value2;
   }
   async function loadShopEntities() {
-    const role = currentUser()?.role || "";
-    const types = Object.keys(shopEntityCollections).filter((type) => !shopEntityReadRoles[type] || shopEntityReadRoles[type].includes(role));
-    const results = await Promise.allSettled(types.map((type) => apiFetch(`/entities/${type}`)));
-    let failed = 0;
-    types.forEach((type, index) => {
-      const result = results[index];
-      if (result.status === "fulfilled" && Array.isArray(result.value)) state[shopEntityCollections[type]] = result.value;
-      else if (result.status === "rejected") {
-        failed += 1;
-        console.error(`Failed to load ${type}; using local data`, result.reason);
-      }
-    });
-    save();
-    return failed === 0;
+    try {
+      const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
+      types.forEach((type, index) => {
+        state[shopEntityCollections[type]] = results[index];
+      });
+      save();
+    } catch (error) {
+      console.error("Failed to load shop operations; using local data", error);
+    }
   }
   function icon(name, size = 18) {
     return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
@@ -6829,9 +5956,9 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     return shell(`${heading("Relationships", "Customers", "Customer contact details, vehicles, and service value at a glance.")}<div class="customer-grid">${cards}</div>`);
   }
   function customerOptions(selected = "") {
-    return customersWithSelected(state.customers, selected).map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
+    return state.customers.map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
   }
-  function vehicleLabel3(vehicle) {
+  function vehicleLabel2(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
   }
   function getRelationshipDerived() {
@@ -6851,7 +5978,7 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
       }
     }
     for (const vehicle of state.vehicles) {
-      const label2 = vehicleLabel3(vehicle);
+      const label2 = vehicleLabel2(vehicle);
       if (vehicle.id) vehicleByLookup.set(vehicle.id, vehicle);
       if (label2) vehicleByLookup.set(label2, vehicle);
       if (vehicle.customer && vehicle.plate) vehicleByLookup.set(`${vehicle.customer}#${vehicle.plate}`, vehicle);
@@ -6861,18 +5988,18 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
     return relationshipDerivedCache;
   }
   function linkedOrders(vehicle) {
-    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel3(vehicle)) || [];
+    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel2(vehicle)) || [];
     return byVin.length && byLabel.length ? [.../* @__PURE__ */ new Set([...byVin, ...byLabel])] : byVin.length ? byVin : byLabel;
   }
   function operationsVehicles() {
     const rows = state.vehicles.map((vehicle) => {
       const history = linkedOrders(vehicle);
-      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel3(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
+      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel2(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
     }).join("");
     return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>`;
   }
   function catalogInspectionApp() {
-    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel: vehicleLabel3, isLocalShell, save };
+    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel: vehicleLabel2, isLocalShell, save };
   }
   function openCatalogInspection(existing, catalogId) {
     presentCatalogInspection(catalogInspectionApp(), existing, catalogId);
@@ -6880,7 +6007,7 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
   function operationsInspections() {
     const rows = [...state.inspections].reverse().map((item) => {
       const counts = (item.items || []).reduce((total, row) => (total[row.status] = (total[row.status] || 0) + 1, total), {}), results = item.catalogId ? `<span class="inspection-count fail">${counts.critical || 0} safety</span> <span class="inspection-count warn">${counts.soon || 0} soon</span> <span class="inspection-count good">${counts.ok || 0} ok</span>` : `<span class="inspection-count good">${counts.pass || 0} pass</span> <span class="inspection-count warn">${counts.attention || 0} attention</span> <span class="inspection-count fail">${counts.fail || 0} fail</span>`, badge2 = item.recordStatus === "closed" ? `<span class="badge paid">Closed</span>` : item.catalogId ? `<span class="badge estimate">Draft</span>` : item.approvalStatus === "approved" ? `<span class="badge paid">Approved</span>` : item.approvalStatus === "rejected" ? `<span class="badge overdue">Rejected</span>` : `<span class="badge estimate">Pending</span>`;
-      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} \xB7 ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge2}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button><button class="mini-action" data-estimate-from-inspection="${item.id}">${icon("file-text", 13)} Estimate</button></td></tr>`;
+      return `<tr><td><b>${escapeHtml(item.number)}</b><small>${escapeHtml(item.inspectionName || "Checklist")} \xB7 ${new Date(item.createdAt).toLocaleDateString()}</small></td><td>${escapeHtml(item.customer)}<small>${escapeHtml(item.vehicle)}</small></td><td>${escapeHtml(item.workOrderId || "Unlinked")}</td><td>${results}</td><td>${badge2}</td><td><button class="mini-action" data-edit-inspection="${item.id}">${icon("clipboard-check", 13)} Open</button></td></tr>`;
     }).join("");
     return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
@@ -6928,12 +6055,7 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
   }
   function operationsOrdering() {
     const canSave = ["owner", "admin"].includes(currentUser()?.role);
-    return [
-      orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon }),
-      partstechPanelHtml(partstechAccount, { canSave, escapeHtml, icon }),
-      laborGuidePanelHtml(laborGuideAccount, { canSave, escapeHtml, icon }),
-      quickbooksPanelHtml(quickbooksAccount, { canSave, escapeHtml, icon })
-    ].join("");
+    return orderingPanelHtml(autozoneAccount, { canSave, escapeHtml, icon });
   }
   async function loadAutozoneAccount(force = false) {
     if (autozoneAccount.loaded && !force) return;
@@ -6943,39 +6065,6 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
       autozoneAccount = { connected: Boolean(account?.connected), username: account?.username || "", connectedAt: account?.connectedAt || null, loaded: true };
     } catch {
       autozoneAccount = { connected: false, loaded: true, unavailable: true };
-    }
-    if (state.route === "shopops" && shopOpsTab === "ordering") render();
-  }
-  async function loadPartstechAccount(force = false) {
-    if (partstechAccount.loaded && !force) return;
-    partstechAccount = { ...partstechAccount, loaded: true };
-    try {
-      const account = await apiFetch("/integrations/partstech");
-      partstechAccount = { ...account, loaded: true };
-    } catch {
-      partstechAccount = { connected: false, loaded: true, unavailable: true };
-    }
-    if (state.route === "shopops" && shopOpsTab === "ordering") render();
-  }
-  async function loadLaborGuideAccount(force = false) {
-    if (laborGuideAccount.loaded && !force) return;
-    laborGuideAccount = { ...laborGuideAccount, loaded: true };
-    try {
-      const account = await apiFetch("/integrations/labor-guide");
-      laborGuideAccount = { ...account, loaded: true };
-    } catch {
-      laborGuideAccount = { connected: false, provider: "manual", loaded: true, unavailable: true };
-    }
-    if (state.route === "shopops" && shopOpsTab === "ordering") render();
-  }
-  async function loadQuickbooksAccount(force = false) {
-    if (quickbooksAccount.loaded && !force) return;
-    quickbooksAccount = { ...quickbooksAccount, loaded: true };
-    try {
-      const account = await apiFetch("/integrations/quickbooks");
-      quickbooksAccount = { ...account, loaded: true };
-    } catch {
-      quickbooksAccount = { connected: false, loaded: true, unavailable: true };
     }
     if (state.route === "shopops" && shopOpsTab === "ordering") render();
   }
@@ -7124,7 +6213,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
     };
   }
   function openInspectionForm(existing = null) {
-    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel3(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
+    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel2(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
     showModal(`<form class="modal wide" id="inspection-form"><div class="modal-head"><h2>${existing ? "Edit" : "New"} digital inspection</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Vehicle<select name="vehicleId" required>${vehicleOptions}</select></label><label>Work order<select name="workOrderId"><option value="">Unlinked</option>${state.orders.map((order) => `<option ${existing?.workOrderId === order.id ? "selected" : ""}>${order.id}</option>`).join("")}</select></label>${!existing ? `<label>Template<select name="templateId" id="template-picker">${templateOptions}</select></label>` : ""}</div><h3>Damage diagram</h3><div class="damage-zones">${zones.map((zone) => `<button type="button" class="damage-zone ${damage.has(zone) ? "marked" : ""}" data-damage-zone="${zone}">${icon(damage.has(zone) ? "alert-triangle" : "check", 13)} ${zone}</button>`).join("")}</div><h3 id="checklist-heading">${items.length}-point checklist</h3><div class="inspection-grid" id="inspection-checklist">${items.map((item, index) => `<article><b>${escapeHtml(item.name)}</b><select name="status-${index}"><option value="not_checked" ${item.status === "not_checked" ? "selected" : ""}>Not checked</option><option value="pass" ${item.status === "pass" ? "selected" : ""}>Pass</option><option value="attention" ${item.status === "attention" ? "selected" : ""}>Needs attention</option><option value="fail" ${item.status === "fail" ? "selected" : ""}>Fail</option></select><input name="note-${index}" value="${escapeHtml(item.note || "")}" placeholder="Reading or note"/></article>`).join("")}</div><label>Inspection photos<input name="photos" type="file" accept="image/*" multiple/></label>${existingPhotos ? `<div class="vehicle-photo-thumbs">${existingPhotos}</div>` : ""}<label>Recommendations<textarea name="recommendations">${escapeHtml(existing?.recommendations || "")}</textarea></label>${existing ? `<div class="inspection-report-actions"><button type="button" class="secondary" id="print-inspection">${icon("printer", 14)} Print report</button><button type="button" class="secondary" id="share-inspection">${icon("share-2", 14)} Share report</button><button type="button" class="secondary" id="approve-inspection">${icon("shield-check", 14)} Approval</button></div>${inspectionApprovalHistory(existing) ? `<h3>Approval history</h3>${inspectionApprovalHistory(existing)}` : ""}` : ""}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("save", 14)} Save inspection</button></div></form>`);
     document.querySelectorAll("[data-damage-zone]").forEach((button) => {
       button.onclick = () => {
@@ -7161,7 +6250,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
       try {
         const vehicle = state.vehicles.find((item) => item.id === form.elements.vehicleId.value), files = [...form.elements.photos.files], photoKeys = [];
         for (const file of files) photoKeys.push(await uploadFileToR2(file, "inspection", file.type || "image/jpeg"));
-        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel3(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
+        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel2(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
         await saveShopEntity("inspections", record);
         closeModal();
         toast("Digital inspection saved");
@@ -7449,24 +6538,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       toast(error.message);
     }
   }
-  async function buildEstimateFromInspectionRecord(inspection) {
-    const orderId = inspection.workOrderId;
-    const order = state.orders?.find((item) => item.id === orderId) || {
-      id: orderId || `RO-${Date.now()}`,
-      customer: inspection.customer,
-      vehicle: inspection.vehicle,
-      status: "intake"
-    };
-    const next = applyEstimateFromInspection(order, inspection, {
-      laborRate: Number(shopProfile()?.laborRate) || 165,
-      taxRate: Number(state.taxSettings?.rate) || 0
-    }, currentUser() || { name: "Staff" });
-    await saveShopEntity("orders", next);
-    if (!state.orders.some((item) => item.id === next.id)) state.orders.push(next);
-    else state.orders = state.orders.map((item) => item.id === next.id ? next : item);
-    toast(`Estimate draft built from inspection (${next.estimate.lines.length} finding line(s))`);
-    return next;
-  }
   function bindShopOperations() {
     document.querySelector("#open-oem-programming")?.addEventListener("click", () => {
       state.route = "oem-diagnostics";
@@ -7504,153 +6575,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     document.querySelector("#autozone-open")?.addEventListener("click", () => {
       void openAutozoneOrder("");
     });
-    if (shopOpsTab === "ordering") {
-      void loadAutozoneAccount();
-      void loadPartstechAccount();
-      void loadLaborGuideAccount();
-      void loadQuickbooksAccount();
-    }
-    document.querySelector("#partstech-connect-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        const data = Object.fromEntries(new FormData(event.target));
-        partstechAccount = { ...await apiFetch("/integrations/partstech", { method: "POST", body: JSON.stringify(data) }), loaded: true };
-        toast("PartsTech connected");
-        render();
-      } catch (error) {
-        toast(error.message || "Could not connect PartsTech");
-      }
-    });
-    document.querySelector("#partstech-disconnect")?.addEventListener("click", async () => {
-      try {
-        await apiFetch("/integrations/partstech", { method: "DELETE" });
-        partstechAccount = { connected: false, loaded: true };
-        toast("PartsTech disconnected");
-        render();
-      } catch (error) {
-        toast(error.message || "Could not disconnect PartsTech");
-      }
-    });
-    document.querySelector("#partstech-search-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      const panel = document.querySelector("#partstech-results");
-      if (panel) panel.innerHTML = "<p>Quoting\u2026</p>";
-      try {
-        const result = await apiFetch("/integrations/partstech/quote", { method: "POST", body: JSON.stringify(data) });
-        const rows = (result.items || []).map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money4(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
-        if (panel) panel.innerHTML = `<table><thead><tr><th>Part</th><th>#</th><th>Price</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No quotes returned</td></tr>"}</tbody></table>`;
-        window.__MECHPRO_PARTSTECH_LINES__ = Object.fromEntries((result.items || []).map((item) => [item.id, item]));
-        document.querySelectorAll("[data-add-pt-line]").forEach((button) => {
-          button.onclick = () => {
-            const line = window.__MECHPRO_PARTSTECH_LINES__?.[button.dataset.addPtLine];
-            if (!line) return;
-            state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
-            toast(`Added ${line.description} to pending estimate lines`);
-          };
-        });
-      } catch (error) {
-        if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "PartsTech quote failed")}</p>`;
-        toast(error.message || "PartsTech quote failed");
-      }
-    });
-    document.querySelector("#labor-guide-connect-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        const data = Object.fromEntries(new FormData(event.target));
-        laborGuideAccount = { ...await apiFetch("/integrations/labor-guide", {
-          method: "POST",
-          body: JSON.stringify({ provider: data.provider, viaPartstech: data.viaPartstech === "on" })
-        }), loaded: true };
-        toast("Labor guide saved");
-        render();
-      } catch (error) {
-        toast(error.message || "Could not save labor guide");
-      }
-    });
-    document.querySelector("#labor-guide-disconnect")?.addEventListener("click", async () => {
-      try {
-        await apiFetch("/integrations/labor-guide", { method: "DELETE" });
-        laborGuideAccount = { connected: false, provider: "manual", loaded: true };
-        toast("MOTOR disconnected");
-        render();
-      } catch (error) {
-        toast(error.message || "Could not disconnect labor guide");
-      }
-    });
-    document.querySelector("#labor-guide-search-form")?.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      const panel = document.querySelector("#labor-guide-results");
-      if (panel) panel.innerHTML = "<p>Looking up\u2026</p>";
-      try {
-        const result = await apiFetch("/integrations/labor-guide/search", { method: "POST", body: JSON.stringify(data) });
-        if (result.provider === "web_estimate") {
-          if (!result.found) {
-            if (panel) panel.innerHTML = `<p class="login-error"><b>no estimate found</b> \u2014 ${escapeHtml(result.message || "web estimate unavailable")}. Manual entry stays available below.</p>`;
-            toast(result.message || "no estimate found");
-            return;
-          }
-          const sources = (result.sources || []).map((source) => `<li><a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.title || source.url)}</a></li>`).join("");
-          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money4(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
-          if (panel) panel.innerHTML = `<div class="messaging-status idle"><div><strong>web estimate \u2014 not book time</strong><span>Average ${escapeHtml(String(result.averageHours))} hrs from ${escapeHtml(String(result.sourceCount || 0))} source(s). Not ALLDATA / MOTOR / ShopKey book time.</span></div></div><table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table><ol class="ops-note">${sources}</ol>`;
-        } else {
-          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money4(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
-          if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
-        }
-        window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map((line) => [line.id, line]));
-        document.querySelectorAll("[data-add-labor-line]").forEach((button) => {
-          button.onclick = () => {
-            const line = window.__MECHPRO_LABOR_LINES__?.[button.dataset.addLaborLine];
-            if (!line) return;
-            state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
-            toast(`Added ${line.description}`);
-          };
-        });
-      } catch (error) {
-        if (panel) panel.innerHTML = `<p class="login-error">${escapeHtml(error.message || "Labor guide search failed")}</p>`;
-        toast(error.message || "Labor guide search failed");
-      }
-    });
-    document.querySelector("#manual-labor-form")?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      const line = createManualLaborEntry({
-        description: data.description,
-        hours: data.hours,
-        laborRate: data.laborRate
-      });
-      state.pendingEstimateLines = [...state.pendingEstimateLines || [], line];
-      toast(`Added manual labor: ${line.description}`);
-    });
-    document.querySelector("#qbo-connect")?.addEventListener("click", async () => {
-      try {
-        const redirectUri = `${location.origin}/qbo/callback`;
-        const result = await apiFetch("/integrations/quickbooks/connect", {
-          method: "POST",
-          body: JSON.stringify({ redirectUri })
-        });
-        if (result.authorizeUrl) location.href = result.authorizeUrl;
-        else toast("QuickBooks authorize URL missing");
-      } catch (error) {
-        toast(error.message || "Could not start QuickBooks connect");
-      }
-    });
-    document.querySelector("#qbo-disconnect")?.addEventListener("click", async () => {
-      try {
-        await apiFetch("/integrations/quickbooks", { method: "DELETE" });
-        quickbooksAccount = { connected: false, loaded: true };
-        toast("QuickBooks disconnected");
-        render();
-      } catch (error) {
-        toast(error.message || "Could not disconnect QuickBooks");
-      }
-    });
-    document.querySelector("#qbo-sync-now")?.addEventListener("click", async () => {
-      const status = document.querySelector("#qbo-sync-status");
-      if (status) status.textContent = "Sync uses per-record POST /integrations/quickbooks/sync from invoices and customers.";
-      toast("Open a customer or invoice and sync from there, or call the sync API with entityType/localId");
-    });
+    if (shopOpsTab === "ordering") void loadAutozoneAccount();
     document.querySelectorAll("[data-ops-tab]").forEach((button) => button.onclick = () => {
       shopOpsTab = button.dataset.opsTab;
       render();
@@ -7663,17 +6588,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       const inspection = state.inspections.find((item) => item.id === button.dataset.editInspection);
       if (inspection?.catalogId) openCatalogInspection(inspection);
       else openInspectionForm(inspection);
-    });
-    document.querySelectorAll("[data-estimate-from-inspection]").forEach((button) => button.onclick = async (event) => {
-      event.stopPropagation();
-      const inspection = state.inspections.find((item) => item.id === button.dataset.estimateFromInspection);
-      if (!inspection) return toast("Inspection not found");
-      try {
-        await buildEstimateFromInspectionRecord(inspection);
-        render();
-      } catch (error) {
-        toast(error.message || "Could not build estimate from inspection");
-      }
     });
     document.querySelectorAll("[data-edit-template]").forEach((button) => button.onclick = () => openInspectionTemplateForm(state.inspectionTemplates.find((t) => t.id === button.dataset.editTemplate)));
     document.querySelectorAll("[data-edit-vehicle]").forEach((row) => row.onclick = () => openVehicleDetail(row.dataset.editVehicle));
@@ -7802,7 +6716,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function invoices() {
     const q = query.toLowerCase(), rows = state.invoices.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x);
-      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money4(x.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money4(paid)} \xB7 Balance ${money4(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${x.number}">${icon("message-square", 13)} Text to pay</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money4(x.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money4(paid)} \xB7 Balance ${money4(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
     }).join("");
     return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
@@ -7833,7 +6747,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       render();
     };
   }
-  async function startInvoiceCheckout(number, textToPay = false) {
+  async function startInvoiceCheckout(number) {
     const invoice = state.invoices.find((item) => item.number === number);
     if (!invoice) return;
     const ensureStripeReady = async () => {
@@ -7859,7 +6773,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return false;
     };
     if (!await ensureStripeReady()) return;
-    const checkoutWindow = textToPay ? null : window.open("", "_blank");
+    const checkoutWindow = window.open("", "_blank");
     try {
       const data = await apiFetch("/payments/checkout-session", {
         method: "POST",
@@ -7874,14 +6788,9 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       invoice.checkoutCreatedAt = now();
       updateInvoiceInApi(invoice);
       save();
-      if (textToPay) {
-        const customer = state.customers.find((item) => item.id === invoice.customerId || item.name === invoice.customer), phone = invoice.phone || customer?.phone;
-        if (!phone) throw new Error("Add a customer phone number before sending text-to-pay");
-        const result = await deliverShopMessage({ channel: "sms", to: phone, subject: "", body: `${state.messagingSettings.shopName || "Your shop"} invoice ${invoice.number}: pay securely at ${data.url}`, metadata: { type: "text_to_pay", customerId: customer?.id, invoiceNumber: invoice.number } });
-        toast(result.mode === "mechpro_sms" ? `Text-to-pay sent for ${invoice.number}` : `Text-to-pay opened in the device messaging app`);
-      } else if (checkoutWindow) checkoutWindow.location = data.url;
+      if (checkoutWindow) checkoutWindow.location = data.url;
       else window.location.assign(data.url);
-      if (!textToPay) toast(`Opened secure card checkout for ${invoice.number}`);
+      toast(`Opened secure card checkout for ${invoice.number}`);
     } catch (error) {
       checkoutWindow?.close();
       toast(error.message || "The shop payment service could not create a checkout link");
@@ -7906,13 +6815,13 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   }
   async function upgradeShopPlan() {
     const plans = [["shop", "Shop \xB7 $139/mo"], ["solo", "Solo \xB7 $69/mo"], ["shop_pro", "Shop Pro \xB7 $279/mo"], ["enterprise", "Enterprise \xB7 $559/mo"]];
-    showModal(`<form class="modal" id="upgrade-plan-form"><div class="modal-head"><h2>Choose a plan</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Plan<select name="planId">${plans.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select></label><label>Billing<select name="interval"><option value="monthly">Monthly</option><option value="annual">Annual \xB7 2 months free</option></select></label><p>Unlimited users on every plan. Live OEM programming is Shop Pro and Enterprise.</p><p class="login-error" id="upgrade-plan-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Continue</button></div></form>`);
+    showModal(`<form class="modal" id="upgrade-plan-form"><div class="modal-head"><h2>Choose a plan</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><label>Plan<select name="planId">${plans.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select></label><p>Unlimited users on every plan. Annual prepay is 2 months free once billing is connected. Live OEM programming is Shop Pro and Enterprise.</p><p class="login-error" id="upgrade-plan-error" hidden></p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Continue</button></div></form>`);
     document.querySelector("#upgrade-plan-form").onsubmit = async (event) => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target)), error = document.querySelector("#upgrade-plan-error");
+      const planId = new FormData(event.target).get("planId"), error = document.querySelector("#upgrade-plan-error");
       try {
-        const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId: data.planId, interval: data.interval, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
-        toast("Opening secure subscription checkout");
+        const result = await platformApi("/billing/checkout", { method: "POST", body: JSON.stringify({ planId, successUrl: `${location.origin}/?billing=success`, cancelUrl: `${location.origin}/?billing=cancelled` }) });
+        toast(result.message || (result.mode === "activated" ? "Shop upgraded to paid" : "Opening checkout"));
         if (result.url && (String(result.url).startsWith("http") || String(result.url).startsWith("/"))) location.assign(result.url);
       } catch (requestError) {
         error.textContent = requestError.message || "Could not start upgrade";
@@ -8074,19 +6983,19 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function render() {
     const root = document.querySelector("#root");
     if (!currentUser()) {
-      root.innerHTML = DOMPurify.sanitize(pendingAuthProfile ? pendingProfileScreen() : loginScreen(), { USE_PROFILES: { html: true } });
+      root.innerHTML = pendingAuthProfile ? pendingProfileScreen() : loginScreen();
       lucide.createIcons();
       bind();
       return;
     }
     if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0];
-    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, pos: cardTerminal, ai: aiWorkbench, messaging, payments, integrations, support, reports, settings };
+    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, pos: cardTerminal, ai: aiWorkbench, messaging, payments, reports, settings };
     if (typeof accounting === "function") views.accounting = accounting;
     if (typeof payroll === "function") views.payroll = payroll;
     if (typeof imports === "function") views.imports = imports;
     if (typeof employees === "function") views.employees = employees;
     if (typeof oemDiagnosticsView === "function") views["oem-diagnostics"] = oemDiagnosticsView;
-    root.innerHTML = DOMPurify.sanitize((views[state.route] || views.home || views.dispatch)(), { USE_PROFILES: { html: true } });
+    root.innerHTML = (views[state.route] || views.home || views.dispatch)();
     const unread = state.conversations.reduce((sum, item) => sum + chatUnread(item), 0);
     if (currentUser().role !== "super_admin" && !root.querySelector('[data-route="chat"]') && canAccess("chat")) {
       const chatNav = root.querySelector('.sidebar [aria-label="Front counter"]') || root.querySelector(".sidebar .nav");
@@ -8099,7 +7008,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     lucide.createIcons();
     bind();
     bindPlatformAdmin();
-    bindIntegrations();
     document.querySelector("#upgrade-shop-plan")?.addEventListener("click", upgradeShopPlan);
     bindEstimateActions();
     bindMessagingService();
@@ -8313,7 +7221,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       };
     });
     document.querySelectorAll("[data-pay-invoice]").forEach((button) => button.onclick = () => startInvoiceCheckout(button.dataset.payInvoice));
-    document.querySelectorAll("[data-text-pay]").forEach((button) => button.onclick = () => startInvoiceCheckout(button.dataset.textPay, true));
     document.querySelectorAll("[data-record-payment]").forEach((button) => button.onclick = () => recordPayment(button.dataset.recordPayment, button.dataset.method));
     document.querySelectorAll("[data-edit-tax]").forEach((button) => button.onclick = () => openInvoiceTax(button.dataset.editTax));
   }
@@ -8329,10 +7236,6 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       }
       if (x.dataset.route === "shopops") {
         await loadShopEntities();
-        render();
-      }
-      if (["obd", "keys"].includes(x.dataset.route)) {
-        await Promise.all([loadOrdersFromApi(), loadEstimatesFromApi(), loadShopEntities()]);
         render();
       }
       if (["home", "dispatch", "orders", "schedule"].includes(x.dataset.route)) {
@@ -8503,7 +7406,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const root = document.createElement("div");
     root.id = "modal-root";
     root.className = "modal-backdrop";
-    root.innerHTML = safeHtml(html);
+    root.innerHTML = html;
     root.onclick = (e) => {
       if (e.target === root) closeModal();
     };
@@ -8533,8 +7436,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     root?.remove();
   }
   function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) {
-    const verified = Boolean(line.laborVerified), source = line.laborSource || "Unverified shop estimate";
-    return `<article class="new-estimate-line" data-labor-source="${escapeAttr(source)}" data-labor-verified="${verified ? "1" : "0"}"><div class="estimate-line-head"><strong>Service line</strong><div><button class="mini-action lookup-labor-time" type="button">${icon("badge-check", 13)} Labor guide</button><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><small class="labor-source"><span class="badge ${verified ? "paid" : "estimate"}">${verified ? "Verified" : "Unverified"}</span> ${escapeHtml(source)}</small><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money4(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
+    return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money4(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
   }
   function newOrderServiceExplanation(service, fallback) {
     const source = aiKeywords(service);
@@ -8546,7 +7448,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function readNewOrderEstimate() {
     const lines = [...document.querySelectorAll(".new-estimate-line")].map((row) => {
       const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts2 = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), labor2 = Math.round(hours * 165 * 100) / 100;
-      return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor: labor2, parts: parts2, laborSource: row.dataset.laborSource || "Unverified shop estimate", laborVerified: row.dataset.laborVerified === "1", total: Math.round((labor2 + parts2) * 100) / 100 };
+      return { service: row.querySelector(".estimate-service").value.trim(), explanation: row.querySelector(".estimate-explanation").value.trim(), hours, laborRate: 165, labor: labor2, parts: parts2, total: Math.round((labor2 + parts2) * 100) / 100 };
     }).filter((line) => line.service);
     const labor = lines.reduce((sum, line) => sum + line.labor, 0), laborHours = lines.reduce((sum, line) => sum + line.hours, 0), parts = lines.reduce((sum, line) => sum + line.parts, 0), shopSupplies = lines.length ? 12 : 0, subtotal = Math.round((labor + parts + shopSupplies) * 100) / 100, tax = Math.round(subtotal * 0.0825 * 100) / 100, total = Math.round((subtotal + tax) * 100) / 100;
     return { lines, labor, laborHours, parts, fees: shopSupplies ? [{ description: "Shop supplies", amount: shopSupplies }] : [], subtotal, tax, taxRate: 8.25, total };
@@ -8571,24 +7473,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         button.closest(".new-estimate-line").remove();
         refreshNewOrderEstimate();
       });
-      lines.querySelectorAll(".lookup-labor-time").forEach((button) => button.onclick = async () => {
-        const row = button.closest(".new-estimate-line"), query2 = row.querySelector(".estimate-service").value.trim(), vehicle = form.elements.vehicle.value.trim();
-        button.disabled = true;
-        try {
-          const result = await apiFetch("/labor-times/search", { method: "POST", body: JSON.stringify({ vin: form.elements.vin?.value || "", query: query2, model: vehicle }) }), labor = (result.results || [])[0];
-          if (!labor) throw new Error("No labor operation returned");
-          if (labor.hours != null) row.querySelector(".estimate-hours").value = labor.hours;
-          row.dataset.laborSource = labor.source || "Unverified shop estimate";
-          row.dataset.laborVerified = labor.verified ? "1" : "0";
-          row.querySelector(".labor-source").innerHTML = `<span class="badge ${labor.verified ? "paid" : "estimate"}">${labor.verified ? "Verified" : "Unverified"}</span> ${escapeHtml(row.dataset.laborSource)}`;
-          refreshNewOrderEstimate();
-          toast(labor.verified ? `Verified ${labor.provider} labor time applied` : "No licensed result; keeping the shop estimate unverified");
-        } catch (error) {
-          toast(error.message);
-        } finally {
-          button.disabled = false;
-        }
-      });
     };
     document.querySelector("#generate-new-estimate").onclick = () => {
       const vehicle = form.elements.vehicle.value.trim(), complaint = form.elements.complaint.value.trim(), requested = form.elements.requestedServices.value.trim();
@@ -8598,7 +7482,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       }
       const services = (requested || complaint).split(/\n|,|;/).map((item) => item.trim()).filter(Boolean), generated = services.map((service) => {
         const line = estimateLocal(vehicle, service).lines[0];
-        return { ...line, laborSource: "Unverified shop estimate", laborVerified: false, notes: newOrderServiceExplanation(service, line.notes) };
+        return { ...line, notes: newOrderServiceExplanation(service, line.notes) };
       });
       lines.innerHTML = generated.map(newOrderEstimateRow).join("");
       bindRows();
@@ -8619,7 +7503,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function vehicleOptionsForCustomer(customerName, selectedVin = "") {
     const vehicles = state.vehicles.filter((vehicle) => !customerName || vehicle.customer === customerName);
-    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel3(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel3(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
+    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel2(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel2(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
   }
   function bindNewOrderCustomerPickers() {
     const form = document.querySelector("#new-form");
@@ -8694,9 +7578,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       try {
         const saved = await pushOrderToApi(order);
         state.orders.unshift(saved || order);
-        const existingCustomer = state.customers.find((x) => x.name.toLowerCase() === customerName.toLowerCase());
-        const contact = customerContactFields({ name: customerName, phone: data.phone, email: data.email, billingAddress: data.billingAddress }, existingCustomer);
-        if (!existingCustomer || customerContactChanged(existingCustomer, contact)) await saveCustomerRecord(existingCustomer || null, contact);
+        if (!state.customers.some((x) => x.name.toLowerCase() === customerName.toLowerCase())) {
+          const record = { id: mutationId(), name: customerName, phone: data.phone, email: "Not provided", vehicles: 1, visits: 1, spend: 0 };
+          state.customers.unshift(record);
+          try {
+            await pushCustomerToApi(record);
+          } catch (customerError) {
+            console.error("Failed to sync customer", customerError);
+          }
+        }
         save();
         closeModal();
         toast(`${id} created successfully`);
@@ -8892,7 +7782,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const customer = state.customers.find((c) => c.name === name);
     if (!customer) return;
     const vehicles = state.vehicles.filter((v) => v.customer === name), orders2 = state.orders.filter((o) => o.customer === name), invs = state.invoices.filter((i) => i.customer === name), payments2 = state.payments.filter((p) => p.customer === name), balance = customerBalance(name);
-    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money4(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel3(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money4(i.amount)}</td><td>${money4(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money4(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
+    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money4(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel2(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money4(i.amount)}</td><td>${money4(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money4(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
     document.querySelector("#cd-message")?.addEventListener("click", () => {
       closeModal();
       openCustomerMessage(customer.name, customer.phone, customer.email);
@@ -8924,7 +7814,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const vehicle = state.vehicles.find((v) => v.id === id);
     if (!vehicle) return;
     const history = linkedOrders(vehicle), photos = vehicle.photoKeys || [];
-    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel3(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
+    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel2(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
     document.querySelector("#vd-edit")?.addEventListener("click", () => {
       closeModal();
       openVehicleForm(vehicle);
@@ -9141,7 +8031,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     };
   }
   function paymentRecords() {
-    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.paidAt || invoice.closedAt || invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
+    const legacy = state.invoices.filter((invoice) => invoice.status === "paid" && !state.payments.some((payment) => payment.invoiceNumber === invoice.number)).map((invoice) => ({ id: `legacy-${invoice.number}`, invoiceNumber: invoice.number, customer: invoice.customer, amount: invoice.amount, method: "legacy", receivedAt: invoice.date, reference: "Imported paid invoice", note: "", status: "completed" }));
     return [...legacy, ...state.payments.filter((payment) => payment.status === "completed")];
   }
   function finance() {
@@ -9233,56 +8123,40 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     link.click();
     URL.revokeObjectURL(link.href);
   }
-  async function ensureImportedCustomers(records) {
-    const existing = new Set(state.customers.map((item) => String(item.name || "").toLowerCase()));
-    const missing = [];
-    for (const record of records) {
-      const name = String(record?.customer || "").trim();
-      if (!name || existing.has(name.toLowerCase())) continue;
-      existing.add(name.toLowerCase());
-      missing.push({ id: mutationId(), name, phone: record.phone || "", email: record.email || "", vehicles: 0, visits: 0, spend: 0 });
-    }
-    if (!missing.length) return;
-    const saved = await Promise.all(missing.map((record) => apiFetch("/entities/customers", { method: "POST", body: JSON.stringify(record) })));
-    state.customers.push(...saved.map((record, index) => record?.queued ? missing[index] : record || missing[index]));
+  function ensureImportedCustomer(record) {
+    const name = record?.customer;
+    if (!name || state.customers.some((item) => item.name.toLowerCase() === name.toLowerCase())) return;
+    const created = { name, phone: record.phone || "", email: record.email || "Not provided", vehicles: 0, visits: 0, spend: 0 };
+    state.customers.push(created);
+    pushCustomerToApi(created);
   }
-  async function applyImport() {
+  function applyImport() {
     const p = importPreview;
     if (!p?.records.length) return;
     const collection = { customers: "customers", vehicles: "vehicles", orders: "orders", invoices: "invoices", estimates: "estimates", expenses: "expenses" }[p.type];
     if (!collection || !Array.isArray(state[collection])) return;
-    const button = document.querySelector("#confirm-import");
-    if (button) button.disabled = true;
-    try {
-      if (p.type !== "customers") await ensureImportedCustomers(p.records);
-      const saved = await Promise.all(p.records.map((record) => apiFetch(`/entities/${p.type}`, { method: "POST", body: JSON.stringify(record) })));
-      const resolved = saved.map((record, index) => record?.queued ? p.records[index] : record || p.records[index]);
-      state[collection].push(...resolved);
-      save();
-      toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
-      importPreview = null;
-      render();
-    } catch (error) {
-      if (button) button.disabled = false;
-      toast(error.message || "Import could not be saved to this shop");
-    }
-  }
-  async function loadMeldedDataView(route) {
-    if (route === "customers") {
-      await Promise.all([loadCustomersFromApi(), loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi(), loadShopEntities()]);
-    } else if (route === "shopops") {
-      await Promise.all([loadShopEntities(), loadCustomersFromApi(), loadOrdersFromApi()]);
-    } else if (route === "imports") {
-      await Promise.all([
-        loadCustomersFromApi(),
-        loadOrdersFromApi(),
-        loadInvoicesFromApi(),
-        loadPaymentsFromApi(),
-        loadExpensesFromApi(),
-        loadEstimatesFromApi(),
-        loadShopEntities()
-      ]);
-    }
+    state[collection].push(...p.records);
+    if (p.type === "customers") p.records.forEach(pushCustomerToApi);
+    if (p.type === "vehicles") p.records.forEach((vehicle) => {
+      const customer = state.customers.find((item) => item.name.toLowerCase() === vehicle.customer.toLowerCase());
+      if (customer) customer.vehicles += 1;
+    });
+    if (p.type === "orders") p.records.forEach((order) => {
+      pushOrderToApi(order);
+      ensureImportedCustomer(order);
+    });
+    if (p.type === "invoices") p.records.forEach((invoice) => {
+      pushInvoiceToApi(invoice);
+      ensureImportedCustomer(invoice);
+    });
+    if (p.type === "estimates") p.records.forEach((estimate) => {
+      pushEstimateToApi(estimate);
+      ensureImportedCustomer(estimate);
+    });
+    if (p.type === "expenses") p.records.forEach(pushExpenseToApi);
+    save();
+    toast(`${p.records.length} ${entityName(p.type)} record${p.records.length === 1 ? "" : "s"} imported`);
+    importPreview = null;
     render();
   }
   function appearanceFieldset(profile = shopProfile()) {
@@ -9844,8 +8718,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function applyRemoteList(key, records, entityType = key) {
-    const pending = pendingCreateIdsForCollection2(key, readMutationQueue(), shopEntityCollections);
-    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord, pending);
+    const remote = mergeRemoteCollection2(key, records, state[key], localSampleRecord);
     state[key] = applyQueuedEntityMutations(entityType, remote, readMutationQueue());
     save();
   }
@@ -9940,13 +8813,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return updated;
   }
   async function saveCustomerRecord(existing, data) {
-    customerListEpoch += 1;
-    const contact = customerContactFields(data, existing);
-    if (!contact.name) throw new Error("Customer name is required");
     const record = {
       ...existing || {},
-      ...contact,
       id: existing?.id || mutationId(),
+      name: data.name.trim(),
+      phone: data.phone.trim(),
+      email: data.email.trim(),
+      billingAddress: data.billingAddress.trim(),
+      billingNotes: data.billingNotes.trim(),
       vehicles: Number(existing?.vehicles || 0),
       visits: Number(existing?.visits || 0),
       spend: Number(existing?.spend || 0),
@@ -9959,7 +8833,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         method: existing ? "PUT" : "POST",
         body: JSON.stringify(record)
       });
-      saved = mergeSavedCustomer(record, response);
+      saved = response?.queued ? record : response;
     }
     const index = existing ? state.customers.indexOf(existing) : -1;
     if (index >= 0) state.customers[index] = saved;
@@ -9985,185 +8859,6 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         toast(error.message || "Customer could not be saved");
       }
     };
-  }
-  function customerIntakeResultMarkup(result, index) {
-    const contact = [result.phone, result.email].filter(Boolean).join(" \xB7 ") || "No phone or email on file";
-    const vehicle = result.recentVehicle?.label || result.recentVehicle?.vehicle || "No vehicle on file";
-    return `<button class="customer-search-option" type="button" role="option" data-customer-result="${index}"><span><strong>${escapeHtml(result.name)}</strong><small>${escapeHtml(contact)}</small></span><span class="customer-search-vehicle">${escapeHtml(vehicle)}<small>${Number(result.vehicleCount || result.vehicles?.length || 0)} vehicle${Number(result.vehicleCount || result.vehicles?.length || 0) === 1 ? "" : "s"}</small></span></button>`;
-  }
-  function installCustomerIntakeFields(form) {
-    const oldSelect = form.elements.customerSelect;
-    const customerInput = form.elements.customer;
-    if (!oldSelect || !customerInput) return;
-    oldSelect.closest("label").hidden = true;
-    oldSelect.closest("label").style.display = "none";
-    customerInput.hidden = false;
-    customerInput.required = true;
-    customerInput.autocomplete = "off";
-    customerInput.placeholder = "Start typing a first or last name";
-    customerInput.setAttribute("role", "combobox");
-    customerInput.setAttribute("aria-autocomplete", "list");
-    customerInput.setAttribute("aria-controls", "customer-search-results");
-    customerInput.setAttribute("aria-expanded", "false");
-    customerInput.closest("label").firstChild.textContent = "Customer name *";
-    customerInput.closest("label").classList.add("customer-search-field", "full");
-    customerInput.closest("label").insertAdjacentHTML("beforeend", `<small class="customer-search-help">Type at least ${CUSTOMER_SEARCH_MIN_LENGTH} characters to search existing customers.</small>`);
-    customerInput.closest("label").insertAdjacentHTML("afterend", `<div class="customer-search-results full" id="customer-search-results" role="listbox" aria-label="Matching customers" hidden></div>`);
-    form.elements.phone.closest("label").insertAdjacentHTML("afterend", `<label>Email<input name="email" type="email" autocomplete="email"/></label><label class="full">Billing address<input name="billingAddress" autocomplete="street-address"/></label><input name="selectedCustomerId" type="hidden"/><div class="duplicate-customer-warning full" id="duplicate-customer-warning" role="alert" hidden></div>`);
-  }
-  function bindCustomerIntakeSearch(form) {
-    const input = form.elements.customer;
-    const resultsElement = document.querySelector("#customer-search-results");
-    const duplicateElement = document.querySelector("#duplicate-customer-warning");
-    if (!input || !resultsElement) return { selected: () => null, select: () => {
-    } };
-    let timer = null;
-    let requestSequence = 0;
-    let controller = null;
-    let results = [];
-    let selectedCustomer = null;
-    let dismissedQuery = "";
-    const hideResults = () => {
-      resultsElement.hidden = true;
-      resultsElement.innerHTML = "";
-      input.setAttribute("aria-expanded", "false");
-    };
-    const showStatus = (message) => {
-      resultsElement.hidden = false;
-      resultsElement.innerHTML = `<div class="customer-search-status">${escapeHtml(message)}</div>`;
-      input.setAttribute("aria-expanded", "true");
-    };
-    const showResults = (matches, source) => {
-      results = matches;
-      resultsElement.hidden = false;
-      input.setAttribute("aria-expanded", "true");
-      resultsElement.innerHTML = `<div class="customer-search-head"><span>${matches.length ? `${matches.length} existing customer${matches.length === 1 ? "" : "s"} found${source === "local" ? " \xB7 saved on this device" : ""}` : "No matching customers found"}</span><button type="button" class="customer-search-dismiss">Dismiss</button></div>${matches.map(customerIntakeResultMarkup).join("")}`;
-      resultsElement.querySelector(".customer-search-dismiss").onclick = () => {
-        dismissedQuery = input.value.trim();
-        hideResults();
-        input.focus();
-      };
-      resultsElement.querySelectorAll("[data-customer-result]").forEach((button) => {
-        button.onclick = () => selectCustomer(results[Number(button.dataset.customerResult)]);
-        button.onkeydown = (event) => {
-          const options = [...resultsElement.querySelectorAll("[data-customer-result]")];
-          const index = options.indexOf(button);
-          if (event.key === "ArrowDown") {
-            event.preventDefault();
-            (options[index + 1] || options[0])?.focus();
-          } else if (event.key === "ArrowUp") {
-            event.preventDefault();
-            (options[index - 1] || options.at(-1))?.focus();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            hideResults();
-            input.focus();
-          }
-        };
-      });
-    };
-    const selectCustomer = (customer) => {
-      if (!customer) return;
-      selectedCustomer = customer;
-      form.elements.selectedCustomerId.value = customer.id;
-      input.value = customer.name || "";
-      form.elements.phone.value = customer.phone || "";
-      form.elements.email.value = customer.email || "";
-      form.elements.billingAddress.value = customer.billingAddress || "";
-      const localIndex = state.customers.findIndex((item) => item.id === customer.id || String(item.name || "").trim().toLowerCase() === String(customer.name || "").trim().toLowerCase());
-      const localRecord = { ...customer, vehicles: Number(customer.vehicleCount || customer.vehicles?.length || 0) };
-      if (localIndex >= 0) state.customers[localIndex] = { ...state.customers[localIndex], ...localRecord };
-      else state.customers.unshift(localRecord);
-      for (const vehicle of customer.vehicles || []) {
-        if (!state.vehicles.some((item) => item.id === vehicle.id)) {
-          state.vehicles.push({ ...vehicle, customer: customer.name, customerId: customer.id });
-        }
-      }
-      form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer(customer.name);
-      form.elements.vehicleSelect.value = "";
-      form.elements.vehicle.readOnly = false;
-      duplicateElement.hidden = true;
-      hideResults();
-      input.focus();
-    };
-    const runSearch = async () => {
-      const queryValue = input.value.trim();
-      if (!shouldSearchCustomers(queryValue) || queryValue === dismissedQuery) {
-        hideResults();
-        return;
-      }
-      const sequence = ++requestSequence;
-      controller?.abort();
-      controller = new AbortController();
-      showStatus("Searching customers\u2026");
-      try {
-        const response = await apiFetch(`/customers/search?q=${encodeURIComponent(queryValue)}`, { signal: controller.signal });
-        if (sequence !== requestSequence || input.value.trim() !== queryValue) return;
-        showResults(response.results || [], "cloud");
-      } catch (error) {
-        if (sequence !== requestSequence || error.name === "AbortError") return;
-        showResults(localCustomerMatches(queryValue, state.customers, state.vehicles), "local");
-      }
-    };
-    input.addEventListener("input", () => {
-      clearTimeout(timer);
-      controller?.abort();
-      requestSequence += 1;
-      dismissedQuery = "";
-      duplicateElement.hidden = true;
-      if (selectedCustomer && input.value.trim() !== selectedCustomer.name) {
-        selectedCustomer = null;
-        form.elements.selectedCustomerId.value = "";
-        form.elements.vehicleSelect.innerHTML = vehicleOptionsForCustomer("");
-      }
-      if (!shouldSearchCustomers(input.value)) {
-        hideResults();
-        return;
-      }
-      timer = setTimeout(runSearch, CUSTOMER_SEARCH_DEBOUNCE_MS);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowDown" && !resultsElement.hidden) {
-        event.preventDefault();
-        resultsElement.querySelector("[data-customer-result]")?.focus();
-      } else if (event.key === "Escape") {
-        hideResults();
-      }
-    });
-    [form.elements.phone, form.elements.email].forEach((field2) => field2.addEventListener("input", () => {
-      form.dataset.duplicateConfirmed = "";
-      duplicateElement.hidden = true;
-    }));
-    input.focus();
-    return { selected: () => selectedCustomer, select: selectCustomer };
-  }
-  async function intakeDuplicateMatches(data) {
-    try {
-      const response = await apiFetch("/customers/duplicates", {
-        method: "POST",
-        body: JSON.stringify({ phone: data.phone, email: data.email })
-      });
-      return response.results || [];
-    } catch {
-      return likelyDuplicateCustomers(data, state.customers, state.vehicles);
-    }
-  }
-  function showIntakeDuplicateWarning(form, matches, picker, confirmationKey) {
-    const warning = document.querySelector("#duplicate-customer-warning");
-    warning.hidden = false;
-    warning.innerHTML = `<strong>Possible duplicate customer</strong><p>This phone or email matches an existing customer. Link this work order or explicitly continue:</p>${matches.map((match, index) => `<button type="button" class="duplicate-customer-use" data-duplicate-result="${index}">Use ${escapeHtml(match.name)} instead</button>`).join("")}<button type="button" class="duplicate-customer-continue">Create a new customer anyway</button>`;
-    warning.querySelectorAll("[data-duplicate-result]").forEach((button) => {
-      button.onclick = () => {
-        picker.select(matches[Number(button.dataset.duplicateResult)]);
-        form.requestSubmit();
-      };
-    });
-    warning.querySelector(".duplicate-customer-continue").onclick = () => {
-      form.dataset.duplicateConfirmed = confirmationKey;
-      warning.hidden = true;
-      form.requestSubmit();
-    };
-    warning.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   function expandedEstimateLines(estimate = {}) {
     return (estimate.lines || []).flatMap((line, index) => {
@@ -10203,17 +8898,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money4(item.price)}</option>`).join("")}`;
   }
   function estimateEditorLine(line = {}, index = 0, removable = true) {
-    const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
-    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-fee-code="${escapeAttr(item.code || "")}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
+    const item = normalizeEstimateLine(line, index), part = item.type === "part";
+    return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
-      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate}"/></label>
     </div>
     <div class="job-line-total"><span>Line total</span><b>${money4(item.total)}</b></div>
   </article>`;
@@ -10236,9 +8931,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         laborRate: type === "labor" ? unitPrice : 0,
         inventoryId: inventory?.id || null,
         inventorySku: inventory?.sku || "",
-        committedQuantity: type === "part" && inventory ? quantity : 0,
-        code: type === "fee" ? row.dataset.feeCode : "",
-        amount: type === "fee" ? unitPrice : 0
+        committedQuantity: type === "part" && inventory ? quantity : 0
       }, index);
     }).filter((line) => line.description && line.quantity > 0);
     const fees = options.fees ?? (lines.length ? [{ description: "Shop supplies", amount: 12 }] : []);
@@ -10247,16 +8940,13 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function refreshEstimateEditor(root) {
     root.querySelectorAll(".job-estimate-line").forEach((row) => {
       const type = row.querySelector(".job-line-type").value;
-      const quantityInput = row.querySelector(".job-line-quantity");
-      if (type === "fee") quantityInput.value = "1";
-      const quantity = Math.max(0, Number(quantityInput.value) || 0);
+      const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
       const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
       row.querySelector(".job-inventory-field").hidden = type !== "part";
       row.querySelector(".job-part-number-field").hidden = type !== "part";
-      row.querySelector(".job-line-quantity-field").hidden = type === "fee";
-      row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
-      row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
-      row.querySelector(".job-line-quantity").step = type === "labor" ? ".25" : "1";
+      row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+      row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+      row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".25";
       row.querySelector(".job-line-total b").textContent = money4(quantity * rate);
     });
     const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
@@ -10269,12 +8959,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (options) root._estimateOptions = options;
     const bindRows = () => {
       root.querySelectorAll("input,textarea,select").forEach((control) => control.oninput = () => refreshEstimateEditor(root));
-      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => {
-        const row = control.closest(".job-estimate-line"), labor = control.value === "labor";
-        row.querySelector(".lookup-labor-time").hidden = !labor;
-        row.querySelector(".labor-source").hidden = !labor;
-        refreshEstimateEditor(root);
-      });
+      root.querySelectorAll(".job-line-type").forEach((control) => control.onchange = () => refreshEstimateEditor(root));
       root.querySelectorAll(".job-line-inventory").forEach((control) => control.onchange = () => {
         const row = control.closest(".job-estimate-line"), item = state.inventory.find((entry) => entry.id === control.value);
         if (item) {
@@ -10288,62 +8973,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         button.closest(".job-estimate-line").remove();
         refreshEstimateEditor(root);
       });
-      root.querySelectorAll(".lookup-labor-time").forEach((button) => button.onclick = async () => {
-        const row = button.closest(".job-estimate-line"), form = root.closest("form");
-        const query2 = row.querySelector(".job-line-description").value.trim();
-        button.disabled = true;
-        try {
-          const result = await apiFetch("/labor-times/search", {
-            method: "POST",
-            body: JSON.stringify({
-              vin: form?.elements.vin?.value || "",
-              query: query2,
-              model: form?.elements.vehicle?.value?.trim() || ""
-            })
-          });
-          const labor = (result.results || [])[0];
-          if (!labor) throw new Error("No labor operation returned");
-          if (labor.hours != null) row.querySelector(".job-line-quantity").value = labor.hours;
-          row.dataset.laborSource = labor.source || "Unverified shop estimate";
-          row.dataset.laborVerified = labor.verified ? "1" : "0";
-          row.querySelector(".labor-source").innerHTML = `<span class="badge ${labor.verified ? "paid" : "estimate"}">${labor.verified ? "Verified" : "Unverified"}</span> ${escapeHtml(row.dataset.laborSource)}`;
-          refreshEstimateEditor(root);
-          toast(labor.verified ? `Verified ${labor.provider} labor time applied` : "No licensed result; keeping the shop estimate unverified");
-        } catch (error) {
-          toast(error.message);
-        } finally {
-          button.disabled = false;
-        }
-      });
     };
     root._bindEstimateRows = bindRows;
     bindRows();
     refreshEstimateEditor(root);
-  }
-  function editorLineSnapshot(row) {
-    return {
-      id: row.dataset.lineId || "",
-      code: row.dataset.feeCode || "",
-      type: row.querySelector(".job-line-type")?.value || "labor",
-      description: row.querySelector(".job-line-description")?.value || "",
-      notes: row.querySelector(".job-line-notes")?.value || "",
-      unitPrice: Number(row.querySelector(".job-line-rate")?.value) || 0
-    };
-  }
-  function addAfterMidnightFeeToEditor(root, append) {
-    const rows = [...root.querySelectorAll(".job-estimate-line")];
-    if (rows.some((row) => row.dataset.feeCode === "after-midnight")) {
-      toast("The after-midnight fee is already on this work order");
-      return;
-    }
-    const legacyRows = rows.filter((row) => isLegacyAfterMidnightLine(editorLineSnapshot(row)));
-    if (legacyRows.length) {
-      const descriptions = legacyRows.map((row) => row.querySelector(".job-line-description")?.value.trim()).filter(Boolean).join(", ");
-      if (!confirm(`A likely legacy after-midnight charge already exists (${descriptions || "unnamed line"}). Adding another fee could double-charge the customer. Replace the legacy line with the standard $200 flat fee?`)) return;
-      legacyRows.forEach((row) => row.remove());
-    }
-    append(afterMidnightFeeLine(`fee-after-midnight-${Date.now()}`));
-    if (legacyRows.length) toast("Legacy after-midnight charge replaced with the standard $200 flat fee");
   }
   async function ensureCustomerDocumentLink(documentType, documentId) {
     return apiFetch("/document-links", {
@@ -10368,25 +9001,11 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       toast(error.message || "Could not create the customer approval link");
     }
   }
-  function approvalSignatureSrc(approval) {
-    if (String(approval?.signatureDataUrl || "").startsWith("data:image/")) return approval.signatureDataUrl;
-    const key = String(approval?.signatureKey || "");
-    return key ? `${cloudflareConfig2.apiUrl}/files/object?key=${encodeURIComponent(key)}` : "";
-  }
-  function estimateApprovalMarkup(approval) {
-    const normalized = normalizeEstimateApproval(approval);
-    if (!normalized || normalized.status !== "approved") return "";
-    const summary = approvalSummary(normalized);
-    const signatureSrc = normalized.type === "signature" ? approvalSignatureSrc(normalized) : "";
-    return `<section class="estimate-approval-record"><div><span>Estimate authorization</span><strong>${escapeHtml(summary)}</strong></div>${signatureSrc ? `<img src="${escapeAttr(signatureSrc)}" alt="Customer signature"/>` : ""}</section>`;
-  }
   function onsiteSignatureModal(kind, record) {
     const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
     const number = kind === "estimate" ? record.id : record.number;
-    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money4(line.unitPrice)}` : line.type === "fee" ? `Flat fee \xB7 ${money4(line.total)}` : `${line.hours.toFixed(2)} hr \xD7 ${money4(line.laborRate)}`}</small></span><strong>${money4(line.total)}</strong></label>`).join("")}</fieldset>` : "";
-    const typeOptions = ESTIMATE_APPROVAL_TYPES.map((option) => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join("");
-    const approvalFields = kind === "estimate" ? `<div class="form-grid approval-method-fields"><label>Approval type *<select name="approvalType" id="approval-type">${typeOptions}</select></label><label id="custom-approval-label" hidden>Custom approval type *<input name="customLabel" maxlength="${APPROVAL_CUSTOM_LABEL_MAX}" placeholder="e.g. Approved via fleet manager email"/></label><label class="full">Approval note (optional)<textarea name="approvalNote" maxlength="${APPROVAL_NOTE_MAX}" placeholder="Who approved, callback number, or other audit detail"></textarea></label></div>` : "";
-    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Authorize estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money4(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}${approvalFields}<label>Approver name *<input name="authorizationName" maxlength="100" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label" id="signature-capture">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer" id="approval-disclaimer">${kind === "estimate" ? "A signature authorizes the selected work. For phone, in-person, email, text, or other approval, MechPro records the current staff user and time instead." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary" id="save-document-approval">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money4(line.unitPrice)}` : `${line.hours.toFixed(2)} hr \xD7 ${money4(line.laborRate)}`}</small></span><strong>${money4(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Approve estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money4(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}<label>Customer name *<input name="authorizationName" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer">${kind === "estimate" ? "Signing explicitly authorizes the selected work. Unchecked lines are declined." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
     let drawing = false, drawn = false;
     const position = (event) => {
@@ -10417,54 +9036,26 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       context.clearRect(0, 0, canvas.width, canvas.height);
       drawn = false;
     };
-    const approvalType = document.querySelector("#approval-type");
-    const syncApprovalMethod = () => {
-      if (!approvalType) return;
-      const signature = approvalType.value === "signature";
-      const other = approvalType.value === "other";
-      const signatureCapture = document.querySelector("#signature-capture");
-      const clearSignature = document.querySelector("#clear-signature");
-      const customApproval = document.querySelector("#custom-approval-label");
-      signatureCapture.hidden = !signature;
-      signatureCapture.style.display = signature ? "" : "none";
-      clearSignature.hidden = !signature;
-      clearSignature.style.display = signature ? "" : "none";
-      customApproval.hidden = !other;
-      customApproval.style.display = other ? "" : "none";
-      document.querySelector('[name="customLabel"]').required = other;
-      document.querySelector("#save-document-approval").innerHTML = `${icon(signature ? "signature" : "circle-check", 14)} ${signature ? "Sign & approve" : "Record approval"}`;
-      lucide.createIcons();
-    };
-    approvalType?.addEventListener("change", syncApprovalMethod);
-    syncApprovalMethod();
     document.querySelector("#document-signature-form").onsubmit = async (event) => {
       event.preventDefault();
-      const data = new FormData(event.target);
-      const selectedType = kind === "estimate" ? String(data.get("approvalType") || "signature") : "signature";
-      if (selectedType === "signature" && !drawn) return toast("Draw the customer signature first");
+      if (!drawn) return toast("Draw the customer signature first");
       const approvedIds = new Set([...event.target.querySelectorAll('[name="approvedLine"]:checked')].map((input) => input.value));
       if (kind === "estimate" && !approvedIds.size) return toast("Approve at least one line or close without signing");
       const button = event.target.querySelector("button[type=submit]");
       button.disabled = true;
       try {
-        const approvedAt = now();
-        const hasSignature = selectedType === "signature";
-        const signatureDataUrl = hasSignature ? canvas.toDataURL("image/png") : void 0;
-        const key = hasSignature && !isLocalShell() ? await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png") : null;
-        const signature = { authorizationName: String(data.get("authorizationName") || "").trim(), signatureKey: key, signatureDataUrl: hasSignature && isLocalShell() ? signatureDataUrl : void 0, signedAt: hasSignature ? approvedAt : void 0, source: "on-site" };
+        const signatureDataUrl = canvas.toDataURL("image/png");
+        const key = isLocalShell() ? null : await uploadFileToR2(await canvasToBlob(canvas), "signature", "image/png");
+        const signature = {
+          authorizationName: new FormData(event.target).get("authorizationName").trim(),
+          signatureKey: key,
+          signatureDataUrl: isLocalShell() ? signatureDataUrl : void 0,
+          signedAt: now(),
+          source: "on-site"
+        };
         if (kind === "estimate") {
           const decisions = Object.fromEntries(estimate.lines.map((line) => [line.id, approvedIds.has(line.id) ? "approved" : "declined"]));
           const approved = approvedEstimate(estimate, decisions);
-          const approval = validateEstimateApproval({
-            status: "approved",
-            ...signature,
-            type: selectedType,
-            customLabel: String(data.get("customLabel") || "").trim(),
-            approvedAt,
-            note: String(data.get("approvalNote") || "").trim(),
-            recordedBy: approvalRecorder(currentUser()),
-            decisions
-          });
           record.estimate = approved;
           record.total = approved.total;
           record.labor = approved.labor;
@@ -10472,18 +9063,18 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
           record.parts = approved.parts;
           record.tax = approved.tax;
           record.status = record.estimateRevisionPreviousStatus || "approved";
-          record.linesLockedAt = approvedAt;
-          record.estimateApproval = approval;
+          record.linesLockedAt = signature.signedAt;
+          record.estimateApproval = { status: "approved", ...signature, decisions };
           record.estimateRevisionPending = false;
           delete record.estimateRevisionPreviousStatus;
-          Object.assign(record, await updateOrderInApi(record));
+          await updateOrderInApi(record);
         } else {
           record.signature = signature;
           await updateInvoiceInApi(record);
         }
         save();
         closeModal();
-        toast(kind === "estimate" ? `${record.id} approval recorded` : `${record.number} signed`);
+        toast(kind === "estimate" ? `${record.id} approved and signed` : `${record.number} signed`);
         render();
       } catch (error) {
         button.disabled = false;
@@ -10521,18 +9112,17 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const billableLines = billableEstimateLines(estimate.lines);
     const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
     const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money4(line.laborRate)}</td><td>${money4(line.total)}</td></tr>`).join("");
-    const partRows = billableLines.filter((line) => ["part", "fee"].includes(line.type)).map((line) => `<tr><td><b>${line.type === "fee" ? "Fee \xB7 " : ""}${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${line.type === "fee" ? "Flat fee" : Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.total)}</td></tr>`).join("");
+    const partRows = billableLines.filter((line) => line.type === "part").map((line) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
-    const approvalMarkup = estimateApprovalMarkup(order.estimateApproval);
     const win = window.open("", "_blank");
     if (!win) return toast("Allow pop-ups to print the job card");
     win.opener = null;
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.estimate-approval-record{display:flex;justify-content:space-between;gap:20px;margin-top:20px;padding:14px;border:1px solid #b9d0c2;background:#edf5ef}.estimate-approval-record span,.estimate-approval-record strong{display:block}.estimate-approval-record span{font-size:9px;text-transform:uppercase}.estimate-approval-record img{max-width:260px;max-height:90px;object-fit:contain}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money4(estimate.parts)}</b></div><div><span>Labor</span><b>${money4(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money4(supplies)}</b></div><div><span>Discount</span><b>-${money4(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money4(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money4(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${approvalMarkup}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money4(estimate.parts)}</b></div><div><span>Labor</span><b>${money4(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money4(supplies)}</b></div><div><span>Discount</span><b>-${money4(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money4(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money4(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
     win.document.close();
   }
   function jobWorkflowSteps(order, invoice) {
     const approval = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Approval required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
+    return `<ol class="job-progress"><li class="done"><span>1</span><b>Estimate</b><small>Parts + labor</small></li><li class="${approval ? "done" : "current"}"><span>2</span><b>Approval</b><small>${approval ? "Explicitly approved" : order.estimateRevisionPending ? "Revision needs approval" : "Signature required"}</small></li><li class="${["in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status) ? "done" : ""}"><span>3</span><b>Work</b><small>${order.status === "waiting_parts" ? "Waiting parts" : "Repair"}</small></li><li class="${invoice ? "done" : ""}"><span>4</span><b>Invoice</b><small>${invoice ? invoice.number : "Generated on completion"}</small></li></ol>`;
   }
   async function completeJobCard(order) {
     const explicitlyApproved = !order.estimateRevisionPending && (order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts"].includes(order.status));
@@ -10578,15 +9168,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function estimateLinePresentation(line) {
     const pending = line.priceStatus === "pending";
-    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money4(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : line.type === "fee" ? `Flat fee \xB7 ${money4(line.total)}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money4(line.laborRate)}`;
+    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money4(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money4(line.laborRate)}`;
     const assigned = line.type === "labor" ? normalizeTechnicianIds(line).map(technicianName2) : [];
-    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small><span class="badge ${line.laborVerified ? "paid" : "estimate"}">${line.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(line.laborSource || "Shop estimate")}</small><small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money4(line.total)}</b></article>`;
+    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money4(line.total)}</b></article>`;
   }
   function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
     const { customer, vehicle } = estimateParty(estimate, record);
     const parts = (estimate.lines || []).filter((line) => line.type === "part");
     const labor = (estimate.lines || []).filter((line) => line.type === "labor");
-    const feeLines = (estimate.lines || []).filter((line) => line.type === "fee");
     const supply = (estimate.fees || []).find((fee) => /shop supplies/i.test(fee.description));
     const exclusions = estimate.exclusions || record.exclusions || [];
     const insurance = estimate.insurance || record.insurance || {};
@@ -10601,17 +9190,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money4(estimate.parts)}</b></div></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
-    ${feeLines.length ? `<section class="reference-estimate-section"><div class="reference-section-title"><span>03</span><h3>Fees</h3></div>${feeLines.map(estimateLinePresentation).join("")}</section>` : ""}
     <section class="reference-totals">
       <div><span>Labor</span><b>${money4(estimate.labor)}</b></div>
-      ${feeLines.length ? `<div><span>Fees</span><b>${money4(estimate.lineFees || 0)}</b></div>` : ""}
       <div><span>Shop supplies</span><b>${money4(supply?.amount || 0)}</b></div>
       <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` \xB7 ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money4(estimate.discountAmount)}` : money4(0)}</b></div>
       <div><span>Tax \xB7 ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money4(estimate.tax)}</b></div>
       <div class="total"><span>Estimate total</span><b>${money4(estimate.total)}</b></div>
     </section>
     <aside class="reference-exclusions"><strong>Not included / still pending</strong><ul>${exclusions.length ? exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Additional or hidden work is not included without a revised estimate and authorization.</li>"}</ul></aside>
-    ${standalone ? "" : estimateApprovalMarkup(record.estimateApproval)}
   </section>`;
   }
   function availableEstimateSources() {
@@ -11386,20 +9972,7 @@ ${catRows}
       }
     });
   }
-  function canManageShopAi() {
-    return ["admin", "owner"].includes(currentUser()?.role || "");
-  }
-  async function loadShopAiSettings(force = false) {
-    if (shopAiSettings.loading || shopAiSettings.loaded && !force) return;
-    shopAiSettings = { ...shopAiSettings, loading: true };
-    try {
-      shopAiSettings = { ...await apiFetch("/settings/ai"), loaded: true, loading: false };
-    } catch {
-      shopAiSettings = { hasKey: false, loaded: true, loading: false, unavailable: true };
-    }
-    if (state.route === "settings") render();
-  }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, pendingCreateIdsForCollection2, visibleSidebar2, chatDerivedCache, posReaders, posConfigured, posCharge, posPollTimer, posSelectedId, posMode, posPhoneEntry, posStripe, integrationStatus, laborLookupResults, partsLookupResult, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, stripePaymentStatus, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, shopEntityReadRoles, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, modalAutosaveFlush, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, bindPosCore, renderHomeCore, customerListEpoch, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, NEW_ORDER_DRAFT_KEY, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, bindFilingCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, visibleSidebar2, chatDerivedCache, posReaders, posConfigured, posCharge, posPollTimer, posSelectedId, posMode, posPhoneEntry, posStripe, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, stripePaymentStatus, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, financeDerivedCache, modalAutosaveFlush, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, bindPosCore, renderHomeCore, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, NEW_ORDER_DRAFT_KEY, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, bindFilingCore, renderShopOsCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -11412,17 +9985,10 @@ ${catRows}
       init_repair_guide();
       init_shop_inspections();
       init_autozone_pro();
-      init_partstech();
-      init_labor_guide();
-      init_shop_ai_settings();
-      init_quickbooks();
-      init_repair_order_flow();
       init_file_upload();
       init_ai_workflow();
-      init_customer_intake();
       init_mileage();
       init_filing();
-      init_customer_metrics();
       init_offline_desktop();
       init_catalog_inspection_ui();
       init_entity_persistence();
@@ -11432,12 +9998,10 @@ ${catRows}
       init_help_menu();
       init_technician_assignment();
       init_intake_wizard();
-      init_work_order_editor();
       init_estimate_workflow();
       init_estimate_templates();
       init_bay();
-      init_estimate_approval();
-      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, pendingCreateIdsForCollection: pendingCreateIdsForCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
+      ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
       posReaders = null;
       posConfigured = false;
@@ -11447,9 +10011,6 @@ ${catRows}
       posMode = "reader";
       posPhoneEntry = false;
       posStripe = null;
-      integrationStatus = null;
-      laborLookupResults = [];
-      partsLookupResult = null;
       assistantConversation = [];
       assistantPaused = false;
       assistantSessionId = "";
@@ -11575,17 +10136,13 @@ ${catRows}
       flushingMutationQueue = false;
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
-      shopEntityReadRoles = { keyprogrammingjobs: ["admin", "technician", "service_writer"] };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "accounting", "payroll", "messaging", "payments", "integrations", "support", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll", "integrations", "support"], office: ["customers", "shopops", "chat", "invoices", "pos", "accounting", "messaging", "integrations", "support"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "messaging", "integrations", "support"] };
+      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "accounting", "payroll", "messaging", "payments", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll"], office: ["customers", "shopops", "chat", "invoices", "pos", "accounting"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai"] };
       attentionDismissBound = false;
       userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
       relationshipDerivedCache = null;
       autozoneAccount = { connected: false, loaded: false };
-      partstechAccount = { connected: false, loaded: false };
-      laborGuideAccount = { connected: false, provider: "manual", loaded: false };
-      quickbooksAccount = { connected: false, loaded: false };
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
       financeDerivedCache = null;
       modalAutosaveFlush = null;
@@ -11654,7 +10211,7 @@ ${catRows}
         applyAppearance(shopProfile().themeMode);
         if (currentUser() && state.route === "shopops") {
           const root = document.querySelector("#root");
-          root.innerHTML = safeHtml(shopOperations());
+          root.innerHTML = DOMPurify.sanitize(shopOperations(), { USE_PROFILES: { html: true } });
           lucide.createIcons();
           bind();
           bindShopOperations();
@@ -11754,20 +10311,13 @@ ${catRows}
           }
         });
       };
-      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 140, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
+      shopProfileDefaults = { id: "profile", shopName: "Your Car Guy", phone: "555-0100", address: "100 Demo Street, Example City, TX 00000", laborRate: 165, mileageRate: 0.68, invoiceFooter: "Thank you for your business.", logoUrl: "https://www.yourcarguy806.com/assets/reliable-logo.jpg", brandColor: "#087e6a", accentColor: "#ffd34e", themeMode: "device", coupons: [], defaultVendor: "", defaultVendorByKind: {}, carfaxEnabled: false, plateProviderEnabled: false };
       appearanceMedia = matchMedia("(prefers-color-scheme: dark)");
       appearanceMedia.addEventListener?.("change", () => {
         if (document.documentElement.dataset.themeMode === "device") applyAppearance("device");
       });
       applyAppearance();
       importTypes = IMPORT_TYPES;
-      bindImportIntegrityCore = bindExpandedFeatures;
-      bindExpandedFeatures = function() {
-        bindImportIntegrityCore();
-        document.querySelectorAll('[data-route="customers"], [data-route="shopops"], [data-route="imports"]').forEach((link) => {
-          link.addEventListener("click", () => void loadMeldedDataView(link.dataset.route));
-        });
-      };
       settings = function() {
         const profile = shopProfile(), t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join(""), kinds = ["Part", "Tire", "Supply", "Asset"], couponRows = profile.coupons.map((coupon) => `<tr><td><b>${escapeHtml(coupon.code)}</b></td><td>${coupon.percent}%</td><td><span class="badge ${coupon.active ? "paid" : "estimate"}">${coupon.active ? "Active" : "Inactive"}</span></td><td><div class="coupon-actions"><button type="button" class="mini-action" data-edit-coupon="${escapeHtml(coupon.id)}">${icon("pencil", 13)} Edit</button><button type="button" class="mini-action" data-toggle-coupon="${escapeHtml(coupon.id)}">${icon(coupon.active ? "pause" : "play", 13)} ${coupon.active ? "Disable" : "Enable"}</button><button type="button" class="mini-action danger" data-delete-coupon="${escapeHtml(coupon.id)}">${icon("trash-2", 13)} Delete</button></div></td></tr>`).join("");
         const emptyCouponRows = '<tr><td colspan="4">No coupons configured.</td></tr>', vendorKindFields = kinds.map((kind) => "<label>" + kind + ' default<select name="vendor' + kind + '">' + vendorOptions(profile.defaultVendorByKind?.[kind] || "") + "</select></label>").join("");
@@ -11867,27 +10417,6 @@ ${catRows}
           toast("Estimate discount applied");
           render();
         };
-      };
-      printInvoice = function(number) {
-        const invoice = state.invoices.find((item) => item.number === number);
-        if (!invoice) return;
-        const profile = shopProfile();
-        const brand = printableBrand(profile);
-        const breakdown = invoiceTaxBreakdown(invoice);
-        const paid = invoicePaid(invoice);
-        const balance = invoiceBalance(invoice);
-        const customer = state.customers.find((item) => item.name === invoice.customer);
-        const order = state.orders.find((item) => item.id === invoice.ro);
-        const itemRows = invoicePrintLineItems(invoice).map((item) => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money4(item.amount)}</td></tr>`).join("");
-        const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money4(breakdown.subtotal)}</td></tr>`;
-        const paymentRows = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number).map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money4(Number(payment.amount || 0))}</td></tr>`).join("");
-        const win = window.open("", "_blank", "noopener");
-        if (!win) {
-          toast("Allow pop-ups to print the invoice");
-          return;
-        }
-        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money4(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money4(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money4(invoice.amount)}</b></p><p><span>Payments</span><b>-${money4(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money4(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
-        win.document.close();
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
@@ -12099,7 +10628,7 @@ ${catRows}
       render = function() {
         if (currentUser() && state.route === "home") {
           const root = document.querySelector("#root");
-          root.innerHTML = safeHtml(homeDashboard());
+          root.innerHTML = DOMPurify.sanitize(homeDashboard(), { USE_PROFILES: { html: true } });
           lucide.createIcons();
           bind();
           bindExpandedFeatures();
@@ -12110,7 +10639,6 @@ ${catRows}
         }
         renderHomeCore();
       };
-      customerListEpoch = 0;
       loadOrdersFromApi = async function() {
         try {
           applyRemoteList("orders", await apiFetch("/entities/orders"));
@@ -12119,11 +10647,8 @@ ${catRows}
         }
       };
       loadCustomersFromApi = async function() {
-        const epoch = customerListEpoch;
         try {
-          const records = await apiFetch("/entities/customers");
-          if (epoch !== customerListEpoch) return;
-          applyRemoteList("customers", records);
+          applyRemoteList("customers", await apiFetch("/entities/customers"));
         } catch (error) {
           console.error("Failed to load customers from API; using local data", error);
         }
@@ -12188,10 +10713,7 @@ ${catRows}
         const q = query.toLowerCase();
         const cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
-          const visitCount = state.orders.filter((order) => order.customer === item.name).length;
-          const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p>${item.billingAddress ? `<p>${escapeHtml(item.billingAddress)}</p>` : ""}</div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money4(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money4(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money4(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money4(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -12200,43 +10722,30 @@ ${catRows}
         openNewCore();
         const form = document.querySelector("#new-form");
         if (!form) return;
-        installCustomerIntakeFields(form);
-        const customerPicker = bindCustomerIntakeSearch(form);
         form.onsubmit = async (event) => {
           event.preventDefault();
           const data = Object.fromEntries(new FormData(form));
-          const customerName = String(data.customer || "").trim();
+          const customerName = String(data.customerSelect === "__new__" ? data.customer : data.customerSelect || data.customer).trim();
           if (!customerName) return toast("Select or enter a customer name");
           const button = form.querySelector("button[type=submit], button:not([type])");
           button.disabled = true;
           try {
-            const selectedCustomer = customerPicker.selected();
-            const duplicateKey = `${String(data.phone || "").replace(/\D/g, "")}|${String(data.email || "").trim().toLowerCase()}`;
-            if (!selectedCustomer && duplicateKey !== "|" && form.dataset.duplicateConfirmed !== duplicateKey) {
-              const duplicates = await intakeDuplicateMatches(data);
-              if (duplicates.length) {
-                button.disabled = false;
-                showIntakeDuplicateWarning(form, duplicates, customerPicker, duplicateKey);
-                return;
-              }
-            }
-            let customer = selectedCustomer || state.customers.find((item) => item.id === data.selectedCustomerId) || state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
-            const contact = customerContactFields({
-              name: customerName,
-              phone: data.phone,
-              email: data.email,
-              billingAddress: data.billingAddress
-            }, customer);
-            if (!customer || customerContactChanged(customer, contact)) {
-              customer = await saveCustomerRecord(customer || null, contact);
+            let customer = state.customers.find((item) => item.name.toLowerCase() === customerName.toLowerCase());
+            if (!customer) {
+              customer = await saveCustomerRecord(null, {
+                name: customerName,
+                phone: String(data.phone || ""),
+                email: "",
+                billingAddress: "",
+                billingNotes: ""
+              });
             }
             const estimate = readNewOrderEstimate();
             const id = `RO-${Math.max(1040, ...state.orders.map((item) => Number(item.id.split("-")[1]) || 0)) + 1}`;
             const order = {
               id,
-              customerId: customer.id,
               customer: customer.name,
-              phone: data.phone || customer.phone,
+              phone: data.phone,
               vehicle: data.vehicle,
               vin: String(data.vin || "").trim().toUpperCase() || "VIN pending",
               complaint: data.complaint,
@@ -12349,7 +10858,7 @@ ${catRows}
           }
         };
       };
-      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 140) }) {
+      newOrderEstimateRow = function(line = { type: "labor", description: "Custom service", notes: "Describe the quoted work.", hours: 1, laborRate: Number(shopProfile().laborRate || 165) }) {
         return expandedEstimateLines({ lines: [line] }).map((item, index) => estimateEditorLine(item, index)).join("");
       };
       readNewOrderEstimate = function() {
@@ -12363,7 +10872,7 @@ ${catRows}
         form.elements.status.value = "estimate";
         const toolbar2 = root.previousElementSibling;
         if (toolbar2 && !document.querySelector("#add-part-line")) {
-          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-after-midnight-fee" type="button">${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
+          toolbar2.querySelector("#add-estimate-line")?.insertAdjacentHTML("beforebegin", `<button class="secondary" id="add-part-line" type="button">${icon("package-plus", 14)} Add part</button>`);
         }
         const append = (line) => {
           root.insertAdjacentHTML("beforeend", estimateEditorLine(line, root.children.length));
@@ -12375,7 +10884,7 @@ ${catRows}
           const services = (requested || complaint).split(/\n|,|;/).map((value2) => value2.trim()).filter(Boolean);
           const generated = services.flatMap((service, index) => {
             const source = estimateLocal(vehicle, service).lines[0];
-            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 140) }, index);
+            const labor = normalizeEstimateLine({ id: `labor-${Date.now()}-${index}`, type: "labor", description: source.service, notes: newOrderServiceExplanation(service, source.notes), hours: source.hours, laborRate: source.hours ? source.labor / source.hours : Number(shopProfile().laborRate || 165) }, index);
             const parts = source.parts ? [normalizeEstimateLine({ id: `part-${Date.now()}-${index}`, type: "part", description: `${source.service} parts & materials`, quantity: 1, unitPrice: source.parts }, index)] : [];
             return [labor, ...parts];
           });
@@ -12383,9 +10892,8 @@ ${catRows}
           bindEstimateEditor(root);
           toast(`${services.length} service estimate${services.length === 1 ? "" : "s"} generated`);
         };
-        document.querySelector("#add-estimate-line").onclick = () => append(customLaborDraft(`labor-${Date.now()}`, shopProfile().laborRate || 140));
+        document.querySelector("#add-estimate-line").onclick = () => append({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: Number(shopProfile().laborRate || 165) });
         document.querySelector("#add-part-line").onclick = () => append({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 });
-        document.querySelector("#add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(root, append);
         bindEstimateEditor(root);
       };
       ensureInvoiceForOrder = async function(order) {
@@ -12408,16 +10916,13 @@ ${catRows}
         order.estimate = coherentOrderEstimate(order);
         const estimate = order.estimate, invoice = state.invoices.find((item) => item.ro === order.id);
         const canManage = ["owner", "admin", "office", "service_writer"].includes(currentUser().role);
-        const canApprove = ["owner", "admin", "service_writer"].includes(currentUser().role);
         const paidInvoice = invoice && invoicePaid(invoice) > 0;
-        const terminalOrder = ["completed", "invoiced"].includes(order.status);
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
-        const canEditEstimate = canManage && (!wasApproved || canApprove);
-        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
+        const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 165);
         const editNotice = paidInvoice ? "Invoice already has a payment. Edits still update line items and the invoice total; recorded payments stay on the invoice." : invoice ? "Saving also updates the invoice and clears its signature so it can be re-authorized." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total. Closing the dialog autosaves drafts.";
         const detailsEditor = canManage ? `<section class="job-details-editor"><div class="job-section-head"><div><h3>Work order details</h3><p>Customer, vehicle, complaint, and assignment stay editable through estimate, work, and invoice.</p></div><span class="autosave-hint" id="job-autosave-status">Autosave on</span></div><div class="form-grid"><label>Customer *<select id="job-detail-customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input id="job-detail-phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input id="job-detail-vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input id="job-detail-vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label><label class="full">Customer complaint *<textarea id="job-detail-complaint" rows="3" required>${escapeHtml(order.complaint || "")}</textarea></label><label class="full">Technician / service notes<textarea id="job-detail-notes" rows="3">${escapeHtml(order.notes || "")}</textarea></label><label>Status<select id="job-detail-status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((status) => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select id="job-detail-priority">${["normal", "high", "low"].map((priority) => `<option value="${priority}" ${(order.priority || "normal") === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select id="job-detail-tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select id="job-detail-bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map((bay) => `<option ${(order.bay || "Unassigned") === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input id="job-detail-promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input id="job-detail-labor-hours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label></div></section>` : "";
-        const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
-        const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
+        const editor = canManage ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${editNotice}</p></div><div><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
+        const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button><button class="primary" id="sign-job-estimate">${icon("signature", 14)} Sign on device</button></div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
         const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money4(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
         const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
@@ -12555,7 +11060,7 @@ ${catRows}
           editorRoot.addEventListener("input", markJobCardDirty);
           editorRoot.addEventListener("change", markJobCardDirty);
           document.querySelector("#job-add-labor").onclick = () => {
-            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length));
+            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `labor-${Date.now()}`, type: "labor", description: "Custom labor", hours: 1, laborRate: defaultLaborRate }, editorRoot.children.length));
             bindEstimateEditor(editorRoot);
             markJobCardDirty();
           };
@@ -12564,18 +11069,7 @@ ${catRows}
             bindEstimateEditor(editorRoot);
             markJobCardDirty();
           };
-          document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, (line) => {
-            editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
-            bindEstimateEditor(editorRoot);
-            markJobCardDirty();
-          });
           document.querySelector("#save-job-lines").onclick = async (event) => {
-            const next = estimateFromEditor(editorRoot);
-            if (!next.lines.length) return toast("Add at least one labor, part, or fee line");
-            if (terminalOrderChangesAfterMidnightFee(order.status, estimate.lines, next.lines)) {
-              return toast("Reopen this work order before adding, replacing, or removing the after-midnight fee");
-            }
-            if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
             event.currentTarget.disabled = true;
             jobCardDirty = true;
             const ok = await persistJobCard({ silent: false, reopen: true });
@@ -12711,19 +11205,18 @@ ${catRows}
         });
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
-        const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee", laborSource = item.laborSource || "Unverified shop estimate";
-        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(laborSource)}" data-labor-verified="${item.laborVerified ? "1" : "0"}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}" data-fee-code="${escapeAttr(item.code || "")}">
-    <div class="estimate-line-head"><strong>${part ? "Part" : fee ? "Fee" : "Labor"} line</strong><div>${!part && !fee ? `<button class="mini-action lookup-labor-time" type="button">${icon("badge-check", 13)} Labor guide</button>` : ""}${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div></div>
+        const item = normalizeEstimateLine(line, index), part = item.type === "part";
+        return `<article class="job-estimate-line" data-line-id="${escapeAttr(item.id)}" data-price-status="${escapeAttr(item.priceStatus || "priced")}" data-labor-source="${escapeAttr(item.laborSource || "")}" data-technician-ids="${escapeAttr(JSON.stringify(item.technicianIds || []))}">
+    <div class="estimate-line-head"><strong>${part ? "Part" : "Labor"} line</strong>${removable ? `<button class="icon-button remove-job-line" type="button" title="Remove line">${icon("trash-2", 14)}</button>` : ""}</div>
     <div class="form-grid">
-      <label>Type<select class="job-line-type" ${item.code ? "disabled" : ""}><option value="labor" ${!part && !fee ? "selected" : ""}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option><option value="fee" ${fee ? "selected" : ""}>Fee</option></select></label>
+      <label>Type<select class="job-line-type"><option value="labor" ${part ? "" : "selected"}>Labor</option><option value="part" ${part ? "selected" : ""}>Part</option></select></label>
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
-      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
+      <label class="full">Description<input class="job-line-description" required value="${escapeAttr(item.description)}"/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
       <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
-      <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
-      <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
+      <label><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${part ? item.quantity : item.hours}"/></label>
+      <label><span class="job-line-rate-label">${part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${part ? item.unitPrice : item.laborRate || shopProfile().laborRate}"/></label>
     </div>
-    <small class="labor-source" ${part ? "hidden" : ""}><span class="badge ${item.laborVerified ? "paid" : "estimate"}">${item.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(laborSource)}</small>
     <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money4(item.total)}</b></div>
   </article>`;
       };
@@ -12749,10 +11242,7 @@ ${catRows}
             committedQuantity: type === "part" && inventory ? quantity : 0,
             priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
-            laborVerified: row.dataset.laborVerified === "1",
-            technicianIds: JSON.parse(row.dataset.technicianIds || "[]"),
-            code: type === "fee" ? row.dataset.feeCode : "",
-            amount: type === "fee" ? unitPrice : 0
+            technicianIds: JSON.parse(row.dataset.technicianIds || "[]")
           }, index);
         }).filter((line) => line.description && line.quantity > 0);
         const form = root.closest("form");
@@ -12771,24 +11261,22 @@ ${catRows}
       refreshEstimateEditor = function(root) {
         root.querySelectorAll(".job-estimate-line").forEach((row) => {
           const type = row.querySelector(".job-line-type").value;
-          const quantityInput = row.querySelector(".job-line-quantity");
-          if (type === "fee") quantityInput.value = "1";
-          const quantity = Math.max(0, Number(quantityInput.value) || 0);
+          const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
           const rate = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
           const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
           row.dataset.priceStatus = priceStatus;
-          row.querySelector(".job-inventory-field").hidden = type !== "part";
+          const inventoryField = row.querySelector(".job-inventory-field");
+          if (inventoryField) inventoryField.hidden = type !== "part";
           const partNumberField = row.querySelector(".job-part-number-field");
           if (partNumberField) partNumberField.hidden = type !== "part";
-          row.querySelector(".job-line-quantity-field").hidden = type === "fee";
-          row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
-          row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
-          row.querySelector(".job-line-quantity").step = type === "labor" ? ".1" : "1";
+          row.querySelector(".job-line-quantity-label").textContent = type === "part" ? "Quantity" : "Labor hours";
+          row.querySelector(".job-line-rate-label").textContent = type === "part" ? "Unit price" : "Labor rate";
+          row.querySelector(".job-line-quantity").step = type === "part" ? "1" : ".1";
           row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money4(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
-        if (summary) summary.innerHTML = `<span>Parts <b>${money4(estimate.parts)}</b></span><span>Labor <b>${money4(estimate.labor)}</b></span><span>Fees <b>${money4(estimate.lineFees)}</b></span><span>Supplies <b>${money4(supplies)}</b></span><span>Discount <b>-${money4(estimate.discountAmount)}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Parts <b>${money4(estimate.parts)}</b></span><span>Labor <b>${money4(estimate.labor)}</b></span><span>Supplies <b>${money4(supplies)}</b></span><span>Discount <b>-${money4(estimate.discountAmount)}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
       };
@@ -12929,9 +11417,9 @@ ${catRows}
         const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const summary = invoicePaymentSummary(invoice);
           const bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money4(summary.total)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)}</small><small>Paid ${money4(summary.paid)} \xB7 Remaining ${money4(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${escapeAttr(invoice.number)}">${icon("message-square", 13)} Text to pay</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${badge(summary.status)}</td><td><b>${money4(summary.total)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)}</small><small>Paid ${money4(summary.paid)} \xB7 Remaining ${money4(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
         }).join("");
-        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Closeout</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="8">No invoices yet.</td></tr>`}</tbody></table></div>`);
+        return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
       openOrderPaymentCore = openOrder;
       openOrder = function(id) {
@@ -13399,7 +11887,7 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         if (currentUser() && (state.route === "obd" || state.route === "keys")) {
           const root = document.querySelector("#root");
           const markup = state.route === "obd" ? obdBay() : keyProgrammingBay();
-          root.innerHTML = safeHtml(markup);
+          root.innerHTML = DOMPurify.sanitize(markup, { USE_PROFILES: { html: true } });
           lucide.createIcons();
           bind();
           bindExpandedFeatures();
@@ -13408,59 +11896,6 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
           return;
         }
         renderShopOsCore();
-      };
-      shopAiSettings = { loaded: false, loading: false };
-      settingsShopAiCore = settings;
-      settings = function() {
-        const page = settingsShopAiCore();
-        if (isOfflineDesktop()) return page;
-        return page.replace("</main>", `${shopAiPanelHtml(shopAiSettings, { canManage: canManageShopAi(), escapeHtml, icon })}</main>`);
-      };
-      bindShopAiCore = bind;
-      bind = function() {
-        bindShopAiCore();
-        if (state.route !== "settings" || !currentUser() || isOfflineDesktop()) return;
-        if (!shopAiSettings.loaded) void loadShopAiSettings();
-        document.querySelector("#shop-ai-key-form")?.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const form = event.target, button = form.querySelector("button[type=submit]"), apiKey = String(new FormData(form).get("apiKey") || "").trim();
-          if (!apiKey) return;
-          button.disabled = true;
-          button.textContent = "Checking key...";
-          try {
-            const result = await apiFetch("/settings/ai", { method: "PUT", body: JSON.stringify({ apiKey }) });
-            form.reset();
-            shopAiSettings = { ...result, loaded: true, loading: false };
-            toast(result.warning ? `Claude key saved. ${result.warning}` : "Claude key saved. MechPro AI now uses Claude for this shop.");
-            render();
-          } catch (error) {
-            button.disabled = false;
-            button.textContent = shopAiSettings.hasKey ? "Replace key" : "Save key";
-            toast(error.message || "Could not save the Anthropic key");
-          }
-        });
-        document.querySelector("#shop-ai-remove-key")?.addEventListener("click", async (event) => {
-          if (!confirm("Remove this shop's Anthropic key? MechPro AI will go back to Cloudflare AI (included).")) return;
-          event.currentTarget.disabled = true;
-          try {
-            const result = await apiFetch("/settings/ai", { method: "DELETE" });
-            shopAiSettings = { ...result, loaded: true, loading: false };
-            toast("Anthropic key removed. Using Cloudflare AI (included).");
-            render();
-          } catch (error) {
-            toast(error.message || "Could not remove the Anthropic key");
-            render();
-          }
-        });
-      };
-      apiFetchShopAiNoticeCore = apiFetch;
-      apiFetch = async function(path, options = {}) {
-        const result = await apiFetchShopAiNoticeCore(path, options);
-        if (String(path).startsWith("/ai/assistant") && result?.notice) {
-          toast(result.notice);
-          shopAiSettings = { ...shopAiSettings, loaded: false };
-        }
-        return result;
       };
       void startApp();
     }
@@ -13714,8 +12149,6 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         { route: "imports", icon: "file-up", label: "Import data" },
         { route: "messaging", icon: "message-square-more", label: "Messaging" },
         { route: "payments", icon: "credit-card", label: "Payments" },
-        { route: "integrations", icon: "plug-zap", label: "Integrations" },
-        { route: "support", icon: "life-buoy", label: "Help & support" },
         { route: "settings", icon: "settings", label: "Settings" }
       ]
     }
