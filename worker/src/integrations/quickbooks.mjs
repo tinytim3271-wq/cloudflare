@@ -48,7 +48,8 @@ function boundedNumber(value, name, { min = 0, max = 999_999_999_999 } = {}) {
 function isoDate(value, name) {
   if (value == null || value === "") return undefined;
   const date = requiredString(value, name, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+  const parsed = Date.parse(`${date}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 10) !== date) {
     throw new QuickBooksError(`${name} must be an ISO date (YYYY-MM-DD)`, {
       code: "INVALID_INPUT",
     });
