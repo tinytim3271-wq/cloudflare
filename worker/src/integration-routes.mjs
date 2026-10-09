@@ -83,6 +83,7 @@ export async function handlePartsIntegration(request, env, context, segments) {
     if (!url) throw new HttpError(404, 'Punch-out is not configured for this provider');
     return json({ provider, url });
   }
+  if (operation === 'order' && request.method !== 'POST') throw new HttpError(405, 'Method not allowed');
   if (!['GET', 'POST'].includes(request.method)) throw new HttpError(405, 'Method not allowed');
   if (operation === 'order') role(context, MESSAGE_ROLES);
   try {
