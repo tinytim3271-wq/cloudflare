@@ -391,9 +391,11 @@ async function requirePlanCapability(context, env, capability) {
   const subscription = await env.DB.prepare(
     'SELECT plan_id, status FROM subscriptions WHERE shop_id = ? LIMIT 1',
   ).bind(context.shopId).first();
-  const planId = String(subscription?.plan_id || 'shop');
-  if (!planCapabilities(planId).includes(capability)) {
-    throw new HttpError(403, `${capability.replaceAll('_', ' ')} requires a higher MechPro plan`);
+  const planId = String(subscription?.plan_id || '');
+  const entitled = ['active', 'trialing'].includes(String(subscription?.status || ''))
+    && planCapabilities(planId).includes(capability);
+  if (!entitled) {
+    throw new HttpError(403, `${capability.replaceAll('_', ' ')} requires an active MechPro plan`);
   }
 }
 
