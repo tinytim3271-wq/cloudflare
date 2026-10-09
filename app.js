@@ -1444,7 +1444,7 @@
     if (apiUrl && value2 && !value2.includes("..") && !value2.includes("/")) return `${apiUrl}/files/${encodeURIComponent(value2)}`;
     return "";
   }
-  function customerInspectionDocument(inspection, profile = {}, escapeHtml2 = (value2) => String(value2 ?? ""), apiUrl = "") {
+  function customerInspectionDocument(inspection, profile = {}, escapeHtml4 = (value2) => String(value2 ?? ""), apiUrl = "") {
     const catalog = shopInspection(inspection.catalogId);
     const name = inspection.inspectionName || catalog?.name || "Vehicle inspection";
     const price = Number(inspection.price ?? catalog?.price ?? 0);
@@ -1455,41 +1455,41 @@
       groups.get(title).push(item);
     }
     const sections = [...groups.entries()].map(([title, items]) => {
-      const rows = items.map((item) => `<tr><td>${escapeHtml2(item.label || item.name || "")}</td><td class="result ${escapeHtml2(item.status || "skipped")}">${escapeHtml2(statusLabel2(item.status))}</td><td>${escapeHtml2(item.measurement || "")}</td><td>${escapeHtml2(item.note || "")}</td></tr>`).join("");
-      return `<h2>${escapeHtml2(title)}</h2><table><thead><tr><th>Item</th><th>Result</th><th>Measurement</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const rows = items.map((item) => `<tr><td>${escapeHtml4(item.label || item.name || "")}</td><td class="result ${escapeHtml4(item.status || "skipped")}">${escapeHtml4(statusLabel2(item.status))}</td><td>${escapeHtml4(item.measurement || "")}</td><td>${escapeHtml4(item.note || "")}</td></tr>`).join("");
+      return `<h2>${escapeHtml4(title)}</h2><table><thead><tr><th>Item</th><th>Result</th><th>Measurement</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>`;
     }).join("");
     const verdict = (catalog?.verdicts || []).find((item) => item.id === inspection.verdict);
-    const photos = (inspection.photoKeys || []).map((key) => inspectionPhotoSrc(key, apiUrl)).filter(Boolean).map((src) => `<img src="${escapeHtml2(src)}" alt="Inspection photo"/>`).join("");
+    const photos = (inspection.photoKeys || []).map((key) => inspectionPhotoSrc(key, apiUrl)).filter(Boolean).map((src) => `<img src="${escapeHtml4(src)}" alt="Inspection photo"/>`).join("");
     const signature = inspectionPhotoSrc(inspection.customerSignature, apiUrl);
     const scanKept = (inspection.items || []).some((item) => /not cleared/i.test(item.label || item.name || "") && item.status && item.status !== "skipped");
     return `<article class="customer-inspection">
     <p class="fee">Inspection fee ${price.toFixed(2)} USD. Repairs, parts, and disassembly are quoted separately.</p>
-    <h1>${escapeHtml2(name)}</h1>
-    <p>${escapeHtml2(profile.shopName || "Reliable Automotive Services")}</p>
-    <p>${escapeHtml2(inspection.number || "")} \xB7 ${escapeHtml2(inspection.createdAt || "")}</p>
-    <p><b>Customer</b> ${escapeHtml2(inspection.customer || "")} \xB7 <b>Vehicle</b> ${escapeHtml2(inspection.vehicle || "")}</p>
-    <p><b>VIN</b> ${escapeHtml2(inspection.vin || "")} \xB7 <b>Mileage</b> ${escapeHtml2(inspection.mileage || "")} \xB7 <b>Technician</b> ${escapeHtml2(inspection.techName || "")}</p>
-    ${(inspection.conditions || []).length ? `<p><b>Conditions</b> ${escapeHtml2(inspection.conditions.join(", "))}</p>` : ""}
-    ${verdict ? `<p class="verdict">${escapeHtml2(verdict.label)}</p>` : ""}
+    <h1>${escapeHtml4(name)}</h1>
+    <p>${escapeHtml4(profile.shopName || "Reliable Automotive Services")}</p>
+    <p>${escapeHtml4(inspection.number || "")} \xB7 ${escapeHtml4(inspection.createdAt || "")}</p>
+    <p><b>Customer</b> ${escapeHtml4(inspection.customer || "")} \xB7 <b>Vehicle</b> ${escapeHtml4(inspection.vehicle || "")}</p>
+    <p><b>VIN</b> ${escapeHtml4(inspection.vin || "")} \xB7 <b>Mileage</b> ${escapeHtml4(inspection.mileage || "")} \xB7 <b>Technician</b> ${escapeHtml4(inspection.techName || "")}</p>
+    ${(inspection.conditions || []).length ? `<p><b>Conditions</b> ${escapeHtml4(inspection.conditions.join(", "))}</p>` : ""}
+    ${verdict ? `<p class="verdict">${escapeHtml4(verdict.label)}</p>` : ""}
     ${scanKept ? "<p>Stored codes were recorded and were not cleared.</p>" : ""}
-    ${inspection.sellerSummary ? `<h2>Seller summary</h2><p>${escapeHtml2(inspection.sellerSummary)}</p>` : ""}
+    ${inspection.sellerSummary ? `<h2>Seller summary</h2><p>${escapeHtml4(inspection.sellerSummary)}</p>` : ""}
     ${sections}
-    <h2>Recommendations</h2><p>${escapeHtml2(inspection.recommendations || "None beyond the items above.")}</p>
-    <h2>Limits</h2><p>${escapeHtml2(inspection.limits || catalog?.limits || "")}</p>
+    <h2>Recommendations</h2><p>${escapeHtml4(inspection.recommendations || "None beyond the items above.")}</p>
+    <h2>Limits</h2><p>${escapeHtml4(inspection.limits || catalog?.limits || "")}</p>
     ${photos ? `<h2>Photos</h2><div class="photos">${photos}</div>` : ""}
     <h2>Customer acknowledgment</h2>
-    <p>${escapeHtml2(inspection.customerName || "")} acknowledges this inspection. Repairs are not included in the inspection fee.</p>
-    ${signature ? `<img class="signature" src="${escapeHtml2(signature)}" alt="Customer signature"/>` : ""}
+    <p>${escapeHtml4(inspection.customerName || "")} acknowledges this inspection. Repairs are not included in the inspection fee.</p>
+    ${signature ? `<img class="signature" src="${escapeHtml4(signature)}" alt="Customer signature"/>` : ""}
   </article>`;
   }
-  function inspectionMenuHtml(escapeHtml2 = (value2) => String(value2 ?? "")) {
-    return SHOP_INSPECTIONS.map((item) => `<button type="button" class="inspection-offer" data-start-inspection="${escapeHtml2(item.id)}"><b>${escapeHtml2(item.name)}</b><span>$${item.price}</span><small>${escapeHtml2(item.summary)}</small></button>`).join("");
+  function inspectionMenuHtml(escapeHtml4 = (value2) => String(value2 ?? "")) {
+    return SHOP_INSPECTIONS.map((item) => `<button type="button" class="inspection-offer" data-start-inspection="${escapeHtml4(item.id)}"><b>${escapeHtml4(item.name)}</b><span>$${item.price}</span><small>${escapeHtml4(item.summary)}</small></button>`).join("");
   }
-  function statusOptions(selected, escapeHtml2) {
+  function statusOptions(selected, escapeHtml4) {
     const blank = `<option value="" ${selected ? "" : "selected"}>Choose</option>`;
-    return blank + INSPECTION_STATUSES.map((status) => `<option value="${status.id}" ${selected === status.id ? "selected" : ""}>${escapeHtml2(status.label)}</option>`).join("");
+    return blank + INSPECTION_STATUSES.map((status) => `<option value="${status.id}" ${selected === status.id ? "selected" : ""}>${escapeHtml4(status.label)}</option>`).join("");
   }
-  function catalogInspectionFormHtml(catalog, record = null, context = {}, escapeHtml2 = (value2) => String(value2 ?? "")) {
+  function catalogInspectionFormHtml(catalog, record = null, context = {}, escapeHtml4 = (value2) => String(value2 ?? "")) {
     const items = record?.items?.length ? record.items : inspectionItems(catalog);
     const sections = [];
     for (const item of items) {
@@ -1502,46 +1502,46 @@
       section.items.push(item);
     }
     const fields = sections.map((section) => {
-      const rows = section.items.map((item) => `<div class="inspect-row" data-section="${escapeHtml2(section.title)}">
-      <div><b>${escapeHtml2(item.label || item.name || "")}</b></div>
-      <select name="status-${escapeHtml2(item.id)}" aria-label="Result for ${escapeHtml2(item.label || item.name || "")}">${statusOptions(item.status, escapeHtml2)}</select>
-      ${item.measure || item.measurement ? `<input name="measure-${escapeHtml2(item.id)}" value="${escapeHtml2(item.measurement || "")}" placeholder="${escapeHtml2(item.measure || "Measurement")}" aria-label="${escapeHtml2(item.measure || "Measurement")}"/>` : "<span></span>"}
-      <input name="note-${escapeHtml2(item.id)}" value="${escapeHtml2(item.note || "")}" placeholder="Finding" aria-label="Note"/>
-      <button type="button" class="secondary dictate" data-dictate="note-${escapeHtml2(item.id)}">Dictate</button>
+      const rows = section.items.map((item) => `<div class="inspect-row" data-section="${escapeHtml4(section.title)}">
+      <div><b>${escapeHtml4(item.label || item.name || "")}</b></div>
+      <select name="status-${escapeHtml4(item.id)}" aria-label="Result for ${escapeHtml4(item.label || item.name || "")}">${statusOptions(item.status, escapeHtml4)}</select>
+      ${item.measure || item.measurement ? `<input name="measure-${escapeHtml4(item.id)}" value="${escapeHtml4(item.measurement || "")}" placeholder="${escapeHtml4(item.measure || "Measurement")}" aria-label="${escapeHtml4(item.measure || "Measurement")}"/>` : "<span></span>"}
+      <input name="note-${escapeHtml4(item.id)}" value="${escapeHtml4(item.note || "")}" placeholder="Finding" aria-label="Note"/>
+      <button type="button" class="secondary dictate" data-dictate="note-${escapeHtml4(item.id)}">Dictate</button>
     </div>`).join("");
-      return `<section class="inspect-section"><div class="inspect-section-head"><h3>${escapeHtml2(section.title)}</h3><button type="button" class="mini-action" data-mark-section="${escapeHtml2(section.title)}">Mark unmarked OK</button></div>${rows}</section>`;
+      return `<section class="inspect-section"><div class="inspect-section-head"><h3>${escapeHtml4(section.title)}</h3><button type="button" class="mini-action" data-mark-section="${escapeHtml4(section.title)}">Mark unmarked OK</button></div>${rows}</section>`;
     }).join("");
-    const vehicles = (context.vehicles || []).map((vehicle) => `<option value="${escapeHtml2(vehicle.id)}" ${record?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml2(vehicle.label)}</option>`).join("");
-    const orders2 = (context.orders || []).map((order) => `<option value="${escapeHtml2(order.id)}" ${record?.workOrderId === order.id ? "selected" : ""}>${escapeHtml2(order.label)}</option>`).join("");
-    const verdicts = (catalog.verdicts || []).map((item) => `<option value="${item.id}" ${record?.verdict === item.id ? "selected" : ""}>${escapeHtml2(item.label)}</option>`).join("");
+    const vehicles = (context.vehicles || []).map((vehicle) => `<option value="${escapeHtml4(vehicle.id)}" ${record?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml4(vehicle.label)}</option>`).join("");
+    const orders2 = (context.orders || []).map((order) => `<option value="${escapeHtml4(order.id)}" ${record?.workOrderId === order.id ? "selected" : ""}>${escapeHtml4(order.label)}</option>`).join("");
+    const verdicts = (catalog.verdicts || []).map((item) => `<option value="${item.id}" ${record?.verdict === item.id ? "selected" : ""}>${escapeHtml4(item.label)}</option>`).join("");
     const conditions = ["Cold", "Already warm", "Road test authorized", "Lift or jack stands", "Scan authorized", "Compression authorized"];
     const selectedConditions = new Set(record?.conditions || []);
     const photos = (record?.photoKeys || []).map((key) => inspectionPhotoSrc(key, context.apiUrl)).filter(Boolean);
     return `<form class="modal wide inspect-sheet" id="catalog-inspection-form">
-    <div class="modal-head"><h2>${escapeHtml2(catalog.name)}</h2><button type="button" class="close" data-close></button></div>
+    <div class="modal-head"><h2>${escapeHtml4(catalog.name)}</h2><button type="button" class="close" data-close></button></div>
     <div class="modal-body">
       <p class="inspect-fee">Inspection fee $${catalog.price}. Repairs, parts, and disassembly are quoted separately. Type a finding or dictate it.</p>
       <div class="form-grid">
-        <label>Customer<input name="customer" value="${escapeHtml2(record?.customer || "")}" required/></label>
-        <label>Vehicle<input name="vehicle" value="${escapeHtml2(record?.vehicle || "")}" placeholder="Year make model" required/></label>
-        <label>VIN<input name="vin" value="${escapeHtml2(record?.vin || "")}"/></label>
-        <label>Mileage<input name="mileage" value="${escapeHtml2(record?.mileage || "")}"/></label>
-        <label>Technician<input name="tech" value="${escapeHtml2(record?.techName || context.techName || "")}"/></label>
+        <label>Customer<input name="customer" value="${escapeHtml4(record?.customer || "")}" required/></label>
+        <label>Vehicle<input name="vehicle" value="${escapeHtml4(record?.vehicle || "")}" placeholder="Year make model" required/></label>
+        <label>VIN<input name="vin" value="${escapeHtml4(record?.vin || "")}"/></label>
+        <label>Mileage<input name="mileage" value="${escapeHtml4(record?.mileage || "")}"/></label>
+        <label>Technician<input name="tech" value="${escapeHtml4(record?.techName || context.techName || "")}"/></label>
         <label>Linked vehicle<select name="vehicleId"><option value="">Not in the shop list</option>${vehicles}</select></label>
         <label>Work order<select name="workOrderId"><option value="">Unlinked</option>${orders2}</select></label>
       </div>
-      <div class="inspect-conditions">${conditions.map((condition) => `<label><input type="checkbox" name="condition" value="${escapeHtml2(condition)}" ${selectedConditions.has(condition) ? "checked" : ""}/>${escapeHtml2(condition)}</label>`).join("")}</div>
-      <details class="inspect-guide"><summary>Technician guide</summary><p>${escapeHtml2(catalog.summary)}</p><p><b>Photos before closing:</b> ${escapeHtml2(catalog.photos)}</p><p>${escapeHtml2(catalog.limits)}</p></details>
+      <div class="inspect-conditions">${conditions.map((condition) => `<label><input type="checkbox" name="condition" value="${escapeHtml4(condition)}" ${selectedConditions.has(condition) ? "checked" : ""}/>${escapeHtml4(condition)}</label>`).join("")}</div>
+      <details class="inspect-guide"><summary>Technician guide</summary><p>${escapeHtml4(catalog.summary)}</p><p><b>Photos before closing:</b> ${escapeHtml4(catalog.photos)}</p><p>${escapeHtml4(catalog.limits)}</p></details>
       ${fields}
-      <label class="full">Recommendations<textarea name="recommendations" rows="3">${escapeHtml2(record?.recommendations || "")}</textarea></label>
+      <label class="full">Recommendations<textarea name="recommendations" rows="3">${escapeHtml4(record?.recommendations || "")}</textarea></label>
       <button type="button" class="secondary dictate" data-dictate="recommendations">Dictate recommendations</button>
-      ${verdicts ? `<label>Verdict<select name="verdict"><option value="">Choose</option>${verdicts}</select></label><label class="full">One-page seller summary<textarea name="sellerSummary" rows="4">${escapeHtml2(record?.sellerSummary || "")}</textarea></label><button type="button" class="secondary dictate" data-dictate="sellerSummary">Dictate seller summary</button>` : ""}
+      ${verdicts ? `<label>Verdict<select name="verdict"><option value="">Choose</option>${verdicts}</select></label><label class="full">One-page seller summary<textarea name="sellerSummary" rows="4">${escapeHtml4(record?.sellerSummary || "")}</textarea></label><button type="button" class="secondary dictate" data-dictate="sellerSummary">Dictate seller summary</button>` : ""}
       <label class="full">Photos of key findings<input name="photos" type="file" accept="image/*" capture="environment" multiple/></label>
-      ${photos.length ? `<div class="inspect-photos">${photos.map((src) => `<img src="${escapeHtml2(src)}" alt="Attached inspection photo"/>`).join("")}</div>` : ""}
-      <input type="hidden" name="existingPhotos" value="${escapeHtml2(JSON.stringify(record?.photoKeys || []))}"/>
-      <label>Customer acknowledgment name<input name="customerName" value="${escapeHtml2(record?.customerName || record?.customer || "")}" placeholder="Name on the customer copy"/></label>
+      ${photos.length ? `<div class="inspect-photos">${photos.map((src) => `<img src="${escapeHtml4(src)}" alt="Attached inspection photo"/>`).join("")}</div>` : ""}
+      <input type="hidden" name="existingPhotos" value="${escapeHtml4(JSON.stringify(record?.photoKeys || []))}"/>
+      <label>Customer acknowledgment name<input name="customerName" value="${escapeHtml4(record?.customerName || record?.customer || "")}" placeholder="Name on the customer copy"/></label>
       <div class="inspect-sign"><span>Customer signature</span><canvas id="inspection-signature" width="520" height="140"></canvas><button type="button" class="secondary" id="clear-signature">Clear signature</button></div>
-      <p class="inspect-limits">${escapeHtml2(catalog.limits)}</p>
+      <p class="inspect-limits">${escapeHtml4(catalog.limits)}</p>
     </div>
     <div class="modal-actions">
       <button type="submit" class="secondary" data-intent="draft">Save draft</button>
@@ -1897,11 +1897,11 @@
     url.searchParams.set("originalURL", `${destination.pathname}${destination.search}`);
     return url.toString();
   }
-  function orderingPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2, icon: icon2 }) {
+  function orderingPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4, icon: icon2 }) {
     const connected = Boolean(account.connected && account.username);
-    const status = connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>AutoZone Pro login saved</strong><span>${escapeHtml2(account.username)}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>No AutoZone Pro login saved</strong><span>An owner or admin can store the shop username and password. MechPro encrypts them and does not put them on the work order.</span></div></div>`;
+    const status = connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>AutoZone Pro login saved</strong><span>${escapeHtml4(account.username)}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>No AutoZone Pro login saved</strong><span>An owner or admin can store the shop username and password. MechPro encrypts them and does not put them on the work order.</span></div></div>`;
     const form = canSave ? `<form id="autozone-login-form" class="form-grid">
-        <label>Username<input name="username" autocomplete="off" value="${escapeHtml2(account.username || "")}" required /></label>
+        <label>Username<input name="username" autocomplete="off" value="${escapeHtml4(account.username || "")}" required /></label>
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <button class="primary" type="submit">${icon2("save", 14)} Save AutoZone Pro login</button>
         ${connected ? `<button class="secondary danger" type="button" id="autozone-disconnect">${icon2("log-out", 14)} Remove saved login</button>` : ""}
@@ -1946,22 +1946,22 @@
       connectedAt: record.connectedAt || null
     };
   }
-  function partstechPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+  function partstechPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
     const status = partstechConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>User ${escapeHtml2(status.userId || "")}${status.storeId ? ` \xB7 store ${escapeHtml2(status.storeId)}` : ""}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Connect PartsTech with partner and user API keys. Search, quote, and order stay server-side; unconfigured shops fail closed.</span></div></div>`;
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>User ${escapeHtml4(status.userId || "")}${status.storeId ? ` \xB7 store ${escapeHtml4(status.storeId)}` : ""}</span></div></div>` : `<div class="messaging-status idle">${icon2("lock", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Connect PartsTech with partner and user API keys. Search, quote, and order stay server-side; unconfigured shops fail closed.</span></div></div>`;
     const form = canSave ? `<form id="partstech-connect-form" class="form-grid">
-        <label>Partner ID<input name="partnerId" autocomplete="off" value="${escapeHtml2(account.partnerId || "")}" required/></label>
+        <label>Partner ID<input name="partnerId" autocomplete="off" value="${escapeHtml4(account.partnerId || "")}" required/></label>
         <label>Partner API key<input name="partnerKey" type="password" autocomplete="new-password" required/></label>
-        <label>User ID<input name="userId" autocomplete="off" value="${escapeHtml2(account.userId || "")}" required/></label>
+        <label>User ID<input name="userId" autocomplete="off" value="${escapeHtml4(account.userId || "")}" required/></label>
         <label>User API key<input name="userKey" type="password" autocomplete="new-password" required/></label>
-        <label>Default store ID<input name="storeId" value="${escapeHtml2(account.storeId || "")}" placeholder="Optional"/></label>
+        <label>Default store ID<input name="storeId" value="${escapeHtml4(account.storeId || "")}" placeholder="Optional"/></label>
         <button class="primary" type="submit">${icon2("save", 14)} Save PartsTech</button>
         ${status.connected ? `<button class="secondary danger" type="button" id="partstech-disconnect">${icon2("log-out", 14)} Disconnect</button>` : ""}
       </form>` : '<p class="ops-note">Ask an owner or admin to connect PartsTech.</p>';
     const search = `<form id="partstech-search-form" class="form-grid">
       <label class="full">Keyword or part number<input name="keyword" placeholder="brake pad" ${status.connected ? "" : "disabled"}/></label>
       <label>VIN<input name="vin" placeholder="Optional VIN" ${status.connected ? "" : "disabled"}/></label>
-      <label>Store ID<input name="storeId" value="${escapeHtml2(account.storeId || "")}" ${status.connected ? "" : "disabled"}/></label>
+      <label>Store ID<input name="storeId" value="${escapeHtml4(account.storeId || "")}" ${status.connected ? "" : "disabled"}/></label>
       <button class="primary" type="submit" ${status.connected ? "" : "disabled"}>${icon2("search", 14)} Quote parts</button>
     </form>
     <div id="partstech-results" class="data-panel"></div>`;
@@ -2066,9 +2066,9 @@
       laborGuide: { provider: "manual" }
     };
   }
-  function laborGuidePanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+  function laborGuidePanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
     const status = laborGuideConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Book times from the connected provider</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Manual entry always works. With no MOTOR / ALLDATA / ShopKey connection, lookup uses a labeled web average (${escapeHtml2(WEB_ESTIMATE_LABEL)}) when search is configured \u2014 never as book time.</span></div></div>`;
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Book times from the connected provider</span></div></div>` : `<div class="messaging-status idle">${icon2("book-open", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Manual entry always works. With no MOTOR / ALLDATA / ShopKey connection, lookup uses a labeled web average (${escapeHtml4(WEB_ESTIMATE_LABEL)}) when search is configured \u2014 never as book time.</span></div></div>`;
     const form = canSave ? `<form id="labor-guide-connect-form" class="form-grid">
         <label>Provider<select name="provider">
           <option value="motor" ${account.provider === "motor" ? "selected" : ""}>MOTOR (PartsTech)</option>
@@ -2088,14 +2088,14 @@
       <label>Model<input name="model" placeholder="F-150"/></label>
       <label>Engine<input name="engine" placeholder="5.0L"/></label>
       <label>VIN<input name="vin"/></label>
-      <label>Labor rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml2(account.defaultLaborRate || "")}"/></label>
+      <label>Labor rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml4(account.defaultLaborRate || "")}"/></label>
       <button class="primary" type="submit">${icon2("search", 14)} Look up labor times</button>
     </form>
-    <p class="ops-note">Connected book providers return guide times. Otherwise results are labeled <b>${escapeHtml2(WEB_ESTIMATE_LABEL)}</b> with source links, or \u201Cno estimate found\u201D.</p>
+    <p class="ops-note">Connected book providers return guide times. Otherwise results are labeled <b>${escapeHtml4(WEB_ESTIMATE_LABEL)}</b> with source links, or \u201Cno estimate found\u201D.</p>
     <form id="manual-labor-form" class="form-grid">
       <label class="full">Manual labor description<input name="description" required placeholder="Diagnose noise"/></label>
       <label>Hours<input name="hours" type="number" step=".1" min="0" value="1" required/></label>
-      <label>Rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml2(account.defaultLaborRate || "165")}" required/></label>
+      <label>Rate<input name="laborRate" type="number" step=".01" min="0" value="${escapeHtml4(account.defaultLaborRate || "165")}" required/></label>
       <button class="secondary" type="submit">${icon2("plus", 14)} Add manual labor line</button>
     </form>
     <div id="labor-guide-results" class="data-panel"></div>`;
@@ -2126,16 +2126,16 @@
     if (status.hasKey) return `Using Claude with your key ${status.maskedKey || MASK}`;
     return "Using Cloudflare AI (included)";
   }
-  function shopAiPanelHtml(status = {}, { canManage = false, escapeHtml: escapeHtml2 = (value2) => String(value2 ?? ""), icon: icon2 = () => "" } = {}) {
+  function shopAiPanelHtml(status = {}, { canManage = false, escapeHtml: escapeHtml4 = (value2) => String(value2 ?? ""), icon: icon2 = () => "" } = {}) {
     const loading = !status.loaded;
     const keyError = Boolean(status.hasKey && status.status === "key_error");
     const statusText = loading ? "Checking AI provider..." : shopAiStatusLabel(status);
-    const statusHtml = `<p class="shop-ai-status ${status.hasKey ? "is-claude" : "is-included"}" id="shop-ai-status">${icon2(status.hasKey ? "sparkles" : "cloud", 14)} <strong>${escapeHtml2(statusText)}</strong></p>`;
-    const errorHtml = keyError ? `<p class="form-help shop-ai-error" role="alert">${escapeHtml2(status.lastError || "Your Claude key stopped working.")} Answers use Cloudflare AI until the key is fixed or replaced.</p>` : "";
+    const statusHtml = `<p class="shop-ai-status ${status.hasKey ? "is-claude" : "is-included"}" id="shop-ai-status">${icon2(status.hasKey ? "sparkles" : "cloud", 14)} <strong>${escapeHtml4(statusText)}</strong></p>`;
+    const errorHtml = keyError ? `<p class="form-help shop-ai-error" role="alert">${escapeHtml4(status.lastError || "Your Claude key stopped working.")} Answers use Cloudflare AI until the key is fixed or replaced.</p>` : "";
     const unavailableHtml = status.unavailable ? '<p class="form-help">AI settings could not be loaded right now.</p>' : "";
     const removeButton = status.hasKey ? `<button class="secondary" type="button" id="shop-ai-remove-key">${icon2("trash-2", 14)} Remove key</button>` : "";
     const form = canManage ? `<form class="form-grid" id="shop-ai-key-form" autocomplete="off"><label class="full">Anthropic API key<input name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-..." required/></label><div class="full"><button class="primary" type="submit">${icon2("key-round", 14)} ${status.hasKey ? "Replace key" : "Save key"}</button>${removeButton}<small class="form-help">MechPro tests the key with a tiny request before saving. It is encrypted on the server and never shown again; only the last 4 characters are displayed.</small></div></form>` : '<p class="form-help">Only shop owners and admins can add or change the AI key.</p>';
-    return `<section class="settings-panel shop-ai-settings" id="shop-ai-settings"><div class="statement-head"><div><div class="eyebrow">AI</div><h2>MechPro AI provider</h2><p>${escapeHtml2(SHOP_AI_PROMPT)}</p><p><a href="${ANTHROPIC_CONSOLE_URL}" target="_blank" rel="noopener noreferrer">Get an Anthropic API key at console.anthropic.com</a></p></div>${icon2("sparkles", 20)}</div>${statusHtml}${errorHtml}${unavailableHtml}${form}</section>`;
+    return `<section class="settings-panel shop-ai-settings" id="shop-ai-settings"><div class="statement-head"><div><div class="eyebrow">AI</div><h2>MechPro AI provider</h2><p>${escapeHtml4(SHOP_AI_PROMPT)}</p><p><a href="${ANTHROPIC_CONSOLE_URL}" target="_blank" rel="noopener noreferrer">Get an Anthropic API key at console.anthropic.com</a></p></div>${icon2("sparkles", 20)}</div>${statusHtml}${errorHtml}${unavailableHtml}${form}</section>`;
   }
   var ANTHROPIC_CONSOLE_URL, SHOP_AI_PROMPT, MASK;
   var init_shop_ai_settings = __esm({
@@ -2164,9 +2164,9 @@
       tokenExpiresAt: record.tokenExpiresAt || null
     };
   }
-  function quickbooksPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml2 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
+  function quickbooksPanelHtml(account = {}, { canSave = false, escapeHtml: escapeHtml4 = (v) => String(v ?? ""), icon: icon2 = () => "" } = {}) {
     const status = quickbooksConnectionStatus(account);
-    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Company ${escapeHtml2(status.realmId || "")}</span></div></div>` : `<div class="messaging-status idle">${icon2("landmark", 17)}<div><strong>${escapeHtml2(status.label)}</strong><span>Connect QuickBooks Online with OAuth 2.0. Sync stays fail-closed until authorized.</span></div></div>`;
+    const banner = status.connected ? `<div class="messaging-status ready">${icon2("circle-check", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Company ${escapeHtml4(status.realmId || "")}</span></div></div>` : `<div class="messaging-status idle">${icon2("landmark", 17)}<div><strong>${escapeHtml4(status.label)}</strong><span>Connect QuickBooks Online with OAuth 2.0. Sync stays fail-closed until authorized.</span></div></div>`;
     const actions = canSave ? `<div class="messaging-actions">
         ${status.connected ? `<button class="secondary" type="button" id="qbo-sync-now">${icon2("refresh-cw", 14)} Sync customers / invoices / payments</button>
              <button class="secondary danger" type="button" id="qbo-disconnect">${icon2("log-out", 14)} Disconnect QuickBooks</button>` : `<button class="primary" type="button" id="qbo-connect">${icon2("link", 14)} Connect QuickBooks Online</button>`}
@@ -3338,11 +3338,11 @@ button{margin-top:12px;padding:8px 14px}
     let active = null;
     form.querySelectorAll("[data-dictate]").forEach((button) => {
       button.onclick = () => {
-        const field = form.elements[button.dataset.dictate];
+        const field2 = form.elements[button.dataset.dictate];
         const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!Speech || !field) {
+        if (!Speech || !field2) {
           toast2("Dictation is not available in this browser. Type the note.");
-          field?.focus();
+          field2?.focus();
           return;
         }
         if (active) {
@@ -3354,7 +3354,7 @@ button{margin-top:12px;padding:8px 14px}
         recognition.interimResults = false;
         recognition.onresult = (event) => {
           const text = [...event.results].map((result) => result[0]?.transcript || "").join(" ").trim();
-          if (text) field.value = `${field.value} ${text}`.trim();
+          if (text) field2.value = `${field2.value} ${text}`.trim();
         };
         recognition.onerror = () => toast2("Dictation stopped. Type the note.");
         recognition.onend = () => {
@@ -3617,75 +3617,912 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
-  // src/modules/work-order-editor.js
-  function customersWithSelected(customers2 = [], selected = "") {
-    const records = Array.isArray(customers2) ? customers2 : [];
-    const selectedName = String(selected || "");
-    if (!selectedName || records.some((customer) => customer?.name === selectedName)) return records;
-    return [{ name: selectedName }, ...records];
-  }
-  function customLaborDraft(id, laborRate) {
-    return {
-      id,
-      type: "labor",
-      description: "",
-      descriptionPlaceholder: "Custom labor",
-      hours: 1,
-      laborRate: Number(laborRate) || 0
-    };
-  }
-  function estimateEditorDescription(line = {}, normalizedDescription = "") {
-    const placeholder = String(line.descriptionPlaceholder || "");
-    return {
-      value: placeholder ? String(line.description || "") : String(normalizedDescription || ""),
-      placeholder
-    };
-  }
-  function normalizedFeeText(value2) {
-    return String(value2 || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  }
-  function isAfterMidnightFeeLine(line = {}) {
-    if (line.code === "after-midnight") return true;
-    const text = normalizedFeeText(`${line.description || line.service || ""} ${line.notes || line.explanation || ""}`);
-    const hasTime = /\bmidnight\b|\bovernight\b|\blate night\b|\bafter 12(?: 00)? a?m\b/.test(text);
-    const hasCharge = /\bfee\b|\bsurcharge\b|\bdifferen(?:tial|tail)\b|\bdifferentail\b/.test(text);
-    return line.type !== "part" && hasTime && hasCharge;
-  }
-  function isLegacyAfterMidnightLine(line = {}) {
-    return line.code !== "after-midnight" && line.type !== "fee" && isAfterMidnightFeeLine(line);
-  }
-  function afterMidnightFeeFingerprint(lines = []) {
-    return JSON.stringify((Array.isArray(lines) ? lines : []).filter(isAfterMidnightFeeLine).map((line) => ({
-      id: String(line.id || ""),
-      description: String(line.description || ""),
-      unitPrice: Number(line.unitPrice ?? line.amount) || 0
-    })).sort((left, right) => left.id.localeCompare(right.id)));
-  }
-  function terminalOrderChangesAfterMidnightFee(status, beforeLines = [], afterLines = []) {
-    if (!["completed", "invoiced"].includes(String(status || ""))) return false;
-    return afterMidnightFeeFingerprint(beforeLines) !== afterMidnightFeeFingerprint(afterLines);
-  }
-  function invoicePrintLineItems(invoice = {}) {
-    const lineItems = (Array.isArray(invoice.lines) ? invoice.lines : []).map((line) => {
-      const type = ["part", "fee"].includes(line?.type) ? line.type : "labor";
-      const amount = Math.max(0, Number(line?.total) || 0);
+  // src/modules/card-terminal.js
+  function recoveryWriteup({ customer, vehicle, when = RECOVERY_WHEN } = {}) {
+    const name = String(customer || "").trim();
+    const unit = String(vehicle || "").trim();
+    const missing = [];
+    if (!name) missing.push("customer");
+    if (!unit) missing.push("vehicle");
+    if (missing.length) {
       return {
-        type,
-        description: String(line?.description || line?.service || (type === "fee" ? "Fee" : type === "part" ? "Part" : "Labor")),
-        detail: type === "fee" ? "Flat fee" : type === "part" ? `${Math.max(0, Number(line?.quantity) || 0)} \xD7 ${Math.max(0, Number(line?.unitPrice) || 0).toFixed(2)}` : `${Math.max(0, Number(line?.hours) || 0).toFixed(2)} hr \xD7 ${Math.max(0, Number(line?.laborRate) || 0).toFixed(2)}`,
-        amount
+        ready: false,
+        missing,
+        text: ""
+      };
+    }
+    const text = [
+      `Customer: ${name}`,
+      `Vehicle: ${unit}`,
+      `Date: ${when}`,
+      "",
+      "Concern: Vehicle immobilized in mud. Customer requested a winch recovery.",
+      "",
+      "Work performed: Responded on site. Confirmed the vehicle position, selected a solid anchor, deployed the winch, and recovered the vehicle from the mud. The pull was completed without damage to the vehicle. Inspected the undercarriage and the tires after the recovery. No undercarriage damage, fluid leaks, or tire damage were found.",
+      "",
+      `Result: Released the ${unit}. ${name} drove away.`
+    ].join("\n");
+    return { ready: true, missing: [], text };
+  }
+  function recoveryOrder(orders2) {
+    return (orders2 || []).find((order) => /mud|winch|bogged|stuck/i.test(`${order.complaint || ""} ${order.notes || ""}`)) || null;
+  }
+  function cardTerminalModel({
+    orders: orders2 = [],
+    invoices: invoices2 = [],
+    payments: payments2 = [],
+    selectedId = "",
+    readers = [],
+    configured = false,
+    paymentSummary: paymentSummary2
+  }) {
+    const choices = [];
+    for (const order of orders2) {
+      const invoice = invoices2.find((item) => item.ro === order.id);
+      const summary = paymentSummary2(Number(invoice?.amount ?? order.total ?? 0), payments2, {
+        targetType: "work_order",
+        targetId: order.id,
+        linkedTargetId: invoice?.number || ""
+      });
+      choices.push({
+        targetType: "work_order",
+        targetId: order.id,
+        label: `${order.id} \xB7 ${order.customer || "No customer"} \xB7 ${order.vehicle || "No vehicle"}`,
+        customer: order.customer || "",
+        vehicle: order.vehicle || "",
+        balance: summary.balance
+      });
+    }
+    const hinted = recoveryOrder(orders2);
+    const selected = choices.find((item) => item.targetId === selectedId) || choices.find((item) => item.targetId === hinted?.id) || null;
+    return {
+      choices,
+      selected,
+      writeup: recoveryWriteup(selected || {}),
+      readers,
+      configured
+    };
+  }
+  var RECOVERY_WHEN;
+  var init_card_terminal = __esm({
+    "src/modules/card-terminal.js"() {
+      RECOVERY_WHEN = "the evening of October 6, 2026";
+    }
+  });
+
+  // src/modules/help-menu.js
+  function helpRoleAllowed(role, roles) {
+    if (!Array.isArray(roles) || !roles.length) return false;
+    if (roles.includes("*")) return true;
+    return Boolean(role) && roles.includes(role);
+  }
+  function helpContext(snapshot) {
+    const route = String(snapshot?.route || "login");
+    const subview = String(snapshot?.subview || "");
+    const selectionLabel = String(snapshot?.selectionLabel || "").trim();
+    let topic = HELP_TOPICS.find((item) => item.route === route && (item.subview || "") === subview);
+    if (!topic) topic = HELP_TOPICS.find((item) => item.route === route && !item.subview);
+    if (!topic) {
+      topic = {
+        id: "unknown",
+        route,
+        roles: ["*"],
+        title: "This screen",
+        summary: "Help for this screen is not written yet.",
+        steps: ["Use the sidebar to open a screen you know, or search Help for a topic name."],
+        limits: []
+      };
+    }
+    const tabLabel = SUBVIEW_LABELS[subview] || "";
+    let summary = topic.summary;
+    if (route === "pos" && selectionLabel) {
+      summary = `${summary} Selected: ${selectionLabel}.`;
+    } else if (tabLabel && route !== "pos") {
+      summary = `${summary} Current tab: ${tabLabel}.`;
+    }
+    return {
+      ...topic,
+      summary,
+      steps: [...topic.steps],
+      limits: [...topic.limits || []]
+    };
+  }
+  function helpSearch(query2, role) {
+    const needle = String(query2 || "").trim().toLowerCase();
+    const visible = HELP_TOPICS.filter((topic) => helpRoleAllowed(role || "", topic.roles));
+    if (!needle) return visible;
+    return visible.filter((topic) => {
+      const hay = [
+        topic.title,
+        topic.summary,
+        ...topic.steps || [],
+        ...topic.limits || [],
+        ...topic.keywords || [],
+        topic.route
+      ].join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }
+  function helpCanJump(topic, role) {
+    if (!topic?.route) return false;
+    if (["login", "pending-profile"].includes(topic.route)) return false;
+    return helpRoleAllowed(role || "", topic.roles);
+  }
+  function helpContextKey(snapshot) {
+    return [
+      snapshot?.route || "",
+      snapshot?.role || "",
+      snapshot?.subview || "",
+      snapshot?.selectionLabel || ""
+    ].join("|");
+  }
+  function syncHelp(snapshot, deps = {}) {
+    const host = typeof document !== "undefined" ? document.querySelector("#help-root") : null;
+    if (!host) return helpUi;
+    const topic = helpContext(snapshot);
+    const role = String(snapshot?.role || "");
+    const key = helpContextKey(snapshot);
+    const results = helpSearch(helpUi.query, role);
+    const iconFn = typeof deps.icon === "function" ? deps.icon : (name, size = 16) => `<i data-lucide="${escapeAttr(name)}" style="width:${size}px;height:${size}px"></i>`;
+    const steps = topic.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("");
+    const limits = topic.limits.length ? `<div class="help-limits"><h3>Limits on this screen</h3><ul>${topic.limits.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : "";
+    const resultRows = results.map((item) => {
+      const jump = helpCanJump(item, role) ? `<button type="button" class="mini-action" data-help-jump="${escapeAttr(item.route)}">Open</button>` : "";
+      return `<li><div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.summary)}</span></div>${jump}</li>`;
+    }).join("");
+    host.innerHTML = `
+    <button type="button" class="help-float" id="help-open" aria-haspopup="dialog" aria-expanded="${helpUi.open ? "true" : "false"}" aria-controls="help-panel" title="Help">
+      ${iconFn("circle-help", 16)}<span>Help</span>
+    </button>
+    <div class="help-panel" id="help-panel" role="dialog" aria-modal="false" aria-labelledby="help-title" ${helpUi.open ? "" : "hidden"}>
+      <div class="help-panel-head">
+        <div>
+          <div class="eyebrow">Help</div>
+          <h2 id="help-title">${escapeHtml(topic.title)}</h2>
+        </div>
+        <button type="button" class="icon-button" id="help-close" aria-label="Close help">${iconFn("x", 16)}</button>
+      </div>
+      <p class="help-summary">${escapeHtml(topic.summary)}</p>
+      <ol class="help-steps">${steps}</ol>
+      ${limits}
+      <label class="help-search">Search help
+        <input id="help-search-input" type="search" value="${escapeAttr(helpUi.query)}" placeholder="Try card, payroll, intake" autocomplete="off" />
+      </label>
+      <ul class="help-results">${resultRows || '<li class="help-empty">No topics match for your role.</li>'}</ul>
+    </div>
+  `;
+    const openButton = host.querySelector("#help-open");
+    const closeButton = host.querySelector("#help-close");
+    const panel = host.querySelector("#help-panel");
+    const searchInput = host.querySelector("#help-search-input");
+    const setOpen = (next) => {
+      helpUi.open = Boolean(next);
+      if (panel) panel.hidden = !helpUi.open;
+      if (openButton) openButton.setAttribute("aria-expanded", helpUi.open ? "true" : "false");
+      if (!helpUi.open && openButton) openButton.focus();
+    };
+    openButton?.addEventListener("click", () => setOpen(true));
+    closeButton?.addEventListener("click", () => setOpen(false));
+    searchInput?.addEventListener("input", (event) => {
+      helpUi.query = String(event.target.value || "");
+      syncHelp(snapshot, deps);
+      queueMicrotask(() => document.querySelector("#help-search-input")?.focus());
+    });
+    host.querySelectorAll("[data-help-jump]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const route = button.getAttribute("data-help-jump");
+        if (route && typeof deps.onNavigate === "function") deps.onNavigate(route);
+      });
+    });
+    if (!helpUi.keybound && typeof document !== "undefined") {
+      helpUi.keybound = true;
+      document.addEventListener("keydown", (event) => {
+        const target = event.target;
+        const tag = String(target?.tagName || "").toLowerCase();
+        const typing = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
+        if (event.key === "?" && !event.ctrlKey && !event.metaKey && !event.altKey && !typing) {
+          event.preventDefault();
+          helpUi.open = true;
+          const live = document.querySelector("#help-panel");
+          const btn = document.querySelector("#help-open");
+          if (live) live.hidden = false;
+          if (btn) btn.setAttribute("aria-expanded", "true");
+        }
+        if (event.key === "Escape" && helpUi.open) {
+          helpUi.open = false;
+          const live = document.querySelector("#help-panel");
+          const btn = document.querySelector("#help-open");
+          if (live) live.hidden = true;
+          if (btn) {
+            btn.setAttribute("aria-expanded", "false");
+            btn.focus();
+          }
+        }
+      });
+    }
+    if (typeof globalThis.lucide?.createIcons === "function") {
+      globalThis.lucide.createIcons({ root: host });
+    }
+    helpUi.lastKey = key;
+    return helpUi;
+  }
+  var ALL_SHOP, COUNTER, FLOOR, ADMIN_ONLY, OFFICE_BOOKS, TECH_PAY, AI_ROLES, HELP_TOPICS, SUBVIEW_LABELS, helpUi;
+  var init_help_menu = __esm({
+    "src/modules/help-menu.js"() {
+      init_html();
+      ALL_SHOP = ["admin", "technician", "office", "service_writer"];
+      COUNTER = ["admin", "office", "service_writer"];
+      FLOOR = ["admin", "technician", "service_writer"];
+      ADMIN_ONLY = ["admin"];
+      OFFICE_BOOKS = ["admin", "office"];
+      TECH_PAY = ["admin", "technician"];
+      AI_ROLES = ["admin", "technician", "service_writer"];
+      HELP_TOPICS = [
+        {
+          id: "login",
+          route: "login",
+          roles: ["*"],
+          title: "Sign in",
+          summary: "Open MechPro with your work email. On the online site you get a sign-in link. The offline Windows app can use a local owner password.",
+          steps: [
+            "Enter your work email and request a sign-in link, or use Google when that button is shown.",
+            "Open the email on this device and follow the link within fifteen minutes.",
+            "On the offline desktop build, create or enter the local owner password when the form asks for it."
+          ],
+          limits: [
+            "An internet connection is required for cloud sign-in.",
+            "The link only works for an email that belongs to this shop."
+          ],
+          keywords: ["login", "sign in", "email", "magic link", "google"]
+        },
+        {
+          id: "pending-profile",
+          route: "pending-profile",
+          roles: ["*"],
+          title: "Employee profile required",
+          summary: "Cloudflare Access accepted your identity, but this shop still needs an active employee row with the same email.",
+          steps: [
+            "Copy the email shown on the screen.",
+            "Ask a shop administrator to open Employees and create or reactivate a profile with that exact email.",
+            "Sign out and sign in again after the profile is active."
+          ],
+          limits: [
+            "MechPro will not invent an employee profile from Access alone for non-owner roles."
+          ],
+          keywords: ["pending", "employee", "profile", "deactivated"]
+        },
+        {
+          id: "superadmin",
+          route: "superadmin",
+          roles: ["super_admin"],
+          title: "Platform console",
+          summary: "Manage customer shops on MechPro: create accounts, credits, suspension, and Stripe keys for a shop.",
+          steps: [
+            "Review the customer shop list and each shop\u2019s subscription status.",
+            "Create a shop with owner name, email, shop name, and shop ID when onboarding a customer.",
+            "Open a shop\u2019s Stripe integration only when you are ready to paste live keys for that shop."
+          ],
+          limits: [
+            "Platform admin cannot open a shop\u2019s Card terminal or work-order screens from this console.",
+            "Do not suspend shops or send mail unless that is the task you were given."
+          ],
+          keywords: ["platform", "shops", "credits", "suspend"]
+        },
+        {
+          id: "home",
+          route: "home",
+          roles: ALL_SHOP,
+          title: "Home",
+          summary: "Start the shop day: open work, attention items, and shortcuts into intake and the counter.",
+          steps: [
+            "Scan today\u2019s open jobs and overdue invoices.",
+            "Start Customer intake when a vehicle arrives at the counter.",
+            "Use a quick action to jump to Dispatch, Work orders, or Card terminal when your role allows it."
+          ],
+          limits: [
+            "Home does not replace the Dispatch board for bay assignment."
+          ],
+          keywords: ["home", "dashboard", "today", "intake"]
+        },
+        {
+          id: "dispatch",
+          route: "dispatch",
+          roles: FLOOR,
+          title: "Dispatch board",
+          summary: "See active work by status lane and open a job card for the bay.",
+          steps: [
+            "Filter or search for a customer, vehicle, or RO number.",
+            "Drag or open a job card to update status and technician.",
+            "Open the work order when you need notes, photos, or the clock."
+          ],
+          limits: [
+            "Office staff do not have Dispatch in their menu."
+          ],
+          keywords: ["dispatch", "board", "lanes", "bay"]
+        },
+        {
+          id: "orders",
+          route: "orders",
+          roles: FLOOR,
+          title: "Work orders",
+          summary: "List and open repair orders. Intake converts into an RO from the counter.",
+          steps: [
+            "Search or filter the work-order list.",
+            "Open an RO to edit complaint, notes, assignments, and totals.",
+            "Use Customer intake from Home when you need a guided arrival flow."
+          ],
+          limits: [
+            "Mitchell, ALLDATA, Motor, and ShopKey are not connected from this list.",
+            "Office staff do not open Work orders from the menu."
+          ],
+          keywords: ["work order", "ro", "orders", "intake"]
+        },
+        {
+          id: "schedule",
+          route: "schedule",
+          roles: FLOOR,
+          title: "Schedule",
+          summary: "Appointments and promised times for the shop calendar.",
+          steps: [
+            "Review the day or week for booked appointments.",
+            "Open a slot or appointment to adjust time, tech, or vehicle.",
+            "Link the visit back to a work order when the customer arrives."
+          ],
+          limits: [
+            "Schedule is not a full CRM campaign tool."
+          ],
+          keywords: ["schedule", "calendar", "appointment"]
+        },
+        {
+          id: "customers",
+          route: "customers",
+          roles: ["admin", "office", "service_writer"],
+          title: "Customers",
+          summary: "Customer cards with phone, email, vehicles, and balances.",
+          steps: [
+            "Search by name or phone.",
+            "Open a customer to see vehicles, invoices, and payments.",
+            "Add a customer before intake when they are new to the shop."
+          ],
+          limits: [
+            "Plate lookup stays off until a DMV or registration provider is connected."
+          ],
+          keywords: ["customers", "phone", "email", "vehicle"]
+        },
+        {
+          id: "invoices",
+          route: "invoices",
+          roles: COUNTER,
+          title: "Invoices",
+          summary: "Accounts receivable: edit invoices, record cash or card receipts, and send a hosted pay link.",
+          steps: [
+            "Find the invoice by number or customer.",
+            "Record cash or a card receipt when money was taken outside Checkout.",
+            "Use Pay online when the customer will pay a Stripe Checkout link."
+          ],
+          limits: [
+            "Technicians do not see Invoices.",
+            "Deleting an invoice also removes its payment history."
+          ],
+          keywords: ["invoice", "receivable", "balance", "pay online"]
+        },
+        {
+          id: "pos",
+          route: "pos",
+          subview: "reader",
+          roles: COUNTER,
+          title: "Card terminal \xB7 Card reader",
+          summary: "Charge a work order or invoice on a Stripe Terminal reader at the counter.",
+          steps: [
+            "Confirm Stripe is connected on Payments and a reader is online.",
+            "Select the work order or invoice with a balance.",
+            "Enter the amount and send the charge to the reader. Stay on this screen until it shows paid or declined.",
+            "Cancel on the reader from this screen if the customer walks away."
+          ],
+          limits: [
+            "Card numbers are never typed into MechPro on the reader path.",
+            "Technicians do not have Card terminal."
+          ],
+          keywords: ["pos", "terminal", "reader", "card present", "debit"]
+        },
+        {
+          id: "pos-phone",
+          route: "pos",
+          subview: "phone",
+          roles: COUNTER,
+          title: "Card terminal \xB7 Phone order",
+          summary: "Take a card for a purchase made over the phone. Stripe\u2019s form collects the number in the browser.",
+          steps: [
+            "Select Phone order, then choose the work order or invoice.",
+            "Enter the amount and choose Enter card to open Stripe\u2019s Payment Element.",
+            "Type the card only in the Stripe fields. Confirm the charge when the form is complete.",
+            "Keep this tab open until MechPro shows the payment recorded."
+          ],
+          limits: [
+            "Never paste a card number into a MechPro note, chat, or work-order field.",
+            "Phone entry needs the publishable key saved on Payments.",
+            "Mail-order / telephone (MOTO) may fall back to a normal keyed charge if Stripe has not enabled MOTO on the account."
+          ],
+          keywords: ["phone", "keyed", "moto", "manual card", "over the phone"]
+        },
+        {
+          id: "chat",
+          route: "chat",
+          roles: ALL_SHOP,
+          title: "Team chat",
+          summary: "Internal shop threads for the counter and the floor.",
+          steps: [
+            "Pick a conversation or start one for a job.",
+            "Send updates the bay and office can both see.",
+            "Do not put card numbers or passwords in chat."
+          ],
+          limits: [
+            "Chat is for the shop team, not customer SMS."
+          ],
+          keywords: ["chat", "messages", "team"]
+        },
+        {
+          id: "shopops",
+          route: "shopops",
+          roles: ALL_SHOP,
+          title: "Vehicles & parts",
+          summary: "Vehicles, inspections, inventory, ordering, canned services, reminders, and basic OBD tools.",
+          steps: [
+            "Choose a tab for vehicles, inspections, inventory, ordering, services, reminders, or diagnostics.",
+            "Link a vehicle to a customer before intake when you can.",
+            "Use canned services when building a quick estimate line."
+          ],
+          limits: [
+            "Plate lookup and Carfax stay off until those providers are connected.",
+            "AutoZone Pro ordering needs a saved login on this screen."
+          ],
+          keywords: ["shopops", "vehicles", "inventory", "parts", "inspections"]
+        },
+        {
+          id: "oem-diagnostics",
+          route: "oem-diagnostics",
+          roles: FLOOR,
+          title: "OEM diagnostics",
+          summary: "Gateway and OEM diagnostic sessions for supported makes. Use the published host path for real vehicles.",
+          steps: [
+            "Confirm the pass-through and OEM tool path the shop uses for that make.",
+            "Open the session from this bay only when the vehicle and authorization are ready.",
+            "Record findings on the work order after the session."
+          ],
+          limits: [
+            "This screen does not unlock unofficial seed-to-key clients.",
+            "AutoAuth covers supported Stellantis and certain Nissan, Infiniti, and Mercedes gateways \u2014 not every GM VIN.",
+            "Live flash stays fail-closed. Do not run zero-byte firmware flashes."
+          ],
+          keywords: ["oem", "diagnostics", "gateway", "autoauth", "j2534"]
+        },
+        {
+          id: "obd",
+          route: "obd",
+          roles: FLOOR,
+          title: "OBD bay",
+          summary: "Shop-bay OBD tools tied to a repair order when the bay simulator or host is available.",
+          steps: [
+            "Select the work order for the vehicle in the bay.",
+            "Run the scan the bay supports and copy codes into the RO notes.",
+            "Verify safety-critical findings before releasing the vehicle."
+          ],
+          limits: [
+            "Simulated bay results are not a substitute for a live tool on a customer vehicle."
+          ],
+          keywords: ["obd", "codes", "scan", "bay"]
+        },
+        {
+          id: "keys",
+          route: "keys",
+          roles: FLOOR,
+          title: "Key programming",
+          summary: "Key jobs that the shop bay allows when the repair order is authorized.",
+          steps: [
+            "Confirm the RO is authorized for key work.",
+            "Choose the key operation the bay lists for that vehicle.",
+            "Document the result on the work order."
+          ],
+          limits: [
+            "MechPro does not provide seed-key bypass, immobilizer cloning, or key-programming algorithms.",
+            "Unsupported gateway or make combinations stay blocked."
+          ],
+          keywords: ["keys", "programming", "fob", "immobilizer"]
+        },
+        {
+          id: "ai",
+          route: "ai",
+          roles: AI_ROLES,
+          title: "AI workbench",
+          summary: "Recommendations for workflow, diagnostics, estimates, guides, and phone intake. Verify before you act.",
+          steps: [
+            "Pick a tab for the kind of help you need.",
+            "Review every recommendation on the vehicle and the RO before changing parts or promises.",
+            "Save estimates only after a person checks the lines."
+          ],
+          limits: [
+            "Conversational AI stays off while AI_ENABLED is 0.",
+            "AI does not replace OEM procedures or safety judgment.",
+            "Mitchell, ALLDATA, Motor, and ShopKey are not connected here."
+          ],
+          keywords: ["ai", "estimate", "diagnostics", "guide", "assistant"]
+        },
+        {
+          id: "employees",
+          route: "employees",
+          roles: ADMIN_ONLY,
+          title: "Employees",
+          summary: "Shop users, roles, and active status for sign-in.",
+          steps: [
+            "Add an employee with the same email they use for Access or magic link.",
+            "Set role to admin, office, service writer, or technician.",
+            "Deactivate a profile when someone leaves; do not delete Access without updating this list."
+          ],
+          limits: [
+            "Technicians cannot manage employees.",
+            "Pay rates are hidden from technicians on other screens."
+          ],
+          keywords: ["employees", "users", "roles", "access"]
+        },
+        {
+          id: "payroll",
+          route: "payroll",
+          roles: TECH_PAY,
+          title: "Payroll",
+          summary: "Planning view for hours, flat rate, commission, and team split on work orders. This is not a filed tax return.",
+          steps: [
+            "Pick a pay period to review assignments and amounts.",
+            "Confirm write-ins without an employee id stay at amount zero for payroll.",
+            "Export or print only what your shop uses for its own records."
+          ],
+          limits: [
+            "Payroll figures are a planning estimate, not a legal W-2.",
+            "Office staff do not see Payroll.",
+            "Technicians can read their planning view; they cannot weaken payroll RBAC."
+          ],
+          keywords: ["payroll", "hours", "commission", "w-2", "pay"]
+        },
+        {
+          id: "accounting",
+          route: "accounting",
+          roles: OFFICE_BOOKS,
+          title: "Accounting",
+          summary: "Income, expenses, receivables, ledger, and chart of accounts for the shop books.",
+          steps: [
+            "Use the Overview tab for a quick profit and loss snapshot.",
+            "Record expenses and journal entries from the action buttons.",
+            "Export the ledger when you need a file for your bookkeeper."
+          ],
+          limits: [
+            "Technicians and service writers do not open Accounting."
+          ],
+          keywords: ["accounting", "ledger", "expense", "receivables"]
+        },
+        {
+          id: "reports",
+          route: "reports",
+          roles: ADMIN_ONLY,
+          title: "Reports",
+          summary: "Shop performance and tax report packages the admin can generate.",
+          steps: [
+            "Choose the report range you need.",
+            "Review totals against invoices and payments before sharing outside the shop."
+          ],
+          limits: [
+            "Reports do not file taxes for you."
+          ],
+          keywords: ["reports", "tax", "performance"]
+        },
+        {
+          id: "imports",
+          route: "imports",
+          roles: ADMIN_ONLY,
+          title: "Import data",
+          summary: "Bring customers, vehicles, or other supported lists into MechPro from a file.",
+          steps: [
+            "Pick the import type the screen lists.",
+            "Preview rows before you confirm the write.",
+            "Fix duplicates in Customers or Vehicles after the import."
+          ],
+          limits: [
+            "Unsupported columns are skipped rather than inventing values."
+          ],
+          keywords: ["import", "csv", "upload"]
+        },
+        {
+          id: "messaging",
+          route: "messaging",
+          roles: ADMIN_ONLY,
+          title: "Messaging",
+          summary: "Customer messaging setup and outbound tools the shop has connected.",
+          steps: [
+            "Confirm the messaging provider fields the shop uses.",
+            "Send only to customers who asked for contact on that channel."
+          ],
+          limits: [
+            "Do not send unsolicited mail from MechPro.",
+            "Email routing on the apex domain stays with Google Workspace MX."
+          ],
+          keywords: ["messaging", "sms", "email"]
+        },
+        {
+          id: "payments",
+          route: "payments",
+          roles: ADMIN_ONLY,
+          title: "Payments",
+          summary: "Connect this shop\u2019s Stripe account: secret key, webhook signing secret, and publishable key.",
+          steps: [
+            "Paste the Stripe secret key and webhook signing secret together when first connecting.",
+            "Add the publishable key so Phone order on Card terminal can open Stripe\u2019s form.",
+            "Copy the webhook URL into the Stripe Dashboard and include checkout.session.completed and payment_intent.succeeded."
+          ],
+          limits: [
+            "The browser never stores the secret key after save; it is encrypted on the Worker.",
+            "Keys must be test or live as a matching pair."
+          ],
+          keywords: ["stripe", "payments", "webhook", "publishable", "secret"]
+        },
+        {
+          id: "settings",
+          route: "settings",
+          roles: ADMIN_ONLY,
+          title: "Settings",
+          summary: "Shop profile, theme, labor rate, AgentPhone, apps, and danger-zone data reset.",
+          steps: [
+            "Update shop name, phone, address, and rates the invoices use.",
+            "Connect AgentPhone only with this shop\u2019s API key and agent id.",
+            "Use Remove all shop data only when you intend to wipe operational records."
+          ],
+          limits: [
+            "Full reset keeps users and subscription; it deletes customers, ROs, invoices, and related shop data."
+          ],
+          keywords: ["settings", "profile", "theme", "agentphone", "reset"]
+        }
+      ];
+      SUBVIEW_LABELS = Object.freeze({
+        reader: "Card reader",
+        phone: "Phone order",
+        overview: "Overview",
+        receivables: "Receivables",
+        expenses: "Expenses",
+        ledger: "General ledger",
+        accounts: "Chart of accounts",
+        vehicles: "Vehicles",
+        inspections: "Inspections",
+        inventory: "Inventory",
+        ordering: "Ordering",
+        services: "Canned services",
+        reminders: "Reminders",
+        diagnostics: "OBD-II",
+        analytics: "Analytics",
+        workflow: "RO workflow",
+        estimate: "Estimator",
+        "saved-estimates": "Estimates",
+        guide: "Repair guide"
+      });
+      helpUi = {
+        open: false,
+        query: "",
+        lastKey: "",
+        keybound: false
+      };
+    }
+  });
+
+  // src/modules/technician-assignment.js
+  function classificationFor(user = {}) {
+    const explicit = String(user.classification || "").trim();
+    if (EMPLOYEE_CLASSIFICATIONS.some((item) => item.id === explicit)) return explicit;
+    if (user.role === "technician") return "technician";
+    if (user.role === "service_writer") return "service_writer";
+    if (user.role === "office") return "office";
+    return "custom";
+  }
+  function technicianName(user = {}) {
+    return String(user.techName || user.name || "").trim();
+  }
+  function isAssignableTechnician(user = {}) {
+    return user.active !== false && classificationFor(user) === "technician" && Boolean(technicianName(user));
+  }
+  function assignableTechnicians(users = []) {
+    return users.filter(isAssignableTechnician);
+  }
+  function clampShare(value2) {
+    const number = Number(value2);
+    if (!Number.isFinite(number) || number < 0) return 0;
+    return Math.min(100, Math.round(number * 100) / 100);
+  }
+  function normalizeAssignments(order = {}, users = []) {
+    const source = Array.isArray(order.assignments) ? order.assignments : [];
+    const cleaned = source.map((item, index) => cleanAssignment(item, index, users)).filter(Boolean);
+    if (cleaned.length) return ensurePrimary(cleaned);
+    const legacy = String(order.tech || "").trim();
+    if (!legacy || legacy === "Unassigned") return [];
+    const match = users.find((user) => technicianName(user) === legacy);
+    return [{
+      id: `legacy-${order.id || "tech"}`,
+      employeeId: match?.id || null,
+      name: legacy,
+      role: "primary",
+      sharePercent: 100,
+      hoursWorked: hoursOf(order.laborHours),
+      writeIn: !match,
+      assignedAt: null
+    }];
+  }
+  function cleanAssignment(item = {}, index = 0, users = []) {
+    const employee = users.find((user) => item.employeeId && user.id === item.employeeId);
+    const name = String(employee ? technicianName(employee) : item.name || "").trim();
+    if (!name) return null;
+    return {
+      id: String(item.id || `asg-${index + 1}`),
+      employeeId: employee?.id || null,
+      name,
+      role: ROLES.includes(item.role) ? item.role : "secondary",
+      sharePercent: clampShare(item.sharePercent),
+      hoursWorked: hoursOf(item.hoursWorked),
+      writeIn: !employee,
+      assignedAt: item.assignedAt || null
+    };
+  }
+  function ensurePrimary(assignments) {
+    const withPrimary = assignments.some((item) => item.role === "primary") ? assignments : assignments.map((item, index) => index === 0 ? { ...item, role: "primary" } : item);
+    let seen = false;
+    const unique = withPrimary.map((item) => {
+      if (item.role !== "primary") return item;
+      if (seen) return { ...item, role: "secondary" };
+      seen = true;
+      return item;
+    });
+    return unique.sort((left, right) => Number(right.role === "primary") - Number(left.role === "primary"));
+  }
+  function applyAssignments(order = {}, assignments = [], users = []) {
+    const normalized = ensurePrimary(assignments.map((item, index) => cleanAssignment(item, index, users)).filter(Boolean));
+    const primary = normalized.find((item) => item.role === "primary");
+    return {
+      ...order,
+      assignments: normalized,
+      tech: primary?.name || "Unassigned"
+    };
+  }
+  function orderIncludesTechnician(order = {}, user = {}, users = []) {
+    const name = technicianName(user);
+    if (!name && !user.id) return false;
+    return normalizeAssignments(order, users).some((item) => user.id && item.employeeId === user.id || name && item.name === name);
+  }
+  function clockedHours(clocks = [], workOrderId, userId) {
+    return hoursOf(clocks.filter((entry) => entry.workOrderId === workOrderId && entry.userId === userId && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0));
+  }
+  function shareFraction(assignments, assignment) {
+    const total = assignments.reduce((sum, item) => sum + (Number(item.sharePercent) || 0), 0);
+    if (!total) return assignments.length ? 1 / assignments.length : 0;
+    return (Number(assignment.sharePercent) || 0) / total;
+  }
+  function payAmount(employee, plan, usableHours, laborRevenue, fraction, assignment) {
+    if (!employee) return 0;
+    if (employee.employmentType === "Salary" && plan === "hourly") return 0;
+    if (plan === "flat_rate" || plan === "team_split") return money2(laborRevenue * fraction);
+    if (plan === "commission") {
+      const percent = Number(employee.commissionPercent || assignment.sharePercent || 0);
+      return money2(laborRevenue * percent / 100);
+    }
+    return money2(usableHours * Number(employee.payRate || 0));
+  }
+  function payrollLinesForOrder({
+    order = {},
+    users = [],
+    clocks = [],
+    periodKey,
+    nowIso = null
+  } = {}) {
+    if (!["completed", "invoiced"].includes(order.status)) return [];
+    const assignments = normalizeAssignments(order, users);
+    if (!assignments.length) return [];
+    const laborRevenue = Number(order.labor || 0);
+    return assignments.flatMap((assignment) => {
+      const employee = users.find((user) => user.id === assignment.employeeId && user.active !== false) || null;
+      const tracked = employee ? clockedHours(clocks, order.id, employee.id) : 0;
+      const usableHours = hoursOf(tracked || assignment.hoursWorked || (assignment.role === "primary" ? order.laborHours : 0));
+      if (!usableHours) return [];
+      const plan = PAY_PLANS.some((item) => item.id === employee?.payPlan) ? employee.payPlan : "hourly";
+      const fraction = shareFraction(assignments, assignment);
+      const amount = payAmount(employee, plan, usableHours, laborRevenue, fraction, assignment);
+      return [{
+        id: `${periodKey}#${order.id}#${assignment.id}`,
+        workOrderId: order.id,
+        employeeId: employee?.id || null,
+        technicianName: assignment.name,
+        role: assignment.role,
+        writeIn: !employee,
+        periodKey,
+        roNumber: order.id,
+        customer: order.customer || "",
+        vehicle: order.vehicle || "",
+        hours: usableHours,
+        rate: plan === "hourly" ? Number(employee?.payRate || 0) : 0,
+        amount,
+        grossPay: amount,
+        payPlan: employee ? plan : "unrated",
+        completedAt: nowIso
+      }];
+    });
+  }
+  function attributeClockHours(order, userId, clocks = [], users = []) {
+    const assignments = normalizeAssignments(order, users).map((item) => item.employeeId === userId ? { ...item, hoursWorked: clockedHours(clocks, order.id, userId) } : item);
+    const laborHours = hoursOf(clocks.filter((entry) => entry.workOrderId === order.id && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0));
+    return applyAssignments({ ...order, laborHours: laborHours || order.laborHours }, assignments, users);
+  }
+  function technicianPerformance(orders2 = [], users = [], clocks = []) {
+    const comebackTracked = orders2.some((order) => Object.prototype.hasOwnProperty.call(order, "comeback"));
+    return assignableTechnicians(users).map((user) => {
+      const mine = orders2.filter((order) => orderIncludesTechnician(order, user, users));
+      const completed = mine.filter((order) => ["completed", "invoiced"].includes(order.status));
+      const hours = hoursOf(completed.reduce((sum, order) => {
+        const tracked = clockedHours(clocks, order.id, user.id);
+        if (tracked) return sum + tracked;
+        const assignment = normalizeAssignments(order, users).find((item) => item.employeeId === user.id);
+        return sum + Number(assignment?.hoursWorked || (assignment?.role === "primary" ? order.laborHours : 0) || 0);
+      }, 0));
+      const revenue = money2(completed.reduce((sum, order) => sum + Number(order.labor || 0), 0));
+      const billedHours = hoursOf(completed.reduce((sum, order) => sum + Number(order.laborHours || 0), 0));
+      const efficiency = hours > 0 && billedHours > 0 ? Math.round(billedHours / hours * 1e3) / 10 : null;
+      const averageRepair = completed.length && hours ? hoursOf(hours / completed.length) : null;
+      const comebacks = comebackTracked ? completed.filter((order) => order.comeback === true).length : null;
+      return {
+        id: user.id,
+        name: technicianName(user),
+        open: mine.length - completed.length,
+        completed: completed.length,
+        hours,
+        revenue,
+        efficiency,
+        averageRepair,
+        comebacks,
+        averageTicket: completed.length ? money2(revenue / completed.length) : null
       };
     });
-    const feeItems = (Array.isArray(invoice.fees) ? invoice.fees : []).map((fee) => ({
-      type: "fee",
-      description: String(fee?.description || "Fee"),
-      detail: "Fee",
-      amount: Math.max(0, Number(fee?.amount) || 0)
-    }));
-    return [...lineItems, ...feeItems];
   }
-  var init_work_order_editor = __esm({
-    "src/modules/work-order-editor.js"() {
+  function escapeHtml2(value2) {
+    return String(value2 ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
+  }
+  function technicianTrackerHtml(rows = []) {
+    const body = rows.map((row) => `<tr><td>${escapeHtml2(row.name)}</td><td>${row.open}</td><td>${row.completed}</td><td>${row.hours.toFixed(2)}</td><td>${currency(row.revenue)}</td><td>${row.efficiency == null ? "\u2014" : `${row.efficiency}%`}</td><td>${row.comebacks == null ? "\u2014" : row.comebacks}</td><td>${row.averageRepair == null ? "\u2014" : row.averageRepair.toFixed(2)}</td></tr>`).join("");
+    return `<section class="tech-tracker"><div class="home-panel-head"><div><h2>Technician performance</h2><p>Open jobs, completed jobs, clocked hours, and labor sold. Comebacks appear only after a job is marked as a comeback.</p></div></div><div class="data-panel"><table><thead><tr><th>Technician</th><th>Open</th><th>Completed</th><th>Hours</th><th>Labor sold</th><th>Efficiency</th><th>Comebacks</th><th>Avg hours</th></tr></thead><tbody>${body || '<tr><td colspan="8">No technicians are classified for assignment yet.</td></tr>'}</tbody></table></div></section>`;
+  }
+  function assignmentSummary(order = {}, users = []) {
+    const assignments = normalizeAssignments(order, users);
+    if (!assignments.length) return order.tech && order.tech !== "Unassigned" ? order.tech : "Unassigned";
+    const primary = assignments.find((item) => item.role === "primary") || assignments[0];
+    const extra = assignments.length - 1;
+    return extra > 0 ? `${primary.name} +${extra}` : primary.name;
+  }
+  var ROLES, EMPLOYEE_CLASSIFICATIONS, PAY_PLANS, money2, hoursOf, currency;
+  var init_technician_assignment = __esm({
+    "src/modules/technician-assignment.js"() {
+      ROLES = ["primary", "secondary", "apprentice"];
+      EMPLOYEE_CLASSIFICATIONS = [
+        { id: "technician", label: "Technician" },
+        { id: "service_writer", label: "Service Writer" },
+        { id: "parts_manager", label: "Parts Manager" },
+        { id: "shop_foreman", label: "Shop Foreman" },
+        { id: "office", label: "Office Staff" },
+        { id: "custom", label: "Custom" }
+      ];
+      PAY_PLANS = [
+        { id: "hourly", label: "Hourly" },
+        { id: "flat_rate", label: "Flat rate" },
+        { id: "commission", label: "Commission" },
+        { id: "team_split", label: "Team split" }
+      ];
+      money2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      hoursOf = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      currency = (value2) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value2) || 0);
     }
   });
 
@@ -3706,17 +4543,17 @@ button{margin-top:12px;padding:8px 14px}
       SHOP_SUPPLIES_RULES.shopSuppliesCap,
       labor * SHOP_SUPPLIES_RULES.shopSuppliesRate / 100
     );
-    const supplies = labor > 0 ? money2(Math.min(SHOP_SUPPLIES_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies))) : 0;
+    const supplies = labor > 0 ? money3(Math.min(SHOP_SUPPLIES_RULES.shopSuppliesCap, Math.max(0, shopSupplies ?? automaticSupplies))) : 0;
     const base = calculateEstimate(
       normalizedLines,
       0,
       supplies ? [{ description: "Shop supplies", amount: supplies }] : []
     );
     const safeDiscountPercent = Math.min(100, Math.max(0, Number(discountPercent) || 0));
-    const discountAmount = money2(base.subtotal * safeDiscountPercent / 100);
-    const subtotal = money2(base.subtotal - discountAmount);
+    const discountAmount = money3(base.subtotal * safeDiscountPercent / 100);
+    const subtotal = money3(base.subtotal - discountAmount);
     const safeTaxRate = Math.max(0, Number(taxRate) || 0);
-    const tax = money2(subtotal * safeTaxRate / 100);
+    const tax = money3(subtotal * safeTaxRate / 100);
     return {
       ...base,
       grossSubtotal: base.subtotal,
@@ -3726,7 +4563,7 @@ button{margin-top:12px;padding:8px 14px}
       subtotal,
       taxRate: safeTaxRate,
       tax,
-      total: money2(subtotal + tax)
+      total: money3(subtotal + tax)
     };
   }
   function workOrderDraftFromEstimate(estimate = REFERENCE_ESTIMATE) {
@@ -3816,11 +4653,11 @@ button{margin-top:12px;padding:8px 14px}
       ...totals
     };
   }
-  var money2, REFERENCE_ESTIMATE_RULES, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
+  var money3, REFERENCE_ESTIMATE_RULES, referenceLines, referenceTotals, REFERENCE_ESTIMATE;
   var init_estimate_templates = __esm({
     "src/modules/estimate-templates.js"() {
       init_estimate_workflow();
-      money2 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
+      money3 = (value2) => Math.round((Number(value2) || 0) * 100) / 100;
       REFERENCE_ESTIMATE_RULES = Object.freeze({ laborRate: 140, taxRate: 8.25 });
       referenceLines = [
         {
@@ -3944,6 +4781,623 @@ button{margin-top:12px;padding:8px 14px}
         fees: referenceTotals.fees,
         ...referenceTotals
       });
+    }
+  });
+
+  // src/modules/intake-wizard.js
+  function escapeHtml3(value2) {
+    return String(value2 ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]);
+  }
+  function escapeAttr3(value2) {
+    return escapeHtml3(value2);
+  }
+  function emptyIntakeDraft(now2 = /* @__PURE__ */ new Date()) {
+    return {
+      id: `intake-${now2.getTime()}`,
+      step: 0,
+      savedAt: null,
+      status: "draft",
+      customer: {
+        firstName: "",
+        lastName: "",
+        phone: "",
+        email: "",
+        company: "",
+        secondaryPhone: "",
+        address: "",
+        city: "",
+        state: "",
+        zip: "",
+        contact: { phone: true, text: false, email: true }
+      },
+      vehicle: {
+        vin: "",
+        plate: "",
+        plateState: "",
+        year: "",
+        make: "",
+        model: "",
+        trim: "",
+        engine: "",
+        transmission: "",
+        mileage: "",
+        color: ""
+      },
+      photos: [],
+      damage: [],
+      concern: {
+        description: "",
+        began: "",
+        frequency: "",
+        lights: "",
+        recentRepairs: "",
+        accident: "",
+        towed: "",
+        overheating: ""
+      },
+      diagnosis: {
+        visual: "",
+        roadTest: "",
+        fluids: "",
+        battery: "",
+        codes: "",
+        notes: "",
+        analysis: null
+      },
+      estimate: { lines: [], diagnosticCharge: 0, approval: "pending" },
+      assignments: []
+    };
+  }
+  function customerDisplayName(draft = {}) {
+    const customer = draft.customer || {};
+    const person = [customer.firstName, customer.lastName].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+    const company = String(customer.company || "").trim();
+    if (person && company) return `${person} (${company})`;
+    return person || company;
+  }
+  function vehicleLabel2(draft = {}) {
+    const vehicle = draft.vehicle || {};
+    return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+  }
+  function missingCustomerFields(draft = {}) {
+    const customer = draft.customer || {};
+    return ["firstName", "lastName", "phone", "email"].filter((field2) => !String(customer[field2] || "").trim());
+  }
+  function missingVehicleFields(draft = {}) {
+    const vehicle = draft.vehicle || {};
+    const identity = vehicleLabel2(draft);
+    const missing = [];
+    if (!identity && !String(vehicle.vin || "").trim()) missing.push("vehicle");
+    return missing;
+  }
+  function missingRequiredPhotos(draft = {}) {
+    const taken = new Set((draft.photos || []).map((photo) => photo.slot));
+    return REQUIRED_PHOTO_SLOTS.filter((slot) => !taken.has(slot.id)).map((slot) => slot.label);
+  }
+  function applyVinDecode(draft, decoded = {}) {
+    const vehicle = { ...draft.vehicle };
+    const fill = (field2, value2) => {
+      if (!String(vehicle[field2] || "").trim() && String(value2 || "").trim()) vehicle[field2] = String(value2).trim();
+    };
+    fill("year", decoded.year);
+    fill("make", decoded.make);
+    fill("model", decoded.model);
+    fill("trim", decoded.trim);
+    const engine = [decoded.engineDisplacementLiters ? `${decoded.engineDisplacementLiters}L` : "", decoded.engineCylinders ? `${decoded.engineCylinders} cyl` : ""].filter(Boolean).join(" ");
+    fill("engine", engine);
+    if (decoded.vin) vehicle.vin = String(decoded.vin).toUpperCase();
+    return { ...draft, vehicle };
+  }
+  function searchLaborGuide(query2 = "", services = CANNED_MENU) {
+    const needle = String(query2 || "").trim().toLowerCase();
+    if (needle.length < 2) return [];
+    const shopHits = MECHPRO_LABOR.filter((item) => item.name.toLowerCase().includes(needle) || needle.includes(item.name.toLowerCase())).map((item) => ({ source: "MechPro guide", name: item.name, hours: item.hours, price: null, notes: item.notes }));
+    const canned = services.filter((item) => `${item.name} ${item.description || ""}`.toLowerCase().includes(needle)).slice(0, 6).map((item) => ({ source: "MechPro guide", name: item.name, hours: null, price: item.menuPrice || null, notes: item.description || "" }));
+    return [...shopHits, ...canned].slice(0, 8);
+  }
+  function seedEstimateLines(draft = {}) {
+    if (Array.isArray(draft.estimate?.lines) && draft.estimate.lines.length) return draft.estimate.lines;
+    const hits = searchLaborGuide(draft.concern?.description || "");
+    const lines = hits.slice(0, 2).map((hit) => ({
+      type: "labor",
+      description: hit.name,
+      quantity: hit.hours || 1,
+      unitPrice: 0,
+      notes: hit.notes,
+      source: hit.source
+    }));
+    const charge = Number(draft.estimate?.diagnosticCharge || 0);
+    if (charge > 0) {
+      lines.unshift({ type: "labor", description: "Diagnostic charge", quantity: 1, unitPrice: charge, notes: "Initial diagnosis", source: "Shop" });
+    }
+    if (!lines.length) {
+      lines.push({
+        type: "labor",
+        description: String(draft.concern?.description || "Diagnose customer concern").slice(0, 120),
+        quantity: 1,
+        unitPrice: 0,
+        notes: "Hours stay at 1 until the technician confirms the job.",
+        source: "Shop"
+      });
+    }
+    return lines;
+  }
+  function priceIntakeEstimate(draft = {}, { laborRate = 165, taxRate = 0 } = {}) {
+    const lines = seedEstimateLines(draft).map((line) => ({
+      type: line.type === "part" ? "part" : "labor",
+      description: line.description,
+      quantity: Math.max(0, Number(line.quantity) || 0),
+      unitPrice: line.type === "part" ? Number(line.unitPrice) || 0 : void 0,
+      laborRate: line.type === "part" ? void 0 : Number(line.unitPrice) > 0 ? Number(line.unitPrice) : laborRate,
+      notes: line.notes || ""
+    }));
+    const priced = calculateShopEstimate(lines, { laborRate, taxRate });
+    return { ...priced, disclaimer: INTAKE_DISCLAIMER, lines };
+  }
+  function localDiagnosticChecklist(draft = {}) {
+    const text = `${draft.concern?.description || ""} ${draft.diagnosis?.codes || ""}`.toLowerCase();
+    const causes = [];
+    if (/misfire|stall|p030/.test(text)) causes.push({ name: "Ignition and fuel", detail: "Compare coil, plug, and injector contribution on the dead cylinder before parts are sold." });
+    if (/p0171|lean|vacuum/.test(text)) causes.push({ name: "Unmetered air", detail: "Smoke-test the intake and review fuel trims before replacing a sensor." });
+    if (/p0420|catalyst/.test(text)) causes.push({ name: "Catalyst efficiency", detail: "Confirm the upstream mixture and exhaust leaks before condemning the converter." });
+    if (!causes.length) causes.push({ name: "Verify the complaint", detail: "Road-test or reproduce the symptom, then record what the scan tool and the inspection actually show." });
+    return {
+      source: "shop-checklist",
+      notice: "MechPro AI is not connected. This is a shop checklist from the words on the intake, not a remote diagnosis.",
+      causes
+    };
+  }
+  function intakeOrderPayload(draft, { id, laborRate = 165, taxRate = 0, users = [] } = {}) {
+    const priced = priceIntakeEstimate(draft, { laborRate, taxRate });
+    const approval = draft.estimate?.approval || "pending";
+    const status = approval === "approved" ? "approved" : "estimate";
+    const assigned = applyAssignments({ id }, draft.assignments || [], users);
+    return {
+      id,
+      customer: customerDisplayName(draft),
+      phone: String(draft.customer?.phone || "").trim(),
+      vehicle: vehicleLabel2(draft) || "Vehicle pending",
+      vin: String(draft.vehicle?.vin || "").trim().toUpperCase() || "VIN pending",
+      complaint: String(draft.concern?.description || "").trim() || "Customer concern pending",
+      status,
+      priority: "normal",
+      tech: assigned.tech,
+      assignments: assigned.assignments,
+      bay: "Unassigned",
+      mobile: false,
+      promise: "",
+      notes: [draft.diagnosis?.notes, draft.concern?.recentRepairs ? `Recent repairs: ${draft.concern.recentRepairs}` : ""].filter(Boolean).join("\n"),
+      labor: priced.labor,
+      laborHours: priced.lines.filter((line) => line.type === "labor").reduce((sum, line) => sum + Number(line.quantity || 0), 0),
+      parts: priced.parts,
+      tax: priced.tax,
+      total: priced.total,
+      estimate: {
+        lines: priced.lines,
+        disclaimer: INTAKE_DISCLAIMER,
+        approvalStatus: approval
+      },
+      intake: {
+        id: draft.id,
+        status: "checked_in",
+        customer: draft.customer,
+        vehicle: draft.vehicle,
+        photos: draft.photos || [],
+        damage: draft.damage || [],
+        concern: draft.concern,
+        diagnosis: draft.diagnosis,
+        disclaimer: INTAKE_DISCLAIMER,
+        approval
+      }
+    };
+  }
+  function serializableIntake(draft = {}) {
+    return {
+      ...draft,
+      photos: (draft.photos || []).map((photo) => {
+        const copy = { ...photo };
+        delete copy.file;
+        return copy;
+      })
+    };
+  }
+  function canConvertIntake(draft = {}) {
+    const problems = [];
+    if (missingCustomerFields(draft).length) problems.push("Customer name, phone, and email are required.");
+    if (missingVehicleFields(draft).length) problems.push("Enter a VIN or the year, make, and model.");
+    if (missingRequiredPhotos(draft).length) problems.push(`Required photos: ${missingRequiredPhotos(draft).join(", ")}.`);
+    if (draft.estimate?.approval === "denied") problems.push("This estimate was denied. Update the approval before creating the work order.");
+    return { ok: problems.length === 0, problems };
+  }
+  function field(name, label2, value2, { type = "text", required = false, full = false } = {}) {
+    return `<label class="${full ? "full" : ""}">${escapeHtml3(label2)}${required ? " *" : ""}<input name="${escapeAttr3(name)}" type="${type}" value="${escapeAttr3(value2 || "")}" ${required ? "required" : ""}/></label>`;
+  }
+  function progress(step) {
+    return `<ol class="intake-progress">${INTAKE_STEPS.map((item, index) => `<li class="${index === step ? "current" : ""} ${index < step ? "done" : ""}"><span>${index + 1}</span>${escapeHtml3(item.label)}</li>`).join("")}</ol>`;
+  }
+  function savedStamp(draft) {
+    if (!draft.savedAt) return '<span class="intake-save">Not saved yet</span>';
+    const time = new Date(draft.savedAt);
+    const label2 = Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return `<span class="intake-save">Draft saved${label2 ? ` ${escapeHtml3(label2)}` : ""}</span>`;
+  }
+  function customerStep(draft) {
+    const customer = draft.customer;
+    const contact = customer.contact || {};
+    return `<div class="form-grid">${field("firstName", "First name", customer.firstName, { required: true })}${field("lastName", "Last name", customer.lastName, { required: true })}${field("phone", "Phone number", customer.phone, { required: true, type: "tel" })}${field("email", "Email address", customer.email, { required: true, type: "email" })}${field("company", "Company name", customer.company)}${field("secondaryPhone", "Secondary phone", customer.secondaryPhone, { type: "tel" })}${field("address", "Address", customer.address, { full: true })}${field("city", "City", customer.city)}${field("state", "State", customer.state)}${field("zip", "Zip code", customer.zip)}</div>
+<fieldset class="intake-choices"><legend>Communication preferences</legend>${["phone", "text", "email"].map((key) => `<label><input type="checkbox" name="contact-${key}" ${contact[key] ? "checked" : ""}/> ${key[0].toUpperCase()}${key.slice(1)}</label>`).join("")}</fieldset>`;
+  }
+  function vehicleStep(draft) {
+    const vehicle = draft.vehicle;
+    return `<div class="form-grid">${field("vin", "VIN", vehicle.vin, { full: true })}${field("plate", "License plate", vehicle.plate)}${field("plateState", "Plate state", vehicle.plateState)}${field("year", "Year", vehicle.year)}${field("make", "Make", vehicle.make)}${field("model", "Model", vehicle.model)}${field("trim", "Trim", vehicle.trim)}${field("engine", "Engine", vehicle.engine)}${field("transmission", "Transmission", vehicle.transmission)}${field("mileage", "Mileage", vehicle.mileage)}${field("color", "Color", vehicle.color)}</div>
+<div class="intake-actions-inline"><button class="secondary" type="button" id="intake-decode">Decode vehicle</button><button class="secondary" type="button" id="intake-plate">Lookup plate</button></div>
+<p class="form-help" id="intake-vehicle-note">Plate lookup stays off until a DMV, Carfax, or registration provider is connected. VIN decode uses the shop vehicle decode service.</p>`;
+  }
+  function photoStep(draft) {
+    const slots = [...REQUIRED_PHOTO_SLOTS, ...EXTRA_PHOTO_SLOTS.filter((slot) => slot.id !== "extra")];
+    const cards = slots.map((slot) => {
+      const photos = (draft.photos || []).filter((photo) => photo.slot === slot.id);
+      const required = REQUIRED_PHOTO_SLOTS.some((item) => item.id === slot.id);
+      return `<article class="intake-photo ${photos.length ? "taken" : ""}"><strong>${escapeHtml3(slot.label)}${required ? " *" : ""}</strong><span>${photos.length ? photos.map((photo) => escapeHtml3(photo.name)).join(", ") : "Not added"}</span><label class="mini-action">Add photo<input class="intake-file" data-slot="${escapeAttr3(slot.id)}" type="file" accept="image/png,image/jpeg,image/webp" hidden/></label></article>`;
+    }).join("");
+    const extras = (draft.photos || []).filter((photo) => photo.slot === "extra").map((photo) => `<li>${escapeHtml3(photo.name)}</li>`).join("");
+    return `<div class="intake-photos">${cards}</div><div class="intake-actions-inline"><label class="secondary">+ Add photo<input class="intake-file" data-slot="extra" type="file" accept="image/png,image/jpeg,image/webp" hidden/></label></div>${extras ? `<ul class="intake-extra-photos">${extras}</ul>` : ""}
+<h3>Damage map</h3><div class="intake-damage">${DAMAGE_AREAS.map((area) => {
+      const marked = (draft.damage || []).find((item) => item.area === area);
+      return `<label><input type="checkbox" name="damage" value="${escapeAttr3(area)}" ${marked ? "checked" : ""}/> ${escapeHtml3(area)}</label><input name="damage-note-${escapeAttr3(area)}" placeholder="Dent, scratch, broken trim, cracked glass, previous damage" value="${escapeAttr3(marked?.note || "")}"/>`;
+    }).join("")}</div>`;
+  }
+  function concernStep(draft) {
+    const concern = draft.concern;
+    return `<label class="full">Describe concern *<textarea name="description" required>${escapeHtml3(concern.description)}</textarea></label>
+<div class="form-grid">${field("began", "When did the problem begin?", concern.began)}${field("frequency", "How often does it occur?", concern.frequency)}${field("lights", "Warning lights?", concern.lights)}${field("recentRepairs", "Recent repairs?", concern.recentRepairs)}${field("accident", "Recent accident?", concern.accident)}${field("towed", "Vehicle towed in?", concern.towed)}${field("overheating", "Vehicle overheating?", concern.overheating, { full: true })}</div>`;
+  }
+  function diagnosisStep(draft) {
+    const diagnosis = draft.diagnosis;
+    const analysis = diagnosis.analysis;
+    const causes = analysis?.causes?.map((cause) => `<li><strong>${escapeHtml3(cause.name || cause.cause || "Check")}</strong><p>${escapeHtml3(cause.detail || cause.explanation || "")}</p></li>`).join("") || "";
+    return `<div class="form-grid">${field("visual", "Visual inspection", diagnosis.visual, { full: true })}${field("roadTest", "Road test", diagnosis.roadTest)}${field("fluids", "Fluid levels", diagnosis.fluids)}${field("battery", "Battery test", diagnosis.battery)}${field("codes", "DTC codes", diagnosis.codes, { full: true })}</div>
+<label class="full">Technician notes<textarea name="notes">${escapeHtml3(diagnosis.notes)}</textarea></label>
+<div class="intake-actions-inline"><button class="secondary" type="button" id="intake-analyze">Review diagnostic notes</button></div>
+${analysis ? `<section class="ai-notice"><span>${escapeHtml3(analysis.notice || "")}</span></section><ul class="intake-causes">${causes}</ul>` : ""}`;
+  }
+  function estimateStep(draft, profile) {
+    const priced = priceIntakeEstimate(draft, profile);
+    const rows = (draft.estimate.lines?.length ? draft.estimate.lines : seedEstimateLines(draft)).map((line, index) => `<tr data-line="${index}"><td><input name="line-description" value="${escapeAttr3(line.description || "")}"/></td><td><input name="line-hours" type="number" min="0" step="0.1" value="${Number(line.quantity || 0)}"/></td><td>${escapeHtml3(line.source || "Shop")}</td></tr>`).join("");
+    return `<div class="intake-actions-inline"><input id="labor-query" placeholder="Brake pads, water pump, alternator, starter"/><button class="secondary" type="button" id="lookup-labor">Lookup labor</button></div>
+<p class="form-help">Lookup uses the MechPro guide and this shop's canned jobs. Mitchell, ALLDATA, Motor, and ShopKey are not connected.</p>
+<div id="labor-results"></div>
+<table><thead><tr><th>Labor</th><th>Hours</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
+<label>Diagnostic charge<input name="diagnosticCharge" type="number" min="0" step="0.01" value="${Number(draft.estimate.diagnosticCharge || 0)}"/></label>
+<div class="estimate-sign-summary"><span>Labor ${escapeHtml3(String(priced.labor))} \xB7 Parts ${escapeHtml3(String(priced.parts))} \xB7 Supplies ${escapeHtml3(String(priced.fees?.reduce((sum, fee) => sum + fee.amount, 0) || 0))} \xB7 Tax ${escapeHtml3(String(priced.tax))}</span><strong>${escapeHtml3(String(priced.total))}</strong></div>
+<pre class="intake-disclaimer">${escapeHtml3(INTAKE_DISCLAIMER)}</pre>
+<label>Customer approval<select name="approval">${["pending", "viewed", "approved", "denied"].map((status) => `<option value="${status}" ${draft.estimate.approval === status ? "selected" : ""}>${status[0].toUpperCase()}${status.slice(1)}</option>`).join("")}</select></label>
+<p class="form-help">Email, text, and the customer portal send path is not connected on this step. Set the approval when the customer answers.</p>`;
+  }
+  function reviewStep(draft, users) {
+    const check2 = canConvertIntake(draft);
+    const techs = assignableTechnicians(users);
+    const options = (role) => `<option value="">Unassigned</option>${techs.map((user) => {
+      const selected = (draft.assignments || []).find((item) => item.role === role);
+      return `<option value="${escapeAttr3(user.id)}" ${selected?.employeeId === user.id ? "selected" : ""}>${escapeHtml3(technicianName(user))}</option>`;
+    }).join("")}`;
+    return `<dl class="intake-review"><div><dt>Customer</dt><dd>${escapeHtml3(customerDisplayName(draft) || "Missing")}</dd></div><div><dt>Vehicle</dt><dd>${escapeHtml3(vehicleLabel2(draft) || draft.vehicle.vin || "Missing")}</dd></div><div><dt>Concern</dt><dd>${escapeHtml3(draft.concern.description || "Missing")}</dd></div><div><dt>Photos</dt><dd>${(draft.photos || []).length}</dd></div></dl>
+<div class="form-grid"><label>Primary technician<select name="assign-primary">${options("primary")}</select></label><label>Secondary technician<select name="assign-secondary">${options("secondary")}</select></label><label>Apprentice<select name="assign-apprentice">${options("apprentice")}</select></label></div>
+${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) => `<span>${escapeHtml3(problem)}</span>`).join("")}</div>`}
+<p class="form-help">Convert copies this intake onto one work order. Customer, vehicle, photos, estimate, and diagnostic notes are not typed again.</p>`;
+  }
+  function intakeWizardHtml(draft, { users = [], laborRate = 165, taxRate = 0 } = {}) {
+    const step = Math.min(INTAKE_STEPS.length - 1, Math.max(0, Number(draft.step) || 0));
+    const body = [
+      customerStep,
+      vehicleStep,
+      photoStep,
+      concernStep,
+      diagnosisStep,
+      (current) => estimateStep(current, { laborRate, taxRate }),
+      (current) => reviewStep(current, users)
+    ][step](draft);
+    return `<div class="modal-head"><div><span class="eyebrow">Customer intake</span><h2>${escapeHtml3(INTAKE_STEPS[step].label)}</h2></div><div class="intake-head-meta">${savedStamp(draft)}<button type="button" class="close" id="intake-cancel" aria-label="Cancel intake">\xD7</button></div></div>
+<div class="modal-body intake-body">${progress(step)}<form id="intake-form">${body}</form></div>
+<div class="modal-actions"><button type="button" class="secondary" id="intake-back" ${step === 0 ? "disabled" : ""}>Back</button><button type="button" class="secondary" id="intake-save">Save draft</button>${step < INTAKE_STEPS.length - 1 ? '<button type="button" class="primary" id="intake-next">Continue</button>' : '<button type="button" class="primary" id="intake-convert">Convert to work order</button>'}</div>`;
+  }
+  function readForm(draft, form) {
+    const next = structuredClone(draft);
+    const data = Object.fromEntries(new FormData(form).entries());
+    const step = INTAKE_STEPS[next.step]?.id;
+    if (step === "customer") {
+      ["firstName", "lastName", "phone", "email", "company", "secondaryPhone", "address", "city", "state", "zip"].forEach((key) => {
+        if (key in data) next.customer[key] = String(data[key] || "").trim();
+      });
+      next.customer.contact = {
+        phone: Boolean(form.querySelector('[name="contact-phone"]')?.checked),
+        text: Boolean(form.querySelector('[name="contact-text"]')?.checked),
+        email: Boolean(form.querySelector('[name="contact-email"]')?.checked)
+      };
+    }
+    if (step === "vehicle") {
+      ["vin", "plate", "plateState", "year", "make", "model", "trim", "engine", "transmission", "mileage", "color"].forEach((key) => {
+        if (key in data) next.vehicle[key] = String(data[key] || "").trim();
+      });
+      next.vehicle.vin = next.vehicle.vin.toUpperCase();
+    }
+    if (step === "photos") {
+      const marked = new Set([...form.querySelectorAll('[name="damage"]')].filter((input) => input.checked).map((input) => input.value));
+      next.damage = DAMAGE_AREAS.filter((area) => marked.has(area)).map((area) => ({ area, note: String(data[`damage-note-${area}`] || "").trim() }));
+    }
+    if (step === "concerns") {
+      ["description", "began", "frequency", "lights", "recentRepairs", "accident", "towed", "overheating"].forEach((key) => {
+        const source = key === "description" ? form.querySelector('[name="description"]')?.value : data[key];
+        next.concern[key] = String(source || "").trim();
+      });
+    }
+    if (step === "diagnosis") {
+      ["visual", "roadTest", "fluids", "battery", "codes", "notes"].forEach((key) => {
+        next.diagnosis[key] = String(form.querySelector(`[name="${key}"]`)?.value || data[key] || "").trim();
+      });
+    }
+    if (step === "estimate") {
+      const descriptions = [...form.querySelectorAll('[name="line-description"]')];
+      const hourInputs = [...form.querySelectorAll('[name="line-hours"]')];
+      next.estimate.lines = descriptions.map((input, index) => ({
+        type: "labor",
+        description: input.value.trim(),
+        quantity: Math.max(0, Number(hourInputs[index]?.value) || 0),
+        source: "Shop"
+      })).filter((line) => line.description);
+      next.estimate.diagnosticCharge = Math.max(0, Number(data.diagnosticCharge) || 0);
+      next.estimate.approval = data.approval || "pending";
+    }
+    if (step === "review") {
+      next.assignments = ["primary", "secondary", "apprentice"].flatMap((role) => {
+        const employeeId = data[`assign-${role}`];
+        if (!employeeId) return [];
+        return [{ employeeId, role, sharePercent: role === "primary" ? 100 : 0, assignedAt: (/* @__PURE__ */ new Date()).toISOString() }];
+      });
+    }
+    return next;
+  }
+  function mountIntakeWizard(host, {
+    draft,
+    users = [],
+    laborRate = 165,
+    taxRate = 0,
+    onSave,
+    onCancel,
+    onConvert,
+    decodeVin,
+    lookupPlate,
+    analyze
+  } = {}) {
+    let current = structuredClone(draft || emptyIntakeDraft());
+    let timer = 0;
+    const paint = () => {
+      host.innerHTML = intakeWizardHtml(current, { users, laborRate, taxRate });
+      bind2();
+    };
+    const persist = (reason) => {
+      current.savedAt = (/* @__PURE__ */ new Date()).toISOString();
+      onSave?.(serializableIntake(current), reason);
+      const stamp = host.querySelector(".intake-save");
+      if (stamp) stamp.outerHTML = savedStamp(current);
+    };
+    const schedule2 = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => persist("autosave"), 400);
+    };
+    function bind2() {
+      const form = host.querySelector("#intake-form");
+      form?.addEventListener("input", () => {
+        current = readForm(current, form);
+        schedule2();
+      });
+      host.querySelector("#intake-save")?.addEventListener("click", () => {
+        if (form) current = readForm(current, form);
+        persist("manual");
+      });
+      host.querySelector("#intake-cancel")?.addEventListener("click", () => onCancel?.(current));
+      host.querySelector("#intake-back")?.addEventListener("click", () => {
+        if (form) current = readForm(current, form);
+        current.step = Math.max(0, current.step - 1);
+        persist("step");
+        paint();
+      });
+      host.querySelector("#intake-next")?.addEventListener("click", () => {
+        if (form) current = readForm(current, form);
+        current.step = Math.min(INTAKE_STEPS.length - 1, current.step + 1);
+        if (INTAKE_STEPS[current.step]?.id === "estimate" && !current.estimate.lines.length) current.estimate.lines = seedEstimateLines(current);
+        persist("step");
+        paint();
+      });
+      host.querySelector("#intake-convert")?.addEventListener("click", async () => {
+        if (form) current = readForm(current, form);
+        const check2 = canConvertIntake(current);
+        if (!check2.ok) {
+          persist("blocked");
+          paint();
+          return;
+        }
+        await onConvert?.(current);
+      });
+      host.querySelector("#intake-decode")?.addEventListener("click", async () => {
+        if (form) current = readForm(current, form);
+        const note = host.querySelector("#intake-vehicle-note");
+        try {
+          const decoded = await decodeVin?.(current.vehicle.vin);
+          if (!decoded) throw new Error("Enter a 17-character VIN first.");
+          current = applyVinDecode(current, decoded);
+          persist("vin");
+          paint();
+        } catch (error) {
+          if (note) note.textContent = error.message || "VIN decode failed.";
+        }
+      });
+      host.querySelector("#intake-plate")?.addEventListener("click", async () => {
+        if (form) current = readForm(current, form);
+        const note = host.querySelector("#intake-vehicle-note");
+        const result = await lookupPlate?.(current.vehicle) || { available: false, message: "Plate lookup is not connected." };
+        if (note) note.textContent = result.message || "Plate lookup is not connected.";
+      });
+      host.querySelectorAll(".intake-file").forEach((input) => {
+        input.addEventListener("change", () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          current.photos.push({
+            id: `photo-${Date.now()}-${current.photos.length}`,
+            slot: input.dataset.slot,
+            name: file.name,
+            contentType: file.type,
+            takenAt: (/* @__PURE__ */ new Date()).toISOString(),
+            file
+          });
+          persist("photo");
+          paint();
+        });
+      });
+      host.querySelector("#lookup-labor")?.addEventListener("click", () => {
+        const query2 = host.querySelector("#labor-query")?.value || "";
+        const hits = searchLaborGuide(query2);
+        const box = host.querySelector("#labor-results");
+        if (!box) return;
+        box.innerHTML = hits.length ? `<ul class="intake-causes">${hits.map((hit) => `<li><button type="button" class="mini-action" data-add-labor="${escapeAttr3(hit.name)}" data-hours="${hit.hours || 1}">${escapeHtml3(hit.name)}</button><p>${escapeHtml3(hit.notes)} \xB7 ${escapeHtml3(hit.source)}${hit.hours ? ` \xB7 ${hit.hours} hr` : ""}</p></li>`).join("")}</ul>` : '<p class="form-help">No MechPro guide match. Mitchell, ALLDATA, Motor, and ShopKey are not connected.</p>';
+        box.querySelectorAll("[data-add-labor]").forEach((button) => {
+          button.addEventListener("click", () => {
+            if (form) current = readForm(current, form);
+            current.estimate.lines.push({ type: "labor", description: button.dataset.addLabor, quantity: Number(button.dataset.hours) || 1, source: "MechPro guide" });
+            persist("labor");
+            paint();
+          });
+        });
+      });
+      host.querySelector("#intake-analyze")?.addEventListener("click", async () => {
+        if (form) current = readForm(current, form);
+        current.diagnosis.analysis = await analyze?.(current) || localDiagnosticChecklist(current);
+        persist("analysis");
+        paint();
+      });
+    }
+    paint();
+    return {
+      current: () => current
+    };
+  }
+  var INTAKE_STORAGE_KEY, INTAKE_DISCLAIMER, INTAKE_STEPS, REQUIRED_PHOTO_SLOTS, EXTRA_PHOTO_SLOTS, DAMAGE_AREAS, MECHPRO_LABOR;
+  var init_intake_wizard = __esm({
+    "src/modules/intake-wizard.js"() {
+      init_estimate_templates();
+      init_canned_services();
+      init_technician_assignment();
+      INTAKE_STORAGE_KEY = "mechpro-intake-draft-v1";
+      INTAKE_DISCLAIMER = "PRELIMINARY ESTIMATE DISCLAIMER\n\nThis estimate is based on the information available at the time of inspection. Additional issues may be identified during diagnosis, testing, disassembly, or repair. Parts pricing, labor times, and availability may change. Authorization will be obtained before performing additional work. Final invoice amounts may differ from this estimate.";
+      INTAKE_STEPS = [
+        { id: "customer", label: "Customer" },
+        { id: "vehicle", label: "Vehicle" },
+        { id: "photos", label: "Photos" },
+        { id: "concerns", label: "Concerns" },
+        { id: "diagnosis", label: "Diagnosis" },
+        { id: "estimate", label: "Estimate" },
+        { id: "review", label: "Review" }
+      ];
+      REQUIRED_PHOTO_SLOTS = [
+        { id: "front", label: "Front" },
+        { id: "rear", label: "Rear" },
+        { id: "driver", label: "Driver side" },
+        { id: "passenger", label: "Passenger side" }
+      ];
+      EXTRA_PHOTO_SLOTS = [
+        { id: "odometer", label: "Odometer" },
+        { id: "vin_sticker", label: "VIN sticker" },
+        { id: "engine", label: "Engine bay" },
+        { id: "tires", label: "Tire condition" },
+        { id: "damage", label: "Damage" },
+        { id: "concern", label: "Customer concern area" },
+        { id: "extra", label: "Additional photo" }
+      ];
+      DAMAGE_AREAS = ["Front bumper", "Rear bumper", "Driver door", "Passenger door", "Hood", "Fenders", "Roof"];
+      MECHPRO_LABOR = [
+        { name: "Brake pads", hours: 1.5, notes: "One axle. Rotors and seized hardware are quoted separately." },
+        { name: "Water pump", hours: 2.5, notes: "Starting point. Confirm the labor time for this VIN before selling the job." },
+        { name: "Alternator", hours: 1.2, notes: "Replacement only. Programming or a stretch belt may add time." },
+        { name: "Starter", hours: 1.2, notes: "Starting point. Confirm access for this vehicle." }
+      ];
+    }
+  });
+
+  // src/modules/work-order-editor.js
+  function customersWithSelected(customers2 = [], selected = "") {
+    const records = Array.isArray(customers2) ? customers2 : [];
+    const selectedName = String(selected || "");
+    if (!selectedName || records.some((customer) => customer?.name === selectedName)) return records;
+    return [{ name: selectedName }, ...records];
+  }
+  function customLaborDraft(id, laborRate) {
+    return {
+      id,
+      type: "labor",
+      description: "",
+      descriptionPlaceholder: "Custom labor",
+      hours: 1,
+      laborRate: Number(laborRate) || 0
+    };
+  }
+  function estimateEditorDescription(line = {}, normalizedDescription = "") {
+    const placeholder = String(line.descriptionPlaceholder || "");
+    return {
+      value: placeholder ? String(line.description || "") : String(normalizedDescription || ""),
+      placeholder
+    };
+  }
+  function normalizedFeeText(value2) {
+    return String(value2 || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function isAfterMidnightFeeLine(line = {}) {
+    if (line.code === "after-midnight") return true;
+    const text = normalizedFeeText(`${line.description || line.service || ""} ${line.notes || line.explanation || ""}`);
+    const hasTime = /\bmidnight\b|\bovernight\b|\blate night\b|\bafter 12(?: 00)? a?m\b/.test(text);
+    const hasCharge = /\bfee\b|\bsurcharge\b|\bdifferen(?:tial|tail)\b|\bdifferentail\b/.test(text);
+    return line.type !== "part" && hasTime && hasCharge;
+  }
+  function isLegacyAfterMidnightLine(line = {}) {
+    return line.code !== "after-midnight" && line.type !== "fee" && isAfterMidnightFeeLine(line);
+  }
+  function afterMidnightFeeFingerprint(lines = []) {
+    return JSON.stringify((Array.isArray(lines) ? lines : []).filter(isAfterMidnightFeeLine).map((line) => ({
+      id: String(line.id || ""),
+      description: String(line.description || ""),
+      unitPrice: Number(line.unitPrice ?? line.amount) || 0
+    })).sort((left, right) => left.id.localeCompare(right.id)));
+  }
+  function terminalOrderChangesAfterMidnightFee(status, beforeLines = [], afterLines = []) {
+    if (!["completed", "invoiced"].includes(String(status || ""))) return false;
+    return afterMidnightFeeFingerprint(beforeLines) !== afterMidnightFeeFingerprint(afterLines);
+  }
+  function invoicePrintLineItems(invoice = {}) {
+    const lineItems = (Array.isArray(invoice.lines) ? invoice.lines : []).map((line) => {
+      const type = ["part", "fee"].includes(line?.type) ? line.type : "labor";
+      const amount = Math.max(0, Number(line?.total) || 0);
+      return {
+        type,
+        description: String(line?.description || line?.service || (type === "fee" ? "Fee" : type === "part" ? "Part" : "Labor")),
+        detail: type === "fee" ? "Flat fee" : type === "part" ? `${Math.max(0, Number(line?.quantity) || 0)} \xD7 ${Math.max(0, Number(line?.unitPrice) || 0).toFixed(2)}` : `${Math.max(0, Number(line?.hours) || 0).toFixed(2)} hr \xD7 ${Math.max(0, Number(line?.laborRate) || 0).toFixed(2)}`,
+        amount
+      };
+    });
+    const feeItems = (Array.isArray(invoice.fees) ? invoice.fees : []).map((fee) => ({
+      type: "fee",
+      description: String(fee?.description || "Fee"),
+      detail: "Fee",
+      amount: Math.max(0, Number(fee?.amount) || 0)
+    }));
+    return [...lineItems, ...feeItems];
+  }
+  var init_work_order_editor = __esm({
+    "src/modules/work-order-editor.js"() {
     }
   });
 
@@ -4337,7 +5791,36 @@ button{margin-top:12px;padding:8px 14px}
   }
   function payments() {
     const config = state.billingSettings;
-    return shell(`${heading("Online payments", "Payment service", "Enable shops to accept customer credit and debit card payments through a connected processing account.", false)}<section class="messaging-panel"><div class="messaging-status ${config.enabled ? "ready" : "idle"}">${icon(config.enabled ? "circle-check" : "credit-card", 17)}<div><strong>${config.enabled ? "Online card payments active" : "Online card payments not connected"}</strong><span>${config.enabled ? `Connected account: ${config.accountLabel || "Stripe Connect"}` : "Connect the shop account through Stripe's hosted onboarding flow."}</span></div></div><div class="service-contract"><h2>Stripe Connect hosted onboarding</h2><p>The subscribing shop completes card-processing onboarding on a Stripe-hosted page. The platform endpoint keeps Stripe secret keys server-side, creates checkout sessions, and returns a hosted payment URL. MechPro never handles raw card data.</p><code>POST /checkout-sessions<br>{ invoiceId, amount, customer, description, successUrl, cancelUrl }<br>Response: { url: "https://checkout.stripe.com/..." }</code></div><form class="form-grid" id="billing-form"><label class="full">Stripe Connect onboarding URL *<input name="onboardingUrl" type="url" value="${config.onboardingUrl}" placeholder="https://connect.stripe.com/setup/..."/></label><label class="full">Secure checkout-session endpoint *<input name="checkoutEndpoint" type="url" value="${config.checkoutEndpoint}" placeholder="https://billing.yourshop.com/checkout-sessions"/></label><label>Connected account label<input name="accountLabel" value="${config.accountLabel}" placeholder="e.g. acct_... or Main Shop Stripe"/></label><label>Shop name<input name="shopName" value="${config.shopName || "Your Car Guy"}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled ? "checked" : ""}/><span>Use this service to create hosted debit and credit card checkout links</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="open-stripe-onboarding">${icon("external-link", 14)} Connect Stripe account</button><button class="primary" type="submit">${icon("save", 14)} Save payment service</button></div></form></section>`);
+    const status = stripePaymentStatus;
+    const configured = Boolean(status?.configured || config.enabled);
+    const shopId = status?.shopId || sessionClaimShopId(authSession()?.claims) || "";
+    const webhookUrl = status?.webhookUrl || (shopId ? `${location.origin}${cloudflareConfig2.apiUrl}/payments/webhook/${encodeURIComponent(shopId)}` : "");
+    const statusLabel3 = configured ? `Connected${config.accountLabel ? ` \xB7 ${escapeHtml(config.accountLabel)}` : ""}` : "Stripe keys not saved yet";
+    return shell(`${heading("Online payments", "Payment service", "Connect this shop's Stripe account so customers can pay invoices online with a hosted Checkout link.", false)}<section class="messaging-panel"><div class="messaging-status ${configured ? "ready" : "idle"}">${icon(configured ? "circle-check" : "credit-card", 17)}<div><strong>${configured ? "Online card payments ready" : "Online card payments not connected"}</strong><span>${statusLabel3}. Secrets stay encrypted on the Worker \u2014 the browser never stores them.</span></div></div><div class="service-contract"><h2>Stripe Checkout for invoices</h2><p>Paste your Stripe secret key and webhook signing secret. MechPro creates Checkout Sessions through <code>POST /payments/checkout-session</code> and records payments when Stripe posts <code>checkout.session.completed</code> to your shop webhook.</p><label class="full">Webhook endpoint (Stripe Dashboard \u2192 Developers \u2192 Webhooks)<input id="stripe-webhook-url" readonly value="${escapeAttr(webhookUrl)}" placeholder="Sign in to load the shop webhook URL"/><div class="messaging-actions"><button class="secondary" type="button" id="copy-stripe-webhook" ${webhookUrl ? "" : "disabled"}>${icon("copy", 14)} Copy webhook URL</button></div></label><p class="ai-disclaimer">Subscribe the webhook to event <b>checkout.session.completed</b> only. Use test keys (<code>sk_test_</code>) until you are ready for live cards.</p></div><form class="form-grid" id="billing-form"><label class="full">Stripe secret key *<input name="secretKey" type="password" autocomplete="off" placeholder="sk_test_\u2026 or sk_live_\u2026" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved key. Enter a new key only to replace it." : "Required. Starts with sk_test_ or sk_live_."}</small></label><label class="full">Webhook signing secret *<input name="webhookSecret" type="password" autocomplete="off" placeholder="whsec_\u2026" ${configured ? "" : "required"}/><small>${configured ? "Leave blank to keep the saved signing secret." : "From the Stripe webhook endpoint details."}</small></label><label class="full">Stripe publishable key<input name="publishableKey" autocomplete="off" placeholder="pk_test_\u2026 or pk_live_\u2026"/><small>${status?.hasPublishableKey ? "Saved. Enter a new key only to replace it. Required for phone orders." : "Starts with pk_test_ or pk_live_. Required before the office can type a card for a phone order."}</small></label><label>Account label<input name="accountLabel" value="${escapeAttr(config.accountLabel || "")}" placeholder="e.g. Main shop Stripe"/></label><label>Shop name on receipts<input name="shopName" value="${escapeAttr(config.shopName || "Your Car Guy")}"/></label><label class="toggle-field full"><input type="checkbox" name="enabled" ${config.enabled || configured ? "checked" : ""}/><span>Enable Pay online on open invoices</span></label><div class="full messaging-actions"><button class="secondary" type="button" id="refresh-stripe-status">${icon("refresh-cw", 14)} Refresh status</button><button class="primary" type="submit">${icon("save", 14)} Save Stripe keys</button></div></form></section>`);
+  }
+  function cardTerminal() {
+    const model = cardTerminalModel({
+      orders: state.orders || [],
+      invoices: state.invoices || [],
+      payments: state.payments || [],
+      selectedId: posSelectedId,
+      readers: posReaders || [],
+      configured: posConfigured,
+      paymentSummary
+    });
+    const selected = model.selected;
+    if (selected) posSelectedId = selected.targetId;
+    const options = model.choices.map((choice) => `<option value="${escapeAttr(choice.targetId)}" ${selected?.targetId === choice.targetId ? "selected" : ""}>${escapeHtml(choice.label)} \xB7 due ${money4(choice.balance)}</option>`).join("");
+    const readerOptions = model.readers.map((reader) => `<option value="${escapeAttr(reader.id)}">${escapeHtml(reader.label)} \xB7 ${escapeHtml(reader.status)}</option>`).join("");
+    const writeup = selected ? recoveryWriteup({ customer: selected.customer, vehicle: selected.vehicle }) : recoveryWriteup({});
+    const chargeNote = posCharge ? `<p class="pos-status" data-phase="${escapeAttr(posCharge.phase || "")}">${escapeHtml(posCharge.message || "")}</p>` : "";
+    const connection = posReaders === null ? "Checking the shop Stripe account\u2026" : model.configured ? model.readers.length ? `${model.readers.length} reader${model.readers.length === 1 ? "" : "s"} online in this Stripe account.` : "Stripe is connected. No card reader is registered yet. Add one in the Stripe Dashboard under Terminal, then refresh." : "Stripe is not connected. An owner saves the shop keys on the Payments page before this counter can take a card.";
+    const identity = `<div class="full pos-identity"><span>Customer</span><strong>${escapeHtml(selected?.customer || "Select a work order")}</strong><span>Vehicle</span><strong>${escapeHtml(selected?.vehicle || "Vehicle comes from the work order")}</strong></div>`;
+    const amountField = `<label>Amount<input name="amount" id="pos-amount" type="number" min="0.50" step="0.01" value="${selected && selected.balance >= 0.5 ? selected.balance.toFixed(2) : ""}" required/></label>`;
+    const orderField = `<label class="full">Work order<select name="orderId" id="pos-order" required>${options || `<option value="">No work orders</option>`}</select></label>`;
+    const phoneNotice = posPhoneEntry ? "Type the card number, expiration, security code, and postal code from the phone call. Stripe collects the card. MechPro stores the approval on the work order." : "Add the Stripe publishable key on the Payments page first. It starts with pk_test_ or pk_live_ and must belong to the same account as the secret key.";
+    const counter = posMode === "phone" ? `<form class="form-grid" id="pos-phone-form">${orderField}${identity}${amountField}<div class="full" id="pos-card-element"></div><p class="ai-disclaimer">${escapeHtml(phoneNotice)}</p><div class="full messaging-actions"><button class="primary" type="submit" id="pos-phone-prepare" ${!selected || selected.balance < 0.5 || !posPhoneEntry ? "disabled" : ""}>${icon("credit-card", 14)} Enter card</button><button class="primary" type="button" id="pos-phone-charge" hidden>${icon("check", 14)} Charge card</button></div><p class="pos-status" id="pos-phone-status" hidden></p></form>` : `<form class="form-grid" id="pos-form">${orderField}${identity}${amountField}<label>Reader<select name="readerId" id="pos-reader" required>${readerOptions || `<option value="">No reader</option>`}</select></label><div class="full messaging-actions"><button class="secondary" type="button" id="pos-refresh">${icon("refresh-cw", 14)} Refresh readers</button><button class="secondary" type="button" id="pos-cancel" ${posCharge ? "" : "disabled"}>${icon("x", 14)} Cancel on reader</button><button class="primary" type="submit" id="pos-charge" ${!selected || selected.balance < 0.5 || !model.readers.length ? "disabled" : ""}>${icon("credit-card", 14)} Charge card</button></div>${chargeNote}</form>`;
+    return shell(`${heading("Front counter", "Card terminal", "Take a card on the reader, or type a card for a purchase made over the phone.", false)}<section class="messaging-panel pos-terminal"><div class="messaging-status ${model.configured ? "ready" : "idle"}">${icon("credit-card", 17)}<div><strong>${posMode === "phone" ? "Phone order" : model.configured ? "Card reader ready" : "Card reader not connected"}</strong><span>${escapeHtml(posMode === "phone" ? phoneNotice : connection)}</span></div></div><div class="accounting-tabs"><button class="tab ${posMode === "reader" ? "active" : ""}" type="button" data-pos-mode="reader">Card reader</button><button class="tab ${posMode === "phone" ? "active" : ""}" type="button" data-pos-mode="phone">Phone order</button></div>${counter}<section class="pos-writeup"><h2>Technician write-up</h2><p>The recovery note uses the customer and vehicle on the selected work order.</p><pre id="pos-writeup">${escapeHtml(writeup.ready ? writeup.text : "Select a work order that has both a customer name and a vehicle. Those details are written into the note. They are not filled in from memory.")}</pre><button class="secondary" type="button" id="pos-save-writeup" ${writeup.ready ? "" : "disabled"}>${icon("save", 14)} Save on work order</button></section></section>`);
   }
   function messaging() {
     const config = state.messagingSettings;
@@ -4525,17 +6008,17 @@ button{margin-top:12px;padding:8px 14px}
     return `<li><span class="print-check">&#9633;</span><div><b>${escapeHtml(label2)}</b><p>${escapeHtml(text)}</p></div></li>`;
   }
   function workflowResult(result) {
-    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money3(line.parts)}</td><td><b>${money3(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
-    return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money3(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
+    const order = result.order || {}, causes = result.diagnostics.causes.map((cause) => `<article class="cause-card"><div class="cause-title"><h3>${escapeHtml(cause.cause)}</h3><span class="ai-tag ${cause.likelihood.toLowerCase()}">${cause.likelihood}</span></div><p>${escapeHtml(cause.explanation)}</p><small><b>Evidence that raises likelihood:</b> ${escapeHtml(cause.evidence)}</small><div class="cause-tools"><b>Tools:</b> ${cause.tools.map(escapeHtml).join(" \xB7 ")}</div>${cause.tests.map((test, index) => `<section class="test-procedure"><h4>Test ${index + 1}: ${escapeHtml(test.name)}</h4><ol>${test.procedure.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="expected-readings"><p><b>Pass / normal:</b> ${escapeHtml(test.good)}</p><p><b>Fail / supports cause:</b> ${escapeHtml(test.bad)}</p></div><div class="worksheet-reading">Actual reading / observation: ______________________________________________</div></section>`).join("")}<h4>Repair options after confirmation</h4><ul class="repair-options">${cause.repairs.map((option) => worksheetCheck("Option", option)).join("")}</ul></article>`).join(""), parts = result.estimate.lines.map((line) => `<tr><td>${escapeHtml(line.service)}</td><td>${line.hours.toFixed(2)}</td><td>${money4(line.parts)}</td><td><b>${money4(line.total)}</b></td></tr>`).join(""), steps = result.guide.steps.map((step, index) => worksheetCheck(`Step ${index + 1}`, stepText(step))).join(""), safety = result.guide.safety.map((item) => `<li>${escapeHtml(item)}</li>`).join(""), qc = result.guide.postRepair.map((item, index) => worksheetCheck(`QC ${index + 1}`, item)).join("");
+    return `<section class="ai-result"><div class="ai-result-head no-print"><div><div class="eyebrow">Generated technician workflow</div><h2>${escapeHtml(result.orderId)}</h2><p>Ranked causes, detailed tests, repair choices, and final quality control.</p></div><div class="ai-result-actions"><button class="secondary" type="button" onclick="window.print()">${icon("printer", 14)} Print technician packet</button><button class="primary" id="apply-ai-workflow">${icon("save", 14)} Apply to work order</button></div></div><div class="technician-worksheet" id="ai-technician-printable"><header class="worksheet-header"><div><div class="eyebrow">MechPro diagnostic & repair worksheet</div><h2>${escapeHtml(result.orderId)} \xB7 ${escapeHtml(order.vehicle || result.diagnostics.vehicle)}</h2></div><div class="worksheet-assignment"><span>Assigned technician</span><b>${escapeHtml(order.technician || "Unassigned")}</b></div></header><section class="worksheet-meta"><div><span>Customer</span><b>${escapeHtml(order.customer || "Not recorded")}</b></div><div><span>VIN</span><b class="mono">${escapeHtml(order.vin || "VIN pending")}</b></div><div><span>Bay / assignment</span><b>${escapeHtml(order.bay || "Unassigned")}</b></div><div><span>Promise</span><b>${escapeHtml(order.promise || "Not scheduled")}</b></div><div class="wide"><span>Customer complaint</span><b>${escapeHtml(order.complaint || result.diagnostics.symptoms)}</b></div></section><aside class="worksheet-warning"><b>Technician verification required.</b> Likelihood ranks prioritize testing; they are not a diagnosis or authorization to replace parts. Use current manufacturer information and record objective results.</aside><section class="worksheet-section"><div class="worksheet-section-head"><div><span>01</span><h2>Ranked causes & diagnostic procedures</h2></div><div class="likelihood-key"><b class="high">High</b><b class="medium">Medium</b><b class="minor">Minor</b></div></div><div class="cause-list">${causes}</div></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>02</span><h2>Preliminary estimate</h2></div></div><table><thead><tr><th>Service</th><th>Labor hours</th><th>Parts</th><th>Line total</th></tr></thead><tbody>${parts}</tbody></table><div class="ai-total"><span>Preliminary estimated total</span><b>${money4(result.estimate.total)}</b></div><p class="worksheet-fineprint">Inspect and obtain customer authorization before additional work. Part fitment, labor operations, taxes, fluids, programming, sublet work, and hidden damage may change the final estimate.</p></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>03</span><h2>Detailed repair checklist</h2></div></div><h3>Safety and stop-work conditions</h3><ul class="safety-list">${safety}</ul><ul class="worksheet-checklist">${steps}</ul></section><section class="worksheet-section"><div class="worksheet-section-head"><div><span>04</span><h2>Post-repair verification</h2></div></div><ul class="worksheet-checklist two-column">${qc}</ul><div class="worksheet-notes"><b>Technician findings, actual readings, torque references, parts used, and additional recommendations</b><div></div><div></div><div></div><div></div></div><footer class="worksheet-signoff"><label>Technician signature <span></span></label><label>Date / time <span></span></label><label>QC signature <span></span></label></footer></section></div></section>`;
   }
   function diagnosticsResult(result) {
     return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Diagnostic report</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.urgency)} priority \xB7 ${result.hours.toFixed(2)} labor hours estimated</p></div></div><div class="ai-result-grid"><section><h3>Probable causes</h3><ul class="ai-causes">${result.causes.map((c) => `<li><b>${escapeHtml(c.cause)}</b><span class="ai-tag ${escapeAttr(c.likelihood.toLowerCase())}">${escapeHtml(c.likelihood)}</span><small>${escapeHtml(c.explanation)}</small></li>`).join("")}</ul></section><section><h3>Recommended tests</h3><ul class="ai-checklist">${result.tests.map((test) => `<li>${icon("check-circle-2", 13)}${escapeHtml(test)}</li>`).join("")}</ul><p class="ai-disclaimer">${escapeHtml(result.notes)}</p></section></div></section>`;
   }
   function estimateResult(result) {
-    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.summary)}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money3(line.labor)}</td><td>${money3(line.parts)}</td><td><b>${money3(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money3(result.subtotal)}</span><span>Tax ${money3(result.tax)}</span><b>Total ${money3(result.total)}</b></div></section>`;
+    return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Preliminary estimate</div><h2>${escapeHtml(result.vehicle)}</h2><p>${escapeHtml(result.summary)}</p></div><button class="primary" id="save-ai-estimate">${icon("save", 14)} Create estimate</button></div><table><thead><tr><th>Service</th><th>Labor</th><th>Parts</th><th>Total</th></tr></thead><tbody>${result.lines.map((line) => `<tr><td>${escapeHtml(line.service)}<small>${escapeHtml(line.notes)}</small></td><td>${line.hours.toFixed(2)}h \xB7 ${money4(line.labor)}</td><td>${money4(line.parts)}</td><td><b>${money4(line.total)}</b></td></tr>`).join("")}</tbody></table><div class="ai-estimate-totals"><span>Subtotal ${money4(result.subtotal)}</span><span>Tax ${money4(result.tax)}</span><b>Total ${money4(result.total)}</b></div></section>`;
   }
   function savedEstimates() {
-    const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td>${estimate.status === "approved" ? `<span class="badge paid">Approved</span>` : `<span class="badge estimate">Pending</span>`}</td><td><b>${money3(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
+    const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td>${estimate.status === "approved" ? `<span class="badge paid">Approved</span>` : `<span class="badge estimate">Pending</span>`}</td><td><b>${money4(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
     return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Send itemized estimates through the device email or messaging apps and record authorization.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Delivery & approval</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates. Generate one from the Estimator tab.</td></tr>`}</tbody></table></div></section>`;
   }
   function makeEstimate() {
@@ -4550,8 +6033,8 @@ button{margin-top:12px;padding:8px 14px}
     render();
   }
   function estimateMessage(estimate) {
-    const lines = estimate.lines.map((line) => `${line.service}: ${money3(line.total)}`).join("; ");
-    return `Your Car Guy estimate ${estimate.number} for ${estimate.vehicle}. ${lines}. Total ${money3(estimate.total)}. Please contact us to approve or sign in person.`;
+    const lines = estimate.lines.map((line) => `${line.service}: ${money4(line.total)}`).join("; ");
+    return `Your Car Guy estimate ${estimate.number} for ${estimate.vehicle}. ${lines}. Total ${money4(estimate.total)}. Please contact us to approve or sign in person.`;
   }
   async function deliverShopMessage({ channel, to, subject, body, metadata }) {
     const config = state.messagingSettings;
@@ -4592,7 +6075,7 @@ button{margin-top:12px;padding:8px 14px}
   function openSignature(id) {
     const estimate = state.estimates.find((item) => item.id === id);
     if (!estimate) return;
-    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money3(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
+    showModal(`<form class="modal" id="signature-form"><div class="modal-head"><h2>Customer authorization</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${estimate.number} \xB7 ${escapeHtml(estimate.vehicle)}</span><strong>${money4(estimate.total)}</strong></div><label>Authorized customer name *<input name="authorizationName" required value="${escapeAttr(estimate.customer === "Walk-in customer" ? "" : estimate.customer)}"/></label><label class="signature-label">Draw signature *<canvas id="signature-pad" width="560" height="180"></canvas></label><p class="ai-disclaimer">By signing, the customer authorizes the listed estimate. This record is stored on this device.</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary">${icon("check", 14)} Approve estimate</button></div></form>`);
     initSignaturePad(estimate);
   }
   function canvasToBlob(canvas) {
@@ -5115,7 +6598,7 @@ button{margin-top:12px;padding:8px 14px}
   function icon(name, size = 18) {
     return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
   }
-  function money3(value2) {
+  function money4(value2) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value2);
   }
   function initials(name) {
@@ -5135,7 +6618,7 @@ button{margin-top:12px;padding:8px 14px}
   }
   function visibleOrders() {
     const user = currentUser();
-    return user?.role === "technician" ? state.orders.filter((order) => order.tech === user.techName) : state.orders;
+    return user?.role === "technician" ? state.orders.filter((order) => orderIncludesTechnician(order, user, state.users)) : state.orders;
   }
   function weekPeriod(date = /* @__PURE__ */ new Date()) {
     const day = date.getDay(), monday = new Date(date);
@@ -5153,24 +6636,19 @@ button{margin-top:12px;padding:8px 14px}
     tomorrow.setDate(tomorrow.getDate() + 1);
     return `Tomorrow, ${tomorrow.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
   }
-  function employeeByTech(name) {
-    return state.users.find((user) => user.techName === name && user.active);
-  }
   function syncPayroll(order) {
-    if (!["completed", "invoiced"].includes(order.status) || !order.tech || order.tech === "Unassigned") return;
-    const employee = employeeByTech(order.tech);
-    if (!employee) return;
-    const hours = Number(order.laborHours ?? Number(order.labor || 0) / 165);
-    if (!hours) return;
-    const period = weekPeriod(), entry = state.payrollEntries.find((item) => item.workOrderId === order.id);
-    const line = { id: order.id, workOrderId: order.id, employeeId: employee.id, periodKey: period.key, roNumber: order.id, customer: order.customer, vehicle: order.vehicle, hours, rate: Number(employee.payRate || 0), amount: hours * Number(employee.payRate || 0), completedAt: now() };
-    if (entry) {
-      Object.assign(entry, line);
-      updatePayrollEntryInApi(entry);
-    } else {
-      state.payrollEntries.push(line);
-      pushPayrollEntryToApi(line);
-    }
+    const period = weekPeriod();
+    const lines = payrollLinesForOrder({ order, users: state.users, clocks: state.jobClockEntries, periodKey: period.key, nowIso: now() });
+    lines.forEach((line) => {
+      const entry = state.payrollEntries.find((item) => item.id === line.id || item.workOrderId === line.workOrderId && item.employeeId === line.employeeId && item.periodKey === line.periodKey);
+      if (entry) {
+        Object.assign(entry, line);
+        updatePayrollEntryInApi(entry);
+      } else {
+        state.payrollEntries.push(line);
+        pushPayrollEntryToApi(line);
+      }
+    });
   }
   function syncAllPayroll() {
     state.orders.forEach(syncPayroll);
@@ -5216,8 +6694,8 @@ button{margin-top:12px;padding:8px 14px}
   }
   function startJobClock(workOrderId) {
     const order = state.orders.find((item) => item.id === workOrderId), user = currentUser();
-    if (!order || user.role !== "technician" || order.tech !== user.techName) {
-      toast("Only the assigned technician can clock this job");
+    if (!order || user.role !== "technician" || !orderIncludesTechnician(order, user, state.users)) {
+      toast("Only an assigned technician can clock this job");
       return;
     }
     if (openJobClock(workOrderId, user.id)) {
@@ -5236,7 +6714,10 @@ button{margin-top:12px;padding:8px 14px}
     if (!order || !entry) return;
     entry.clockOut = now();
     entry.hours = hoursBetween(entry.clockIn, entry.clockOut);
-    order.laborHours = Math.round(jobTrackedHours(workOrderId) * 100) / 100;
+    const tracked = attributeClockHours(order, currentUser()?.id, state.jobClockEntries, state.users);
+    order.assignments = tracked.assignments;
+    order.tech = tracked.tech;
+    order.laborHours = tracked.laborHours;
     updateJobClockEntryInApi(entry);
     void updateOrderInApi(order).catch((error) => toast(error.message || "Work order could not be saved"));
     save();
@@ -5270,7 +6751,7 @@ button{margin-top:12px;padding:8px 14px}
     const model = buildHomeModel2({ orders: visibleOrders(), invoices: canAccess("invoices") ? state.invoices : [], appointments: state.appointments || [], now: /* @__PURE__ */ new Date() });
     const count = model.attention.length;
     const rows = model.attention.slice(0, 6).map((item) => {
-      const detail = item.type === "overdue" ? `${String(item.detail || "").split(" \xB7 ")[0]} \xB7 ${money3(item.amount || 0)}` : item.detail;
+      const detail = item.type === "overdue" ? `${String(item.detail || "").split(" \xB7 ")[0]} \xB7 ${money4(item.amount || 0)}` : item.detail;
       return `<button type="button" class="attention-item" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail || "")}</small></button>`;
     }).join("");
     return `<div class="attention-menu"><button class="icon-button" id="attention-toggle" type="button" aria-label="Needs attention${count ? `, ${count} items` : ""}" aria-expanded="false" aria-controls="attention-panel" title="Needs attention">${icon("bell")}${count ? `<span class="attention-badge">${count}</span>` : ""}</button><div class="attention-panel" id="attention-panel" hidden role="dialog" aria-label="Needs attention"><div class="attention-panel-head"><strong>Needs attention</strong><span>${count ? `${count} open` : "All clear"}</span></div>${rows || `<p class="attention-empty">Nothing is waiting. Home shows the full shop snapshot.</p>`}<button class="mini-action attention-home" type="button" data-route="home">Open home</button></div></div>`;
@@ -5312,7 +6793,7 @@ button{margin-top:12px;padding:8px 14px}
     return visibleOrders().filter((x) => (filter === "all" || (filter === "active" ? !["completed", "invoiced"].includes(x.status) : ["completed", "invoiced"].includes(x.status))) && (!q || [x.id, x.customer, x.vehicle, x.vin, x.complaint, x.tech].some((v) => String(v).toLowerCase().includes(q))));
   }
   function stats() {
-    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money3(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money3(overdueTotal)} outstanding` : "None overdue", "warn"]];
+    const tech = currentUser()?.role === "technician", orders2 = visibleOrders(), openCount = orders2.filter((x) => !["completed", "invoiced"].includes(x.status)).length, inProgress = orders2.filter((x) => x.status === "in_progress").length, waiting = orders2.filter((x) => x.status === "waiting_parts").length, paid = state.invoices.filter((x) => x.status === "paid").reduce((s, x) => s + x.amount, 0), overdue = state.invoices.filter((x) => x.status === "overdue"), overdueTotal = overdue.reduce((s, x) => s + Number(x.amount || 0), 0), baysInUse = new Set(orders2.filter((x) => x.status === "in_progress" && x.bay && x.bay !== "Unassigned" && x.bay !== "Mobile").map((x) => x.bay)).size, cells = tech ? [["clipboard-check", "My open orders", openCount, "Assigned to you", "good"], ["circle-play", "In progress", inProgress, "Active repairs", ""], ["triangle-alert", "Waiting on parts", waiting, "Parts follow-up needed", "warn"]] : [["clipboard-check", "Open work orders", openCount, `${openCount} active in shop`, "good"], ["circle-play", "In progress", inProgress, `${baysInUse} bay${baysInUse === 1 ? "" : "s"} in use`, ""], ["triangle-alert", "Waiting on parts", waiting, waiting ? `${waiting} need parts follow-up` : "No parts holds", "warn"], ["badge-dollar-sign", "Collected (paid invoices)", money4(paid), "From paid invoice register", "good"], ["clock-alert", "Overdue invoices", overdue.length, overdue.length ? `${money4(overdueTotal)} outstanding` : "None overdue", "warn"]];
     return `<div class="stats ${tech ? "tech-stats" : ""}">${cells.map((x) => `<div class="stat"><div class="stat-top"><span>${x[1]}</span>${icon(x[0])}</div><div class="stat-value">${x[2]}</div><div class="stat-note ${x[4]}">${x[3]}</div></div>`).join("")}</div>`;
   }
   function toolbar() {
@@ -5329,7 +6810,7 @@ button{margin-top:12px;padding:8px 14px}
     return shell(`${heading(shopDayLabel(), "Dispatch board", "Live shop workload, technician assignments, and promise times.")}${stats()}${toolbar()}<div class="board">${lanes}</div>`);
   }
   function orders() {
-    const rows = filtered().map((x) => `<tr data-order="${x.id}"><td class="mono strong">${x.id}</td><td><b>${escapeHtml(x.customer)}</b><small>${escapeHtml(x.phone)}</small></td><td><b>${escapeHtml(x.vehicle)}</b><small class="mono">${escapeHtml(x.vin)}</small></td><td>${badge(x.status)}</td><td>${escapeHtml(x.tech)}<small>${escapeHtml(x.bay)}</small></td><td>${escapeHtml(x.promise)}</td><td><b>${money3(x.total)}</b></td></tr>`).join("");
+    const rows = filtered().map((x) => `<tr data-order="${x.id}"><td class="mono strong">${x.id}</td><td><b>${escapeHtml(x.customer)}</b><small>${escapeHtml(x.phone)}</small></td><td><b>${escapeHtml(x.vehicle)}</b><small class="mono">${escapeHtml(x.vin)}</small></td><td>${badge(x.status)}</td><td>${escapeHtml(x.tech)}<small>${escapeHtml(x.bay)}</small></td><td>${escapeHtml(x.promise)}</td><td><b>${money4(x.total)}</b></td></tr>`).join("");
     return shell(`${heading("Operations", "Work orders", "Every estimate, repair, and completed job in one searchable queue.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
   }
   function schedule() {
@@ -5338,14 +6819,14 @@ button{margin-top:12px;padding:8px 14px}
   function customers() {
     const q = query.toLowerCase(), cards = state.customers.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const visitCount = state.orders.filter((o) => o.customer === x.name).length;
-      return `<article class="customer-card" data-open-customer="${encodeURIComponent(x.name)}"><div class="customer-top"><div class="avatar">${initials(x.name)}</div><div><h3>${escapeHtml(x.name)}</h3><p>${escapeHtml(x.phone)} \xB7 ${escapeHtml(x.email)}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${x.vehicles}</b></div><div><span>Lifetime spend</span><b>${money3(x.spend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(x.visits) || 0, visitCount)}</b></div><div><span>Linked ROs</span><b>${visitCount || "None"}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(x.name)}" data-message-phone="${encodeURIComponent(x.phone || "")}" data-message-email="${encodeURIComponent(x.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-open-customer="${encodeURIComponent(x.name)}">${icon("user", 14)} Details</button></div></article>`;
+      return `<article class="customer-card" data-open-customer="${encodeURIComponent(x.name)}"><div class="customer-top"><div class="avatar">${initials(x.name)}</div><div><h3>${escapeHtml(x.name)}</h3><p>${escapeHtml(x.phone)} \xB7 ${escapeHtml(x.email)}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${x.vehicles}</b></div><div><span>Lifetime spend</span><b>${money4(x.spend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(x.visits) || 0, visitCount)}</b></div><div><span>Linked ROs</span><b>${visitCount || "None"}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(x.name)}" data-message-phone="${encodeURIComponent(x.phone || "")}" data-message-email="${encodeURIComponent(x.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-open-customer="${encodeURIComponent(x.name)}">${icon("user", 14)} Details</button></div></article>`;
     }).join("");
     return shell(`${heading("Relationships", "Customers", "Customer contact details, vehicles, and service value at a glance.")}<div class="customer-grid">${cards}</div>`);
   }
   function customerOptions(selected = "") {
     return customersWithSelected(state.customers, selected).map((customer) => `<option ${customer.name === selected ? "selected" : ""}>${escapeHtml(customer.name)}</option>`).join("");
   }
-  function vehicleLabel2(vehicle) {
+  function vehicleLabel3(vehicle) {
     return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
   }
   function getRelationshipDerived() {
@@ -5365,7 +6846,7 @@ button{margin-top:12px;padding:8px 14px}
       }
     }
     for (const vehicle of state.vehicles) {
-      const label2 = vehicleLabel2(vehicle);
+      const label2 = vehicleLabel3(vehicle);
       if (vehicle.id) vehicleByLookup.set(vehicle.id, vehicle);
       if (label2) vehicleByLookup.set(label2, vehicle);
       if (vehicle.customer && vehicle.plate) vehicleByLookup.set(`${vehicle.customer}#${vehicle.plate}`, vehicle);
@@ -5375,18 +6856,18 @@ button{margin-top:12px;padding:8px 14px}
     return relationshipDerivedCache;
   }
   function linkedOrders(vehicle) {
-    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel2(vehicle)) || [];
+    const { ordersByVin, ordersByVehicleLabel } = getRelationshipDerived(), byVin = vehicle.vin ? ordersByVin.get(vehicle.vin) || [] : [], byLabel = ordersByVehicleLabel.get(vehicleLabel3(vehicle)) || [];
     return byVin.length && byLabel.length ? [.../* @__PURE__ */ new Set([...byVin, ...byLabel])] : byVin.length ? byVin : byLabel;
   }
   function operationsVehicles() {
     const rows = state.vehicles.map((vehicle) => {
       const history = linkedOrders(vehicle);
-      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel2(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
+      return `<tr data-edit-vehicle="${vehicle.id}" class="clickable-row"><td><b>${escapeHtml(vehicleLabel3(vehicle))}</b><small>${escapeHtml(vehicle.plate || "No plate")} \xB7 ${escapeHtml(vehicle.mileage || "Mileage pending")}</small></td><td>${escapeHtml(vehicle.customer)}</td><td class="mono">${escapeHtml(vehicle.vin || "VIN pending")}</td><td>${history.length}<small>${history.at(-1)?.id || "No service yet"}</small></td><td>${vehicle.nextServiceDate || "Not set"}</td></tr>`;
     }).join("");
     return `<div class="ops-actions"><button class="primary" id="add-vehicle">${icon("car-front", 14)} Add vehicle</button></div><div class="data-panel"><table><thead><tr><th>Vehicle</th><th>Owner</th><th>VIN</th><th>Service history</th><th>Next service</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No linked vehicles yet.</td></tr>`}</tbody></table></div>`;
   }
   function catalogInspectionApp() {
-    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel: vehicleLabel2, isLocalShell, save };
+    return { showModal, closeModal, toast, escapeHtml, icon, state, saveShopEntity, uploadFileToR2, now, shopProfile, printableBrand, currentUser, cloudflareConfig: cloudflareConfig2, render, vehicleLabel: vehicleLabel3, isLocalShell, save };
   }
   function openCatalogInspection(existing, catalogId) {
     presentCatalogInspection(catalogInspectionApp(), existing, catalogId);
@@ -5399,7 +6880,7 @@ button{margin-top:12px;padding:8px 14px}
     return `<div class="ops-actions"><span class="ops-note">Lubbock flat rates. Repairs, parts, and disassembly are quoted separately.</span><button class="secondary" id="manage-templates">${icon("list-plus", 14)} Templates</button><button class="secondary" id="add-inspection">${icon("clipboard-check", 14)} Custom checklist</button></div><div class="inspection-catalog">${inspectionMenuHtml(escapeHtml)}</div><div class="data-panel"><table><thead><tr><th>Inspection</th><th>Customer & vehicle</th><th>Work order</th><th>Results</th><th>Status</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No inspections yet. Start one from the menu above.</td></tr>`}</tbody></table></div>`;
   }
   function operationsInventory() {
-    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money3(Number(item.cost || 0))}</td><td>${money3(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
+    const rows = state.inventory.map((item) => `<tr class="${Number(item.quantity) <= Number(item.reorderLevel) ? "low-stock" : ""}"><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.sku)} \xB7 ${escapeHtml(item.kind)}</small></td><td>${Number(item.quantity || 0)} ${escapeHtml(item.unit || "ea")}<small>Reorder at ${Number(item.reorderLevel || 0)}</small></td><td>${money4(Number(item.cost || 0))}</td><td>${money4(Number(item.price || 0))}</td><td>${escapeHtml(item.vendor || "Unassigned")}</td><td><button class="mini-action" data-receive-stock="${item.id}">${icon("package-plus", 13)} Receive</button><button class="mini-action" data-order-autozone="${escapeHtml(item.id)}">${icon("shopping-cart", 13)} AutoZone</button></td></tr>`).join("");
     return `<div class="ops-actions"><span class="ops-note">${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length} low-stock item(s)</span><button class="secondary" id="add-vendor">${icon("truck", 14)} Vendor</button><button class="primary" id="add-inventory">${icon("package-plus", 14)} Add item</button></div><div class="data-panel"><table><thead><tr><th>Item</th><th>On hand</th><th>Cost</th><th>Price</th><th>Vendor</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6">No parts, tires, services, or assets in inventory.</td></tr>`}</tbody></table></div>`;
   }
   function visibleCannedServices() {
@@ -5412,7 +6893,7 @@ button{margin-top:12px;padding:8px 14px}
     const groups = cannedServiceGroups(visibleCannedServices()), tables = groups.map((group) => {
       const rows = group.items.map((item) => {
         const price = Number(item.menuPrice ?? item.partsPrice ?? 0), discount = Number(item.discount || 0);
-        return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money3(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>`;
+        return `<tr><td><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description || "")}</small>${item.marginNote ? `<small>${escapeHtml(item.marginNote)}</small>` : ""}</td><td>${money4(price)}${discount ? `<small>${discount}% off</small>` : ""}</td><td><button type="button" class="mini-action" data-edit-service="${escapeAttr(item.id)}">${icon("pencil", 13)} Edit</button></td></tr>`;
       }).join("");
       return `<h3>${escapeHtml(group.label)}</h3><div class="data-panel"><table><thead><tr><th>Service</th><th>Menu price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
     }).join("");
@@ -5638,7 +7119,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
     };
   }
   function openInspectionForm(existing = null) {
-    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel2(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
+    const vehicleOptions = state.vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" ${existing?.vehicleId === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.customer)} \xB7 ${escapeHtml(vehicleLabel3(vehicle))}</option>`).join(""), templateOptions = `<option value="default">Default ${inspectionPoints.length}-point checklist</option>${state.inspectionTemplates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} (${(tpl.items || []).length} points)</option>`).join("")}`, items = existing?.items || inspectionPoints.map((name) => ({ name, status: "not_checked", note: "" })), zones = ["Front", "Rear", "Driver side", "Passenger side", "Roof", "Glass"], damage = new Set(existing?.damageZones || []), existingPhotos = (existing?.photoKeys || []).map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Inspection photo" class="vehicle-thumb"/>`).join("");
     showModal(`<form class="modal wide" id="inspection-form"><div class="modal-head"><h2>${existing ? "Edit" : "New"} digital inspection</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Vehicle<select name="vehicleId" required>${vehicleOptions}</select></label><label>Work order<select name="workOrderId"><option value="">Unlinked</option>${state.orders.map((order) => `<option ${existing?.workOrderId === order.id ? "selected" : ""}>${order.id}</option>`).join("")}</select></label>${!existing ? `<label>Template<select name="templateId" id="template-picker">${templateOptions}</select></label>` : ""}</div><h3>Damage diagram</h3><div class="damage-zones">${zones.map((zone) => `<button type="button" class="damage-zone ${damage.has(zone) ? "marked" : ""}" data-damage-zone="${zone}">${icon(damage.has(zone) ? "alert-triangle" : "check", 13)} ${zone}</button>`).join("")}</div><h3 id="checklist-heading">${items.length}-point checklist</h3><div class="inspection-grid" id="inspection-checklist">${items.map((item, index) => `<article><b>${escapeHtml(item.name)}</b><select name="status-${index}"><option value="not_checked" ${item.status === "not_checked" ? "selected" : ""}>Not checked</option><option value="pass" ${item.status === "pass" ? "selected" : ""}>Pass</option><option value="attention" ${item.status === "attention" ? "selected" : ""}>Needs attention</option><option value="fail" ${item.status === "fail" ? "selected" : ""}>Fail</option></select><input name="note-${index}" value="${escapeHtml(item.note || "")}" placeholder="Reading or note"/></article>`).join("")}</div><label>Inspection photos<input name="photos" type="file" accept="image/*" multiple/></label>${existingPhotos ? `<div class="vehicle-photo-thumbs">${existingPhotos}</div>` : ""}<label>Recommendations<textarea name="recommendations">${escapeHtml(existing?.recommendations || "")}</textarea></label>${existing ? `<div class="inspection-report-actions"><button type="button" class="secondary" id="print-inspection">${icon("printer", 14)} Print report</button><button type="button" class="secondary" id="share-inspection">${icon("share-2", 14)} Share report</button><button type="button" class="secondary" id="approve-inspection">${icon("shield-check", 14)} Approval</button></div>${inspectionApprovalHistory(existing) ? `<h3>Approval history</h3>${inspectionApprovalHistory(existing)}` : ""}` : ""}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("save", 14)} Save inspection</button></div></form>`);
     document.querySelectorAll("[data-damage-zone]").forEach((button) => {
       button.onclick = () => {
@@ -5675,7 +7156,7 @@ ${inspection.recommendations ? `Recommendations: ${inspection.recommendations}
       try {
         const vehicle = state.vehicles.find((item) => item.id === form.elements.vehicleId.value), files = [...form.elements.photos.files], photoKeys = [];
         for (const file of files) photoKeys.push(await uploadFileToR2(file, "inspection", file.type || "image/jpeg"));
-        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel2(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
+        const checklist = [...form.querySelectorAll("#inspection-checklist article")].map((article, index) => ({ name: article.querySelector("b").textContent, status: form.elements[`status-${index}`].value, note: (form.elements[`note-${index}`]?.value || "").trim() })), record = { ...existing || {}, id: existing?.id || `inspection-${Date.now()}`, number: existing?.number || `INSP-${String(state.inspections.length + 1).padStart(4, "0")}`, vehicleId: vehicle.id, vehicle: vehicleLabel3(vehicle), customer: vehicle.customer, workOrderId: form.elements.workOrderId.value, items: checklist, damageZones: [...form.querySelectorAll(".damage-zone.marked")].map((button) => button.dataset.damageZone), photoKeys: [...existing?.photoKeys || [], ...photoKeys], recommendations: form.elements.recommendations.value.trim(), createdAt: existing?.createdAt || now(), updatedAt: existing ? now() : void 0 };
         await saveShopEntity("inspections", record);
         closeModal();
         toast("Digital inspection saved");
@@ -6052,7 +7533,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       if (panel) panel.innerHTML = "<p>Quoting\u2026</p>";
       try {
         const result = await apiFetch("/integrations/partstech/quote", { method: "POST", body: JSON.stringify(data) });
-        const rows = (result.items || []).map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money3(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
+        const rows = (result.items || []).map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.partNumber)}</td><td>${money4(item.unitPrice)}</td><td><button type="button" class="mini-action" data-add-pt-line="${escapeAttr(item.id)}">Add</button></td></tr>`).join("");
         if (panel) panel.innerHTML = `<table><thead><tr><th>Part</th><th>#</th><th>Price</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No quotes returned</td></tr>"}</tbody></table>`;
         window.__MECHPRO_PARTSTECH_LINES__ = Object.fromEntries((result.items || []).map((item) => [item.id, item]));
         document.querySelectorAll("[data-add-pt-line]").forEach((button) => {
@@ -6106,10 +7587,10 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
             return;
           }
           const sources = (result.sources || []).map((source) => `<li><a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.title || source.url)}</a></li>`).join("");
-          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money4(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
           if (panel) panel.innerHTML = `<div class="messaging-status idle"><div><strong>web estimate \u2014 not book time</strong><span>Average ${escapeHtml(String(result.averageHours))} hrs from ${escapeHtml(String(result.sourceCount || 0))} source(s). Not ALLDATA / MOTOR / ShopKey book time.</span></div></div><table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows}</tbody></table><ol class="ops-note">${sources}</ol>`;
         } else {
-          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money3(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
+          const rows = (result.lines || []).map((line) => `<tr><td>${escapeHtml(line.description)}</td><td>${line.hours}</td><td>${money4(line.total)}</td><td><button type="button" class="mini-action" data-add-labor-line="${escapeAttr(line.id)}">Add</button></td></tr>`).join("");
           if (panel) panel.innerHTML = `<table><thead><tr><th>Operation</th><th>Hours</th><th>Total</th><th></th></tr></thead><tbody>${rows || "<tr><td colspan=4>No operations returned</td></tr>"}</tbody></table>`;
         }
         window.__MECHPRO_LABOR_LINES__ = Object.fromEntries((result.lines || []).map((line) => [line.id, line]));
@@ -6280,7 +7761,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return;
     }
     const bd = invoiceTaxBreakdown(invoice);
-    showModal(`<form class="modal" id="tax-form"><div class="modal-head"><h2>Invoice tax</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>${money3(invoice.amount)}</strong></div><div class="form-grid"><label>Taxable subtotal *<input name="subtotal" type="number" step=".01" min="0" value="${bd.subtotal}" required/></label><label>Tax rate % *<input name="taxRate" type="number" step=".01" min="0" value="${bd.taxRate}" required/></label></div><div class="ledger-note">${icon("landmark", 15)} Tax is calculated on the taxable subtotal at the entered rate and posted to Sales Tax Payable when collected.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Save tax</button></div></form>`);
+    showModal(`<form class="modal" id="tax-form"><div class="modal-head"><h2>Invoice tax</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>${money4(invoice.amount)}</strong></div><div class="form-grid"><label>Taxable subtotal *<input name="subtotal" type="number" step=".01" min="0" value="${bd.subtotal}" required/></label><label>Tax rate % *<input name="taxRate" type="number" step=".01" min="0" value="${bd.taxRate}" required/></label></div><div class="ledger-note">${icon("landmark", 15)} Tax is calculated on the taxable subtotal at the entered rate and posted to Sales Tax Payable when collected.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Save tax</button></div></form>`);
     document.querySelector("#tax-form").onsubmit = (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target)), subtotal = Number(data.subtotal), taxRate = Number(data.taxRate);
@@ -6316,7 +7797,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   function invoices() {
     const q = query.toLowerCase(), rows = state.invoices.filter((x) => !q || Object.values(x).join(" ").toLowerCase().includes(q)).map((x) => {
       const paid = invoicePaid(x), balance = invoiceBalance(x), bd = invoiceTaxBreakdown(x);
-      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money3(x.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money3(paid)} \xB7 Balance ${money3(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${x.number}">${icon("message-square", 13)} Text to pay</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+      return `<tr><td class="mono"><b>${x.number}</b></td><td class="mono">${x.ro}</td><td><b>${x.customer}</b></td><td>${x.date}</td><td>${x.due}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(x.status)}</td><td><b>${money4(x.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money4(paid)} \xB7 Balance ${money4(balance)}</small><div class="invoice-payments">${balance > 0 ? `<button class="mini-action" data-record-payment="${x.number}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${x.number}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${x.number}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${x.number}">${icon("message-square", 13)} Text to pay</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${x.number}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
     }).join("");
     return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, and record cash or processor payments.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
@@ -6324,7 +7805,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     const invoice = state.invoices.find((item) => item.number === invoiceNumber);
     if (!invoice) return;
     const balance = invoiceBalance(invoice);
-    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>Balance ${money3(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`);
+    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record ${method === "cash" ? "cash" : "processor"} payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${invoice.number} \xB7 ${escapeHtml(invoice.customer)}</span><strong>Balance ${money4(balance)}</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${balance}" step=".01" value="${balance}" required/></label><label>Received date<input name="receivedAt" type="date" value="2026-08-14" required/></label><label class="full">Reference / receipt<input name="reference" placeholder="${method === "cash" ? "Cash drawer receipt or check number" : "Stripe payment ID or processor receipt"}"/></label><label class="full">Note<textarea name="note" placeholder="Optional payment note"></textarea></label></div><div class="ledger-note">${icon("landmark", 15)} This posts a payment receipt to Accounts Receivable and cash/processor clearing in accounting.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("check", 14)} Record payment</button></div></form>`);
     document.querySelector("#payment-form").onsubmit = (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target)), amount = Number(data.amount);
@@ -6343,20 +7824,46 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       updateInvoiceInApi(invoice);
       save();
       closeModal();
-      toast(`${money3(amount)} ${method} payment recorded for ${invoice.number}`);
+      toast(`${money4(amount)} ${method} payment recorded for ${invoice.number}`);
       render();
     };
   }
   async function startInvoiceCheckout(number, textToPay = false) {
-    const invoice = state.invoices.find((item) => item.number === number), config = state.billingSettings;
+    const invoice = state.invoices.find((item) => item.number === number);
     if (!invoice) return;
-    if (!config.enabled) {
-      toast("This shop has not connected online card payments yet");
-      return;
-    }
+    const ensureStripeReady = async () => {
+      if (state.billingSettings.enabled) return true;
+      try {
+        const status = await apiFetch("/payments/stripe/status");
+        stripePaymentStatus = status;
+        if (status?.configured) {
+          state.billingSettings = {
+            ...state.billingSettings,
+            enabled: true,
+            provider: "stripe",
+            shopId: status.shopId || state.billingSettings.shopId || "",
+            webhookUrl: status.webhookUrl || state.billingSettings.webhookUrl || ""
+          };
+          save();
+          return true;
+        }
+      } catch (error) {
+        console.error("Could not load Stripe payment status", error);
+      }
+      toast("Configure Stripe on the Payments page before creating a checkout link");
+      return false;
+    };
+    if (!await ensureStripeReady()) return;
     const checkoutWindow = textToPay ? null : window.open("", "_blank");
     try {
-      const data = await apiFetch("/payments/checkout-session", { method: "POST", body: JSON.stringify({ invoiceNumber: invoice.number, successUrl: `${location.origin}${location.pathname}#payment-success`, cancelUrl: `${location.origin}${location.pathname}#payment-cancel` }) });
+      const data = await apiFetch("/payments/checkout-session", {
+        method: "POST",
+        body: JSON.stringify({
+          invoiceNumber: invoice.number,
+          successUrl: `${location.origin}${location.pathname}#payment-success`,
+          cancelUrl: `${location.origin}${location.pathname}#payment-cancel`
+        })
+      });
       if (!data.url) throw new Error("Checkout service did not return a payment URL");
       invoice.checkoutUrl = data.url;
       invoice.checkoutCreatedAt = now();
@@ -6380,8 +7887,8 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     return shell(`${heading("Performance", "Reports", "A concise operational snapshot and state tax filing report based on current shop records.", false)}${stats()}<section class="messaging-panel"><div class="messaging-status ready">${icon("landmark", 17)}<div><strong>Tax filing report \u2014 ${stateName}</strong><span>Sales tax collected, formatted for ${stateName}'s ${t.filingFrequency.toLowerCase()} filing. Change the subscribing state in Shop settings.</span></div></div><form class="form-grid" id="tax-report-form"><label>From date *<input type="date" name="from" value="${result?.from || "2026-08-01"}" required/></label><label>To date *<input type="date" name="to" value="${result?.to || "2026-08-14"}" required/></label><div class="full messaging-actions"><button class="primary" type="submit">${icon("file-text", 14)} Generate report</button>${result ? `<button class="secondary" type="button" id="print-tax-report">${icon("printer", 14)} Print report</button>` : ""}</div></form>${result ? taxReportView(result, stateName, t) : ""}</section>`);
   }
   function taxReportView(result, stateName, settings2) {
-    const rows = result.rows.map((row) => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money3(row.gross)}</td><td>${money3(row.taxable)}</td><td><b>${money3(row.tax)}</b></td></tr>`).join("");
-    return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings2.taxId || "Not set"} \xB7 Filing frequency: ${settings2.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money3(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money3(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money3(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>`;
+    const rows = result.rows.map((row) => `<tr><td>${row.date}</td><td class="mono">${row.invoiceNumber}</td><td>${escapeHtml(row.customer)}</td><td>${money4(row.gross)}</td><td>${money4(row.taxable)}</td><td><b>${money4(row.tax)}</b></td></tr>`).join("");
+    return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${stateName} sales tax filing</div><h2>Period ${result.from} to ${result.to}</h2><small>Tax ID: ${settings2.taxId || "Not set"} \xB7 Filing frequency: ${settings2.filingFrequency}</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money4(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money4(result.totals.taxable)}</strong></article><article><span>Tax collected</span><strong>${money4(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross receipt</th><th>Taxable sales</th><th>Tax collected</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No payments were recorded in this period.</td></tr>`}</tbody></table></div></div>`;
   }
   function settings() {
     const t = state.taxSettings, stateOptions = usStates.map((s) => `<option value="${s.code}" ${t.state === s.code ? "selected" : ""}>${s.name}</option>`).join("");
@@ -6444,7 +7951,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
   }
   function superAdmin() {
     if (platformAccounts === null && !platformAccountsLoading) void loadPlatformAccounts();
-    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money3(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
+    const accounts = platformAccounts || [], users = accounts.reduce((sum, account) => sum + (account.users || []).length, 0), trials = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "trialing").length, paid = accounts.filter((account) => !account.suspended && String(account.subscriptionStatus || "") === "active").length, rows = accounts.map((account) => `<tr><td><b>${escapeHtml(account.shopName)}</b><small class="mono">${escapeHtml(account.shopId)}</small></td><td><b>${escapeHtml(account.ownerName)}</b><small>${escapeHtml(account.ownerEmail)}</small></td><td>${subscriptionBadge(account)}</td><td><span class="badge paid">${(account.users || []).length} login${(account.users || []).length === 1 ? "" : "s"}</span><small>${(account.users || []).map((user) => `${escapeHtml(user.email)} \xB7 ${escapeHtml(user.status || "Unknown")}`).join("<br>") || "No login found"}</small></td><td><b>${money4(account.creditBalance || 0)}</b><small>Account credit</small></td><td><div class="platform-row-actions"><button class="mini-action" data-credit-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("badge-dollar-sign", 13)} Credit</button><button class="mini-action" data-convert-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("sparkles", 13)} Convert to paid</button><button class="mini-action" data-trial-shop="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}">${icon("timer", 13)} Set free term</button><button class="mini-action" data-account-status="${escapeHtml(account.shopId)}" data-shop-name="${escapeHtml(account.shopName)}" data-suspended="${account.suspended ? "false" : "true"}">${icon(account.suspended ? "play" : "pause", 13)} ${account.suspended ? "Reactivate" : "Suspend"}</button></div></td></tr>`).join("");
     return platformShell(`${heading("Platform control", "Customer shops", "Create customer shops, grant free tester accounts for any duration, convert them to paid, and share desktop/mobile downloads.", false)}<div class="platform-actions"><div class="platform-kpis"><article><span>Customer shops</span><strong>${accounts.length}</strong></article><article><span>Free / trial</span><strong>${trials}</strong></article><article><span>Paid shops</span><strong>${paid}</strong></article><article><span>Managed logins</span><strong>${users}</strong></article></div><div class="platform-action-buttons"><button class="primary" id="new-customer-account">${icon("building-2", 15)} Create shop</button><a class="secondary" href="/downloads" target="_blank" rel="noopener">${icon("download", 15)} App downloads</a></div></div><div class="access-note platform-security">${icon("shield-check", 15)} Platform admins create shops and free tester terms here. Shop owners sign in with their work email. Desktop and phone installs are on the downloads page.</div><div class="data-panel platform-table"><table><thead><tr><th>Shop</th><th>Owner</th><th>Plan</th><th>Logins</th><th>Credit</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${platformAccountsLoading ? "Loading customer accounts..." : "No customer shops yet. Create one to invite an owner."}</td></tr>`}</tbody></table></div>`);
   }
   function openCustomerAccount() {
@@ -6486,7 +7993,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
         await platformApi(`/admin/accounts/${encodeURIComponent(shopId)}/credits`, { method: "POST", body: JSON.stringify({ amount: Number(data.amount), reason: data.reason }) });
         closeModal();
         platformAccounts = null;
-        toast(`${money3(Number(data.amount))} credit applied`);
+        toast(`${money4(Number(data.amount))} credit applied`);
         render();
       } catch (requestError) {
         error.textContent = requestError.message;
@@ -6568,7 +8075,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       return;
     }
     if (!canAccess(state.route)) state.route = roleRoutes[currentUser().role][0];
-    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, ai: aiWorkbench, messaging, payments, integrations, support, reports, settings };
+    const views = { superadmin: superAdmin, home: homeDashboard, dispatch, orders, schedule, customers, chat: teamChat, invoices, pos: cardTerminal, ai: aiWorkbench, messaging, payments, integrations, support, reports, settings };
     if (typeof accounting === "function") views.accounting = accounting;
     if (typeof payroll === "function") views.payroll = payroll;
     if (typeof imports === "function") views.imports = imports;
@@ -6592,6 +8099,7 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
     bindEstimateActions();
     bindMessagingService();
     bindPaymentService();
+    if (state.route === "payments") void loadStripePaymentStatus();
     bindTeamChat();
     if (typeof bindOemDiagnostics === "function") bindOemDiagnostics();
     root.querySelector('[data-route="chat"]')?.addEventListener("click", async () => {
@@ -6622,26 +8130,110 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       toast("Endpoint saved. Use your shop service test endpoint to verify SMTP and SMS credentials.");
     });
   }
+  async function loadStripePaymentStatus() {
+    if (!canAccess("payments")) return;
+    try {
+      stripePaymentStatus = await apiFetch("/payments/stripe/status");
+      if (stripePaymentStatus?.configured && !state.billingSettings.enabled) {
+        state.billingSettings = {
+          ...state.billingSettings,
+          enabled: true,
+          provider: "stripe",
+          shopId: stripePaymentStatus.shopId || state.billingSettings.shopId || "",
+          webhookUrl: stripePaymentStatus.webhookUrl || state.billingSettings.webhookUrl || ""
+        };
+        save();
+      }
+    } catch (error) {
+      console.error("Failed to load Stripe payment status", error);
+    }
+  }
   function bindPaymentService() {
-    document.querySelector("#billing-form")?.addEventListener("submit", (event) => {
+    document.querySelector("#billing-form")?.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(event.target));
-      state.billingSettings = { enabled: data.enabled === "on", provider: "stripe_connect", checkoutEndpoint: data.checkoutEndpoint.trim(), onboardingUrl: data.onboardingUrl.trim(), accountLabel: data.accountLabel.trim(), shopName: data.shopName.trim() || "Your Car Guy" };
-      if (state.billingSettings.enabled && (!state.billingSettings.checkoutEndpoint || !state.billingSettings.onboardingUrl)) {
-        toast("Stripe onboarding and checkout endpoints are required before enabling payments");
+      const form = event.target;
+      const data = Object.fromEntries(new FormData(form));
+      const secretKey = String(data.secretKey || "").trim();
+      const webhookSecret = String(data.webhookSecret || "").trim();
+      const publishableKey = String(data.publishableKey || "").trim();
+      const button = form.querySelector("button[type=submit]");
+      const alreadyConfigured = Boolean(stripePaymentStatus?.configured);
+      if ((!secretKey || !webhookSecret) && !alreadyConfigured) {
+        toast("Enter both the Stripe secret key and webhook signing secret");
         return;
       }
-      save();
-      toast("Stripe payment service saved");
-      render();
+      if (secretKey && !webhookSecret || !secretKey && webhookSecret) {
+        toast("Provide both keys together when updating Stripe credentials");
+        return;
+      }
+      if (publishableKey && !/^pk_(test|live)_/.test(publishableKey)) {
+        toast("Publishable key must start with pk_test_ or pk_live_");
+        return;
+      }
+      if (button) button.disabled = true;
+      try {
+        if (secretKey && webhookSecret || publishableKey) {
+          const result = await apiFetch("/payments/stripe/configure", {
+            method: "POST",
+            body: JSON.stringify({
+              ...secretKey && webhookSecret ? { secretKey, webhookSecret } : {},
+              ...publishableKey ? { publishableKey } : {}
+            })
+          });
+          stripePaymentStatus = { ...stripePaymentStatus, ...result, configured: true, hasPublishableKey: Boolean(publishableKey) || Boolean(stripePaymentStatus?.hasPublishableKey) };
+        } else {
+          stripePaymentStatus = await apiFetch("/payments/stripe/status");
+        }
+        state.billingSettings = {
+          enabled: data.enabled === "on" || Boolean(stripePaymentStatus?.configured),
+          provider: "stripe",
+          accountLabel: String(data.accountLabel || "").trim(),
+          shopName: String(data.shopName || "").trim() || "Your Car Guy",
+          shopId: stripePaymentStatus?.shopId || state.billingSettings.shopId || "",
+          webhookUrl: stripePaymentStatus?.webhookUrl || state.billingSettings.webhookUrl || "",
+          checkoutEndpoint: "",
+          onboardingUrl: ""
+        };
+        save();
+        toast(secretKey ? "Stripe keys saved securely" : "Payment settings saved");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not save Stripe payment settings");
+      } finally {
+        if (button) button.disabled = false;
+      }
     });
-    document.querySelector("#open-stripe-onboarding")?.addEventListener("click", () => {
-      const url = document.querySelector("#billing-form [name=onboardingUrl]").value;
-      if (!url) {
-        toast("Enter the Stripe Connect onboarding URL first");
-        return;
+    document.querySelector("#copy-stripe-webhook")?.addEventListener("click", async () => {
+      const input = document.querySelector("#stripe-webhook-url");
+      const value2 = input?.value?.trim();
+      if (!value2) return toast("Webhook URL is not available yet");
+      try {
+        await navigator.clipboard.writeText(value2);
+        toast("Webhook URL copied");
+      } catch {
+        input.select();
+        document.execCommand("copy");
+        toast("Webhook URL copied");
       }
-      window.open(url, "_blank", "noopener");
+    });
+    document.querySelector("#refresh-stripe-status")?.addEventListener("click", async () => {
+      try {
+        stripePaymentStatus = await apiFetch("/payments/stripe/status");
+        if (stripePaymentStatus?.configured) {
+          state.billingSettings = {
+            ...state.billingSettings,
+            enabled: state.billingSettings.enabled || true,
+            provider: "stripe",
+            shopId: stripePaymentStatus.shopId || "",
+            webhookUrl: stripePaymentStatus.webhookUrl || ""
+          };
+          save();
+        }
+        toast(stripePaymentStatus?.configured ? "Stripe is connected" : "Stripe is not configured yet");
+        render();
+      } catch (error) {
+        toast(error.message || "Could not refresh Stripe status");
+      }
     });
   }
   function bindLiveAssistant() {
@@ -6742,6 +8334,10 @@ ${lines.join("\n")}`, raw: rawResponses.join("\n\n") };
       }
       if (["invoices", "accounting", "reports"].includes(x.dataset.route)) {
         await Promise.all([loadInvoicesFromApi(), loadPaymentsFromApi(), loadExpensesFromApi()]);
+        render();
+      }
+      if (x.dataset.route === "payments") {
+        await loadStripePaymentStatus();
         render();
       }
       if (x.dataset.route === "ai") {
@@ -6890,6 +8486,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       if (e.key === "Escape") closeModal();
     };
   }
+  function setModalAutosave(flushFn) {
+    modalAutosaveFlush = typeof flushFn === "function" ? flushFn : null;
+  }
   function showModal(html) {
     closeModal();
     const root = document.createElement("div");
@@ -6912,11 +8511,21 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     });
   }
   function closeModal() {
-    document.querySelector("#modal-root")?.remove();
+    const root = document.querySelector("#modal-root");
+    const flush = modalAutosaveFlush;
+    modalAutosaveFlush = null;
+    if (flush && root) {
+      try {
+        flush({ reason: "close", root });
+      } catch (error) {
+        console.error("Modal autosave failed", error);
+      }
+    }
+    root?.remove();
   }
   function newOrderEstimateRow(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0 }) {
     const verified = Boolean(line.laborVerified), source = line.laborSource || "Unverified shop estimate";
-    return `<article class="new-estimate-line" data-labor-source="${escapeAttr(source)}" data-labor-verified="${verified ? "1" : "0"}"><div class="estimate-line-head"><strong>Service line</strong><div><button class="mini-action lookup-labor-time" type="button">${icon("badge-check", 13)} Labor guide</button><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><small class="labor-source"><span class="badge ${verified ? "paid" : "estimate"}">${verified ? "Verified" : "Unverified"}</span> ${escapeHtml(source)}</small><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money3(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
+    return `<article class="new-estimate-line" data-labor-source="${escapeAttr(source)}" data-labor-verified="${verified ? "1" : "0"}"><div class="estimate-line-head"><strong>Service line</strong><div><button class="mini-action lookup-labor-time" type="button">${icon("badge-check", 13)} Labor guide</button><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes)}</textarea></label><small class="labor-source"><span class="badge ${verified ? "paid" : "estimate"}">${verified ? "Verified" : "Unverified"}</span> ${escapeHtml(source)}</small><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts || 0).toFixed(2)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money4(Number(line.hours || 0) * 165 + Number(line.parts || 0))}</b></div></div></article>`;
   }
   function newOrderServiceExplanation(service, fallback) {
     const source = aiKeywords(service);
@@ -6937,10 +8546,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const estimate = readNewOrderEstimate();
     document.querySelectorAll(".new-estimate-line").forEach((row) => {
       const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), total2 = row.querySelector(".estimate-line-total");
-      if (total2) total2.textContent = money3(hours * 165 + parts);
+      if (total2) total2.textContent = money4(hours * 165 + parts);
     });
     const summary = document.querySelector("#new-estimate-summary");
-    if (summary) summary.innerHTML = `<span>Labor <b>${money3(estimate.labor)}</b></span><span>Parts <b>${money3(estimate.parts)}</b></span><span>Fees <b>${money3(estimate.fees.reduce((sum, fee) => sum + fee.amount, 0))}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+    if (summary) summary.innerHTML = `<span>Labor <b>${money4(estimate.labor)}</b></span><span>Parts <b>${money4(estimate.parts)}</b></span><span>Fees <b>${money4(estimate.fees.reduce((sum, fee) => sum + fee.amount, 0))}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
     const total = document.querySelector("#new-estimate-total");
     if (total) total.value = estimate.total.toFixed(2);
   }
@@ -7001,7 +8610,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function vehicleOptionsForCustomer(customerName, selectedVin = "") {
     const vehicles = state.vehicles.filter((vehicle) => !customerName || vehicle.customer === customerName);
-    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel2(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel2(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
+    return `<option value="">Enter vehicle manually</option>${vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}" data-vin="${escapeHtml(vehicle.vin || "")}" data-label="${escapeHtml(vehicleLabel3(vehicle))}" ${vehicle.vin && vehicle.vin === selectedVin ? "selected" : ""}>${escapeHtml(vehicleLabel3(vehicle))}${vehicle.vin ? ` \xB7 ${escapeHtml(vehicle.vin)}` : ""}</option>`).join("")}`;
   }
   function bindNewOrderCustomerPickers() {
     const form = document.querySelector("#new-form");
@@ -7122,7 +8731,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       const item = state.inventory.find((record) => record.id === line.inventoryId || line.inventorySku && record.sku === line.inventorySku);
       return `<p><b>${escapeHtml(item?.sku || line.inventorySku || "Unknown SKU")}</b> \xB7 ${escapeHtml(item?.name || line.service)} \xB7 ${Number(line.committedQuantity || 0)} committed</p>`;
     }).join("")}${x.inventoryDeducted ? `<small>Deducted ${new Date(x.inventoryCommittedAt).toLocaleString()}</small>` : ""}</section>` : "", assignment = canManage ? `<label>Assigned technician<select id="detail-tech"><option>Unassigned</option>${technicians.map((t) => `<option ${t === x.tech ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}</select></label><label>Labor hours<select id="detail-hours">${[0, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8].map((h) => `<option value="${h}" ${Number(x.laborHours ?? 0) === h ? "selected" : ""}>${h === 0 ? "Not set" : h.toFixed(2) + " hours"}</option>`).join("")}</select></label>` : `<section><h3>Assignment</h3><p>${escapeHtml(x.tech)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} labor hours</p></section>`;
-    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money3(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money3(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money3(x.parts)}<br>Tax: ${money3(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
+    showModal(`<div class="modal wide"><div class="modal-head"><div><span class="mono">${x.id}</span><h2>Work order details</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="detail-hero"><div>${badge(x.status)}<h2>${escapeHtml(x.customer)}</h2><p>${escapeHtml(x.vehicle)} \xB7 <span class="mono">${escapeHtml(x.vin)}</span></p></div><div><div class="amount">${money4(x.total)}</div><p>${escapeHtml(x.tech)} \xB7 ${escapeHtml(x.bay)}</p></div></div><div class="detail-grid"><div><label class="full">Customer complaint<textarea id="detail-complaint" rows="3">${escapeHtml(x.complaint || "")}</textarea></label><label class="full">Technician notes<textarea id="detail-notes" rows="3">${escapeHtml(x.notes || "")}</textarea></label><section><h3>Estimate breakdown</h3><p>Labor: ${money4(x.labor)} \xB7 ${Number(x.laborHours ?? 0).toFixed(2)} hours<br>Parts & supplies: ${money4(x.parts)}<br>Tax: ${money4(x.tax)}</p></section>${inventoryMarkup}</div><aside><label>Work status<select id="detail-status" ${canManage ? "" : "disabled"}>${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((s) => `<option value="${s}" ${s === x.status ? "selected" : ""}>${label(s)}</option>`).join("")}</select></label>${assignment}<label>Promise time<input id="detail-promise" value="${escapeHtml(x.promise || "")}"/></label><label>Bay / assignment<select id="detail-bay"><option>Unassigned</option><option>Bay 1</option><option>Bay 2</option><option>Bay 3</option><option>Bay 4</option><option>Mobile</option></select></label>${jobClockControl}${mileagePanelMarkup({ jobAddress: x.jobAddress || "", oneWayMiles: x.tripMilesOneWay || "", roundTrip: x.tripMiles || roundTripMiles(x.tripMilesOneWay), rate: shopMileageRate(), charge: x.mileageCharge || mileageCharge(x.tripMiles || roundTripMiles(x.tripMilesOneWay), shopMileageRate()), shopAddress: shopProfile().address, canEdit: canManage })}<section><h3>Activity</h3><p>Opened in shop queue<br>Customer authorization recorded<br>${escapeHtml(x.promise)}</p></section></aside></div></div><div class="modal-actions">${canManage ? `<button class="secondary danger" id="delete-order">${icon("trash-2", 14)} Delete</button><button class="primary" id="save-order">${icon("save", 14)} Save changes</button>` : `<button class="primary" data-close>Close</button>`}</div></div>`);
     bindWorkOrderMileage(".modal");
     if (canManage) {
       const baySelect = document.querySelector("#detail-bay");
@@ -7218,7 +8827,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function operationsAnalytics() {
     const revenue = paymentRecords().reduce((sum, item) => sum + Number(item.amount || 0), 0), inventoryValue = state.inventory.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.cost || 0), 0), completed = state.orders.filter((item) => ["completed", "invoiced"].includes(item.status)), customers2 = [...state.customers].sort((a, b) => Number(b.spend || 0) - Number(a.spend || 0)).slice(0, 5), techs = state.users.filter((user) => user.techName).map((user) => ({ name: user.techName, jobs: completed.filter((order) => order.tech === user.techName).length, hours: state.jobClockEntries.filter((entry) => entry.userId === user.id && entry.clockOut).reduce((sum, entry) => sum + Number(entry.hours || 0), 0) }));
-    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money3(revenue)}</strong></article><article><span>Open receivables</span><strong>${money3(finance().receivable)}</strong></article><article><span>Inventory value</span><strong>${money3(inventoryValue)}</strong></article><article><span>Low stock</span><strong>${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length}</strong></article><article><span>Reminders due</span><strong>${state.reminders.filter((item) => !item.sentAt).length}</strong></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><h2>Technician productivity</h2></div>${techs.map((tech) => `<div class="statement-line"><span>${escapeHtml(tech.name)} \xB7 ${tech.hours.toFixed(2)} tracked hr</span><b>${tech.jobs} completed</b></div>`).join("") || "No completed technician work."}</section><section class="statement"><div class="statement-head"><h2>Customer lifetime value</h2></div>${customers2.map((customer) => `<div class="statement-line"><span>${escapeHtml(customer.name)}</span><b>${money3(Number(customer.spend || 0))}</b></div>`).join("")}</section></div>`;
+    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money4(revenue)}</strong></article><article><span>Open receivables</span><strong>${money4(finance().receivable)}</strong></article><article><span>Inventory value</span><strong>${money4(inventoryValue)}</strong></article><article><span>Low stock</span><strong>${state.inventory.filter((item) => Number(item.quantity) <= Number(item.reorderLevel)).length}</strong></article><article><span>Reminders due</span><strong>${state.reminders.filter((item) => !item.sentAt).length}</strong></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><h2>Technician productivity</h2></div>${techs.map((tech) => `<div class="statement-line"><span>${escapeHtml(tech.name)} \xB7 ${tech.hours.toFixed(2)} tracked hr</span><b>${tech.jobs} completed</b></div>`).join("") || "No completed technician work."}</section><section class="statement"><div class="statement-head"><h2>Customer lifetime value</h2></div>${customers2.map((customer) => `<div class="statement-line"><span>${escapeHtml(customer.name)}</span><b>${money4(Number(customer.spend || 0))}</b></div>`).join("")}</section></div>`;
   }
   function openEstimateDiscount(id) {
     const estimate = state.estimates.find((item) => item.id === id);
@@ -7274,7 +8883,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const customer = state.customers.find((c) => c.name === name);
     if (!customer) return;
     const vehicles = state.vehicles.filter((v) => v.customer === name), orders2 = state.orders.filter((o) => o.customer === name), invs = state.invoices.filter((i) => i.customer === name), payments2 = state.payments.filter((p) => p.customer === name), balance = customerBalance(name);
-    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money3(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel2(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money3(i.amount)}</td><td>${money3(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money3(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
+    showModal(`<div class="modal wide" id="customer-detail"><div class="modal-head"><h2>${escapeHtml(customer.name)}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="customer-detail-top"><div class="avatar">${initials(customer.name)}</div><div><p>${escapeHtml(customer.phone || "")} \xB7 ${escapeHtml(customer.email || "")}</p><p class="customer-balance ${balance > 0 ? "has-balance" : ""}">Account balance: <b>${money4(balance)}</b></p></div><div class="customer-detail-actions"><button class="secondary" id="cd-message">${icon("send", 14)} Message</button><button class="secondary" id="cd-statement">${icon("printer", 14)} Statement</button></div></div><div class="form-grid"><label>Billing address<textarea name="billingAddress" rows="2">${escapeHtml(customer.billingAddress || "")}</textarea></label><label>Billing notes<textarea name="billingNotes" rows="2">${escapeHtml(customer.billingNotes || "")}</textarea></label><div class="full"><button class="mini-action" id="cd-save-billing">${icon("save", 13)} Save billing</button></div></div><h3>Vehicles (${vehicles.length})</h3><table class="mini-table"><thead><tr><th>Vehicle</th><th>VIN</th><th>Mileage</th></tr></thead><tbody>${vehicles.map((v) => `<tr class="clickable-row" data-cd-vehicle="${v.id}"><td><b>${escapeHtml(vehicleLabel3(v))}</b></td><td class="mono">${escapeHtml(v.vin || "")}</td><td>${v.mileage || ""}</td></tr>`).join("") || `<tr><td colspan="3">No vehicles linked</td></tr>`}</tbody></table><h3>Work Orders (${orders2.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Total</th></tr></thead><tbody>${orders2.slice(0, 10).map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="3">No work orders</td></tr>`}</tbody></table><h3>Invoices (${invs.length})</h3><table class="mini-table"><thead><tr><th>Invoice</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invs.map((i) => `<tr><td class="mono">${i.number}</td><td>${badge(i.status)}</td><td>${money4(i.amount)}</td><td>${money4(invoiceBalance(i))}</td></tr>`).join("") || `<tr><td colspan="4">No invoices</td></tr>`}</tbody></table><h3>Payments (${payments2.length})</h3><table class="mini-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${payments2.slice(0, 10).map((p) => `<tr><td>${p.receivedAt || ""}</td><td>${p.method || ""}</td><td>${money4(p.amount)}</td><td class="mono">${p.invoiceNumber || ""}</td></tr>`).join("") || `<tr><td colspan="4">No payments</td></tr>`}</tbody></table></div></div>`);
     document.querySelector("#cd-message")?.addEventListener("click", () => {
       closeModal();
       openCustomerMessage(customer.name, customer.phone, customer.email);
@@ -7306,7 +8915,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const vehicle = state.vehicles.find((v) => v.id === id);
     if (!vehicle) return;
     const history = linkedOrders(vehicle), photos = vehicle.photoKeys || [];
-    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel2(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money3(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
+    showModal(`<div class="modal wide" id="vehicle-detail"><div class="modal-head"><h2>${escapeHtml(vehicleLabel3(vehicle))}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Owner<input value="${escapeHtml(vehicle.customer)}" disabled/></label><label>VIN<input value="${escapeHtml(vehicle.vin || "")}" disabled/></label><label>Plate<input value="${escapeHtml(vehicle.plate || "")}" disabled/></label><label>Mileage<input value="${vehicle.mileage || ""}" disabled/></label><label>Next service<input value="${vehicle.nextServiceDate || ""}" disabled/></label><label>Notes<input value="${escapeHtml(vehicle.notes || "")}" disabled/></label></div>${photos.length ? `<h3>Photos</h3><div class="vehicle-photo-thumbs">${photos.map((key) => `<img src="${cloudflareConfig2.apiUrl}/files/${encodeURIComponent(key)}" alt="Vehicle photo" class="vehicle-thumb"/>`).join("")}</div>` : ""}<h3>Service History (${history.length})</h3><table class="mini-table"><thead><tr><th>RO</th><th>Status</th><th>Vehicle</th><th>Total</th></tr></thead><tbody>${history.map((o) => `<tr><td class="mono">${o.id}</td><td>${badge(o.status)}</td><td>${escapeHtml(o.vehicle)}</td><td>${money4(o.total)}</td></tr>`).join("") || `<tr><td colspan="4">No service history</td></tr>`}</tbody></table><div class="modal-actions"><button class="secondary" id="vd-edit">${icon("pencil", 14)} Edit vehicle</button></div></div></div>`);
     document.querySelector("#vd-edit")?.addEventListener("click", () => {
       closeModal();
       openVehicleForm(vehicle);
@@ -7468,21 +9077,21 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return saveShopEntity("shopsettings", record);
   }
   function employees() {
-    const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role])}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money3(user.payRate) + " / yr" : money3(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><button class="mini-action" data-toggle-user="${escapeHtml(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></td></tr>`).join("");
+    const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role])}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money4(user.payRate) + " / yr" : money4(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><button class="mini-action" data-toggle-user="${escapeHtml(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></td></tr>`).join("");
     return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Admin sees all data. Technicians see only assigned jobs. Office sees customers, invoices, and accounting. Service writers manage service operations.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Create login</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`);
   }
   function payroll() {
     syncAllPayroll();
     const period = weekPeriod(), admin = currentUser().role === "admin", people = admin ? state.users.filter((user) => user.active) : [currentUser()], stubs = people.map((user) => payStub(user, period));
-    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}<div class="ai-notice">${icon("landmark", 16)}<span>Payroll figures are a small-shop estimate for planning only. MechPro does not file taxes, generate W-2/1099 forms, or replace a payroll processor.</span></div>${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money3(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
+    return shell(`${heading("Compensation", "Payroll", admin ? `Weekly payroll for ${period.start} - ${period.end}. Completed jobs automatically add labor hours to the assigned employee.` : `Your weekly pay stub for ${period.start} - ${period.end}.`, false)}<div class="ai-notice">${icon("landmark", 16)}<span>Payroll figures are a small-shop estimate for planning only. MechPro does not file taxes, generate W-2/1099 forms, or replace a payroll processor.</span></div>${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-export">${icon("download", 14)} Export payroll</button><button class="primary" id="sync-payroll">${icon("refresh-cw", 14)} Sync completed jobs</button></div>` : ""}<div class="payroll-summary"><span>Pay period</span><strong>${period.start} - ${period.end}</strong><span>${stubs.reduce((sum, stub) => sum + stub.hours, 0).toFixed(2)} labor hours</span><strong>${money4(stubs.reduce((sum, stub) => sum + stub.net, 0))} net pay</strong></div><div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
   }
   function payStub(user, period) {
     const lines = state.payrollEntries.filter((entry) => entry.employeeId === user.id && entry.periodKey === period.key), hours = lines.reduce((sum, line) => sum + line.hours, 0), shiftHours = state.shiftEntries.filter((entry) => entry.userId === user.id && entry.clockOut && String(entry.clockIn).slice(0, 10) >= period.key).reduce((sum, entry) => sum + Number(entry.hours || 0), 0), jobPay = lines.reduce((sum, line) => sum + line.amount, 0), salaryPay = user.employmentType === "Salary" ? Number(user.payRate || 0) / 52 : 0, gross = jobPay + salaryPay, federal = Math.round(gross * 0.12 * 100) / 100, fica = Math.round(gross * 0.0765 * 100) / 100, other = 0;
     return { user, period, lines, hours, shiftHours, gross, federal, fica, other, net: Math.max(0, gross - federal - fica - other), salaryPay };
   }
   function payStubMarkup(stub) {
-    const user = stub.user, lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${line.hours.toFixed(2)}</td><td>${money3(line.rate)}</td><td><b>${money3(line.amount)}</b></td></tr>`).join("");
-    return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money3(user.payRate) + " / year" : money3(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money3(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money3(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money3(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money3(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
+    const user = stub.user, lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${line.hours.toFixed(2)}</td><td>${money4(line.rate)}</td><td><b>${money4(line.amount)}</b></td></tr>`).join("");
+    return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "Employment type")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money4(user.payRate) + " / year" : money4(user.payRate) + " / hr" : "Rate pending"}</p></div><div class="net-pay"><span>Net pay</span><strong>${money4(stub.net)}</strong></div></div><div class="pay-stub-totals"><div><span>Job labor hours</span><b>${stub.hours.toFixed(2)}</b></div><div><span>Shift hours</span><b>${stub.shiftHours.toFixed(2)}</b></div><div><span>Gross pay</span><b>${money4(stub.gross)}</b></div><div><span>Federal + FICA est.</span><b>(${money4(stub.federal + stub.fica)})</b></div></div>${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money4(stub.salaryPay)}</b></div>` : ""}<table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table><div class="pay-stub-foot"><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")}</span><span>Global shift clock is tracked separately to prevent duplicate pay.</span></div></section>`;
   }
   function openEmployee() {
     showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><h3>Identity & access</h3><div class="form-grid"><label>Employee name *<input name="name" required/></label><label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label><label>Job title<input name="title" placeholder="e.g. Service Writer"/></label><label>Department<input name="department" placeholder="e.g. Service"/></label><label class="full">Email address *<input type="email" name="email" required/></label><label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label><label class="full">Technician dispatch name <input name="techName" placeholder="Required for technicians, e.g. Eli R."/></label></div><h3>Employment information</h3><div class="form-grid"><label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label><label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label><label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label><label>Start date<input name="startDate" type="date" value="2026-08-14"/></label><label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label><label>Phone<input name="phone" type="tel"/></label><label class="full">Home address<input name="address"/></label><label class="full">Emergency contact<input name="emergencyContact" placeholder="Name \xB7 phone number"/></label></div><div class="ledger-note">${icon("info", 15)} Save the employee profile here. They sign in with a work-email magic link. Passwords are never stored in employee records.</div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
@@ -7542,26 +9151,26 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return shell(`${heading("Financial operations", "Accounting", "Income, expenses, receivables, and books for Your Car Guy.", false)}<div class="accounting-actions"><button class="secondary" id="accounting-export">${icon("download", 14)} Export ledger</button><button class="secondary" id="journal-entry">${icon("book-open-check", 14)} Journal entry</button><button class="primary" id="record-expense">${icon("plus", 14)} Record expense</button></div><div class="accounting-tabs">${tabs.map((x) => `<button class="tab ${accountingTab === x[0] ? "active" : ""}" data-accounting-tab="${x[0]}">${x[1]}</button>`).join("")}</div>${views[accountingTab]}`);
   }
   function profitLoss(data) {
-    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money3(data.income)}</strong><small>Paid invoices and posted income</small></article><article><span>Operating expenses</span><strong>${money3(data.expenses)}</strong><small>${state.expenses.length} recorded expenses</small></article><article class="${data.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money3(data.net)}</strong><small>Cash-basis operating result</small></article><article><span>Accounts receivable</span><strong>${money3(data.receivable)}</strong><small>${money3(data.overdue)} overdue</small></article><article><span>Sales tax payable</span><strong>${money3(data.tax)}</strong><small>From paid work orders</small></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Profit & loss</div><h2>Current activity</h2></div><span class="badge paid">Cash basis</span></div><div class="statement-line"><span>Service revenue</span><b>${money3(data.income)}</b></div><div class="statement-line"><span>Operating expenses</span><b>(${money3(data.expenses)})</b></div><div class="statement-line total"><span>Net income</span><b>${money3(data.net)}</b></div></section><section class="statement"><div class="statement-head"><div><div class="eyebrow">Controls</div><h2>Month-end checklist</h2></div>${icon("list-checks", 18)}</div><p>Review overdue receivables, reconcile the operating account, and set aside sales tax before filing.</p><small>Financial reporting is generated from records stored in this application.</small></section></div>`;
+    return `<div class="finance-kpis"><article><span>Cash received</span><strong>${money4(data.income)}</strong><small>Paid invoices and posted income</small></article><article><span>Operating expenses</span><strong>${money4(data.expenses)}</strong><small>${state.expenses.length} recorded expenses</small></article><article class="${data.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money4(data.net)}</strong><small>Cash-basis operating result</small></article><article><span>Accounts receivable</span><strong>${money4(data.receivable)}</strong><small>${money4(data.overdue)} overdue</small></article><article><span>Sales tax payable</span><strong>${money4(data.tax)}</strong><small>From paid work orders</small></article></div><div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Profit & loss</div><h2>Current activity</h2></div><span class="badge paid">Cash basis</span></div><div class="statement-line"><span>Service revenue</span><b>${money4(data.income)}</b></div><div class="statement-line"><span>Operating expenses</span><b>(${money4(data.expenses)})</b></div><div class="statement-line total"><span>Net income</span><b>${money4(data.net)}</b></div></section><section class="statement"><div class="statement-head"><div><div class="eyebrow">Controls</div><h2>Month-end checklist</h2></div>${icon("list-checks", 18)}</div><p>Review overdue receivables, reconcile the operating account, and set aside sales tax before filing.</p><small>Financial reporting is generated from records stored in this application.</small></section></div>`;
   }
   function arView(data) {
-    const rows = data.open.map((x) => `<tr><td class="mono"><b>${x.number}</b></td><td>${x.customer}</td><td>${x.due}</td><td>${badge(x.status)}</td><td><b>${money3(x.amount)}</b></td></tr>`).join("");
-    return `<div class="accounting-summary"><span>${data.open.length} open invoices</span><strong>${money3(data.receivable)} outstanding</strong></div><div class="data-panel"><table><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No open receivables.</td></tr>`}</tbody></table></div>`;
+    const rows = data.open.map((x) => `<tr><td class="mono"><b>${x.number}</b></td><td>${x.customer}</td><td>${x.due}</td><td>${badge(x.status)}</td><td><b>${money4(x.amount)}</b></td></tr>`).join("");
+    return `<div class="accounting-summary"><span>${data.open.length} open invoices</span><strong>${money4(data.receivable)} outstanding</strong></div><div class="data-panel"><table><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No open receivables.</td></tr>`}</tbody></table></div>`;
   }
   function expenseView() {
-    const rows = [...state.expenses].reverse().map((x) => `<tr><td>${x.date}</td><td><b>${x.vendor}</b><small>${x.memo || "No memo"}</small></td><td>${x.category}</td><td class="mono">${x.account || expenseAccount(x.category)}</td><td><b>${money3(x.amount)}</b></td></tr>`).join(""), total = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
-    return `<div class="accounting-summary"><span>${state.expenses.length} recorded expenses</span><strong>${money3(total)} total</strong></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Vendor & memo</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No expenses recorded.</td></tr>`}</tbody></table></div>`;
+    const rows = [...state.expenses].reverse().map((x) => `<tr><td>${x.date}</td><td><b>${x.vendor}</b><small>${x.memo || "No memo"}</small></td><td>${x.category}</td><td class="mono">${x.account || expenseAccount(x.category)}</td><td><b>${money4(x.amount)}</b></td></tr>`).join(""), total = state.expenses.reduce((s, x) => s + Number(x.amount || 0), 0);
+    return `<div class="accounting-summary"><span>${state.expenses.length} recorded expenses</span><strong>${money4(total)} total</strong></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Vendor & memo</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No expenses recorded.</td></tr>`}</tbody></table></div>`;
   }
   function ledger() {
     const receipts = paymentRecords().map((payment) => ({ date: payment.receivedAt, reference: payment.reference || payment.invoiceNumber, description: `${payment.method === "cash" ? "Cash" : "Processor"} payment \u2014 ${payment.customer} \xB7 ${payment.invoiceNumber}`, debitAccount: payment.method === "cash" ? "1010" : "1020", creditAccount: "1100", amount: payment.amount })), expense = state.expenses.map((x) => ({ date: x.date, reference: "EXP", description: `${x.vendor}${x.memo ? ` \u2014 ${x.memo}` : ""}`, debitAccount: x.account || expenseAccount(x.category), creditAccount: "1000", amount: Number(x.amount) }));
     return [...receipts, ...expense, ...state.journalEntries].sort((a, b) => String(b.date).localeCompare(String(a.date)));
   }
   function ledgerView() {
-    const rows = ledger().map((x) => `<tr><td>${x.date}</td><td class="mono">${x.reference || "JE"}</td><td>${x.description}</td><td class="mono">${x.debitAccount}</td><td class="mono">${x.creditAccount}</td><td><b>${money3(x.amount)}</b></td></tr>`).join("");
+    const rows = ledger().map((x) => `<tr><td>${x.date}</td><td class="mono">${x.reference || "JE"}</td><td>${x.description}</td><td class="mono">${x.debitAccount}</td><td class="mono">${x.creditAccount}</td><td><b>${money4(x.amount)}</b></td></tr>`).join("");
     return `<div class="ledger-note">${icon("scale", 15)} Every entry is balanced: equal debit and credit amounts are posted.</div><div class="data-panel"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Debit</th><th>Credit</th><th>Amount</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No journal activity.</td></tr>`}</tbody></table></div>`;
   }
   function accountView() {
-    const d = finance(), balance = (x) => x.code === "1000" ? d.income - d.expenses : x.code === "1100" ? d.receivable : x.code === "2100" ? d.tax : x.code === "4000" ? d.income : ["5000", "6100", "6200", "6300"].includes(x.code) ? state.expenses.filter((e) => (e.account || expenseAccount(e.category)) === x.code).reduce((s, e) => s + Number(e.amount), 0) : 0, rows = state.chartOfAccounts.map((x) => `<tr><td class="mono"><b>${x.code}</b></td><td><b>${x.name}</b></td><td>${x.type}</td><td><b>${money3(balance(x))}</b></td></tr>`).join("");
+    const d = finance(), balance = (x) => x.code === "1000" ? d.income - d.expenses : x.code === "1100" ? d.receivable : x.code === "2100" ? d.tax : x.code === "4000" ? d.income : ["5000", "6100", "6200", "6300"].includes(x.code) ? state.expenses.filter((e) => (e.account || expenseAccount(e.category)) === x.code).reduce((s, e) => s + Number(e.amount), 0) : 0, rows = state.chartOfAccounts.map((x) => `<tr><td class="mono"><b>${x.code}</b></td><td><b>${x.name}</b></td><td>${x.type}</td><td><b>${money4(balance(x))}</b></td></tr>`).join("");
     return `<div class="data-panel"><table><thead><tr><th>Account</th><th>Name</th><th>Type</th><th>Activity balance</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function openExpense() {
@@ -7702,12 +9311,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function printInvoice(number) {
     const invoice = state.invoices.find((item) => item.number === number);
     if (!invoice) return;
-    const profile = shopProfile(), brand = printableBrand(profile), breakdown = invoiceTaxBreakdown(invoice), paid = invoicePaid(invoice), balance = invoiceBalance(invoice), customer = state.customers.find((item) => item.name === invoice.customer), order = state.orders.find((item) => item.id === invoice.ro), payments2 = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money3(Number(payment.amount || 0))}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
+    const profile = shopProfile(), brand = printableBrand(profile), breakdown = invoiceTaxBreakdown(invoice), paid = invoicePaid(invoice), balance = invoiceBalance(invoice), customer = state.customers.find((item) => item.name === invoice.customer), order = state.orders.find((item) => item.id === invoice.ro), payments2 = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money4(Number(payment.amount || 0))}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
     if (!win) {
       toast("Allow pop-ups to print the invoice");
       return;
     }
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span{color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice summary</h2><table><thead><tr><th>Description</th><th>Amount</th></tr></thead><tbody><tr><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money3(breakdown.subtotal)}</td></tr><tr><td>Sales tax (${Number(breakdown.taxRate || 0)}%)</td><td>${money3(breakdown.tax)}</td></tr></tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money3(breakdown.subtotal)}</b></p><p><span>Tax</span><b>${money3(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money3(invoice.amount)}</b></p><p><span>Payments</span><b>-${money3(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money3(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span{color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice summary</h2><table><thead><tr><th>Description</th><th>Amount</th></tr></thead><tbody><tr><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money4(breakdown.subtotal)}</td></tr><tr><td>Sales tax (${Number(breakdown.taxRate || 0)}%)</td><td>${money4(breakdown.tax)}</td></tr></tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money4(breakdown.subtotal)}</b></p><p><span>Tax</span><b>${money4(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money4(invoice.amount)}</b></p><p><span>Payments</span><b>-${money4(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money4(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
     win.document.close();
   }
   function invoiceNumberForOrder(order) {
@@ -7895,9 +9504,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       resetAllShopData(event.target);
     };
   }
-  function homeQuickAction(route, iconName, labelText) {
+  function homeQuickAction(route, iconName, labelText, extra = "") {
     if (route && !canAccess(route)) return "";
-    return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"}>${icon(iconName, 16)}<span>${labelText}</span></button>`;
+    return `<button class="home-action" type="button" ${route ? `data-route="${route}"` : "data-open-new"} ${extra}>${icon(iconName, 16)}<span>${labelText}</span></button>`;
   }
   function homeDashboard() {
     const user = currentUser();
@@ -7905,15 +9514,15 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const firstName = String(user.name || "there").split(/\s+/)[0];
     const attention = model.attention.map((item) => {
       const tone = item.type === "overdue" ? "warn" : item.type === "parts" ? "parts" : "assign";
-      const detail = item.type === "overdue" ? `${item.detail.split(" \xB7 ")[0]} \xB7 ${money3(item.amount || 0)}` : item.detail;
+      const detail = item.type === "overdue" ? `${item.detail.split(" \xB7 ")[0]} \xB7 ${money4(item.amount || 0)}` : item.detail;
       return `<button class="home-row ${tone}" type="button" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : `data-route="invoices"`}><span class="home-row-icon">${icon(item.type === "overdue" ? "clock-alert" : item.type === "parts" ? "package" : "user-plus", 16)}</span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail)}</small></span>${icon("chevron-right", 14)}</button>`;
     }).join("");
     const todayJobs = model.todayJobs.map((order) => `<button class="home-job" type="button" data-order="${escapeHtml(order.id)}"><div><span class="mono">${escapeHtml(order.id)}</span>${badge(order.status)}</div><strong>${escapeHtml(order.customer)}</strong><small>${escapeHtml(order.vehicle)}</small><span class="home-job-meta">${icon("clock-3", 12)}${escapeHtml(order.promise || "Unscheduled")} \xB7 ${escapeHtml(order.tech || "Unassigned")}</span></button>`).join("");
     const appointments = model.todaysAppointments.map((item) => `<article class="home-appointment"><strong>${escapeHtml(item.time)} \xB7 ${escapeHtml(item.customer)}</strong><small>${escapeHtml(item.service)} \xB7 ${escapeHtml(item.bay || "Unassigned")}</small></article>`).join("");
     const activity = model.activity.map((item) => `<button class="home-row" type="button" ${item.orderId ? `data-order="${escapeHtml(item.orderId)}"` : 'data-route="invoices"'}><span class="home-row-icon muted">${icon("activity", 15)}</span><span><strong>${escapeHtml(item.title)} \xB7 ${escapeHtml(item.customer || "")}</strong><small>${escapeHtml(item.vehicle || item.meta || "")} \xB7 ${escapeHtml(label(item.status))}</small></span></button>`).join("");
     const start = model.isEmpty ? `<section class="home-start"><div><div class="eyebrow">Get started</div><h2>Your shop dashboard is ready</h2><p>Create a work order, book a visit, or open the dispatch board. Metrics, today's jobs, and recent activity fill in as soon as records land.</p></div><div class="home-start-actions"><button class="primary" type="button" data-open-new>${icon("plus", 15)} New work order</button>${canAccess("dispatch") ? `<button class="secondary" type="button" data-route="dispatch">${icon("layout-dashboard", 15)} Open dispatch</button>` : ""}</div></section>` : "";
-    const quick = `<div class="home-actions">${homeQuickAction("", "plus", "New work order")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch board")}${homeQuickAction("schedule", "calendar-days", "Schedule")}${homeQuickAction("invoices", "receipt-text", "Invoices")}${homeQuickAction("customers", "users", "Customers")}</div>`;
-    return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow2()}, ${escapeHtml(firstName)}</h1><p>A live snapshot of open work, parts holds, overdue invoices, and what needs a decision next.</p></div><div class="head-actions"><button class="primary" type="button" id="home-new-ro">${icon("plus", 15)} New work order</button></div></div>${stats()}${quick}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
+    const quick = `<div class="home-command"><button class="primary home-intake" type="button" id="home-intake">${icon("plus", 18)} New Customer Intake</button><div class="home-actions">${homeQuickAction("orders", "clipboard-list", "View Work Orders")}${homeQuickAction("dispatch", "layout-dashboard", "Dispatch Board")}${homeQuickAction("shopops", "package", "Parts Requests", 'data-ops-tab="ordering"')}${homeQuickAction("customers", "users", "Customers")}${homeQuickAction("pos", "credit-card", "Card terminal")}${homeQuickAction("reports", "pie-chart", "Reports")}${homeQuickAction("payroll", "landmark", "Payroll")}</div></div>`;
+    return shell(`<div class="home-hero"><div><div class="eyebrow">${shopDayLabel()}</div><h1>${greetingForNow2()}, ${escapeHtml(firstName)}</h1><p>Start with a customer intake. Work orders, dispatch, parts, and payroll stay one click away.</p></div><div class="head-actions"><button class="primary" type="button" id="home-intake-top">${icon("plus", 15)} New Customer Intake</button><button class="secondary" type="button" id="home-new-ro">New work order</button></div></div>${quick}${stats()}${start}<div class="home-grid"><section class="home-panel"><div class="home-panel-head"><div><h2>Needs attention</h2><p>Unassigned jobs, parts holds, and overdue invoices.</p></div><span>${model.attention.length}</span></div><div class="home-list">${attention || `<div class="home-empty">${icon("circle-check", 20)}<p>Nothing waiting on you right now.</p></div>`}</div></section><section class="home-panel"><div class="home-panel-head"><div><h2>Today's work</h2><p>Promise times and active repairs for this shop day.</p></div>${canAccess("dispatch") ? `<button class="mini-action" type="button" data-route="dispatch">View board</button>` : ""}</div><div class="home-jobs">${todayJobs || `<div class="home-empty">${icon("wrench", 20)}<p>No jobs promised for today. Create a work order to populate this list.</p></div>`}</div>${appointments ? `<div class="home-appointments"><h3>Appointments</h3>${appointments}</div>` : ""}</section><section class="home-panel home-panel-wide"><div class="home-panel-head"><div><h2>Recent activity</h2><p>Open work orders and the latest invoice movement.</p></div></div><div class="home-list">${activity || `<div class="home-empty">${icon("clipboard-list", 20)}<p>Activity shows here after the first repair order or invoice.</p></div>`}</div></section></div>`);
   }
   function bindHomeDashboard() {
     document.querySelector("#home-new-ro")?.addEventListener("click", openNew);
@@ -7922,6 +9531,307 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         event.preventDefault();
         openNew();
       };
+    });
+    document.querySelectorAll("#home-intake, #home-intake-top").forEach((button) => button.addEventListener("click", () => openCustomerIntake()));
+    document.querySelectorAll("[data-ops-tab]").forEach((button) => button.addEventListener("click", () => {
+      shopOpsTab = button.dataset.opsTab;
+    }, true));
+  }
+  async function loadPosReaders() {
+    try {
+      await Promise.all([loadOrdersFromApi(), loadInvoicesFromApi(), loadPaymentsFromApi()]);
+      const result = await apiFetch("/payments/terminal/readers");
+      posConfigured = Boolean(result.configured);
+      posPhoneEntry = Boolean(result.phoneEntry);
+      posReaders = result.readers || [];
+    } catch (error) {
+      posReaders = [];
+      toast(error.message || "Card terminal could not be loaded");
+    }
+    if (state.route === "pos") render();
+  }
+  function paintPosStatus() {
+    const note = document.querySelector(".pos-status");
+    if (!note || !posCharge) return;
+    note.dataset.phase = posCharge.phase || "";
+    note.textContent = posCharge.message || "";
+  }
+  async function pollPosCharge() {
+    clearTimeout(posPollTimer);
+    if (!posCharge?.paymentIntentId || state.route !== "pos") return;
+    try {
+      const result = await apiFetch(`/payments/terminal/status?paymentIntentId=${encodeURIComponent(posCharge.paymentIntentId)}&readerId=${encodeURIComponent(posCharge.readerId)}`);
+      posCharge = { ...posCharge, ...result };
+      paintPosStatus();
+      if (result.phase === "paid") {
+        await loadPaymentsFromApi();
+        toast("Card payment recorded");
+        render();
+        return;
+      }
+      if (result.phase === "declined" || result.phase === "canceled") {
+        render();
+        return;
+      }
+      posPollTimer = setTimeout(pollPosCharge, 2e3);
+    } catch (error) {
+      toast(error.message || "The reader status could not be read");
+    }
+  }
+  function loadStripeJs() {
+    if (window.Stripe) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://js.stripe.com/v3/";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("The secure card form could not be loaded"));
+      document.head.appendChild(script);
+    });
+  }
+  async function startPhoneEntry(event) {
+    event.preventDefault();
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const button = form.querySelector("#pos-phone-prepare");
+    button.disabled = true;
+    try {
+      const session = await apiFetch("/payments/terminal/phone", { method: "POST", body: JSON.stringify({ amount: Number(data.amount), targetType: "work_order", targetId: data.orderId }) });
+      await loadStripeJs();
+      const stripe = window.Stripe(session.publishableKey);
+      const elements = stripe.elements({ clientSecret: session.clientSecret });
+      const card2 = elements.create("payment");
+      const mount = document.querySelector("#pos-card-element");
+      mount.replaceChildren();
+      card2.mount(mount);
+      posStripe = { stripe, elements, paymentIntentId: session.paymentIntentId, targetId: data.orderId };
+      const charge = document.querySelector("#pos-phone-charge");
+      const status = document.querySelector("#pos-phone-status");
+      if (charge) charge.hidden = false;
+      form.querySelector("[name=amount]").disabled = true;
+      form.querySelector("[name=orderId]").disabled = true;
+      if (status) {
+        status.hidden = false;
+        status.textContent = session.moto ? "Enter the card from the phone call, then charge it." : "Enter the card from the phone call. This Stripe account is charging it as a keyed card.";
+      }
+    } catch (error) {
+      toast(error.message || "The phone card form could not be opened");
+      button.disabled = false;
+    }
+  }
+  async function confirmPhoneEntry() {
+    if (!posStripe) return;
+    const button = document.querySelector("#pos-phone-charge");
+    if (button) button.disabled = true;
+    const result = await posStripe.stripe.confirmPayment({ elements: posStripe.elements, redirect: "if_required", confirmParams: { return_url: location.href } });
+    if (result.error) {
+      toast(result.error.message || "The card was not approved");
+      if (button) button.disabled = false;
+      return;
+    }
+    try {
+      const recorded = await apiFetch(`/payments/terminal/phone/status?paymentIntentId=${encodeURIComponent(posStripe.paymentIntentId)}`);
+      if (recorded.phase !== "paid") {
+        toast(recorded.message || "The card was not approved");
+        if (button) button.disabled = false;
+        return;
+      }
+      await loadPaymentsFromApi();
+      posStripe = null;
+      toast("Phone card payment recorded");
+      render();
+    } catch (error) {
+      toast(error.message || "The phone payment could not be recorded");
+      if (button) button.disabled = false;
+    }
+  }
+  async function savePosWriteup() {
+    const order = (state.orders || []).find((item) => item.id === posSelectedId);
+    const writeup = recoveryWriteup({ customer: order?.customer, vehicle: order?.vehicle });
+    if (!order || !writeup.ready) {
+      toast("Choose a work order with a customer and a vehicle");
+      return;
+    }
+    if (String(order.notes || "").includes("Concern: Vehicle immobilized in mud")) {
+      toast("That write-up is already on the work order");
+      return;
+    }
+    order.notes = [order.notes, writeup.text].filter(Boolean).join("\n\n");
+    try {
+      const saved = await updateOrderInApi(order);
+      Object.assign(order, saved || {});
+      toast("Technician write-up saved on the work order");
+      render();
+    } catch (error) {
+      toast("The write-up could not be saved");
+    }
+  }
+  function bindPhoneOrder() {
+    document.querySelectorAll("[data-pos-mode]").forEach((button) => button.addEventListener("click", () => {
+      posMode = button.dataset.posMode;
+      posStripe = null;
+      render();
+    }));
+    document.querySelector("#pos-phone-form")?.addEventListener("submit", startPhoneEntry);
+    document.querySelector("#pos-phone-charge")?.addEventListener("click", confirmPhoneEntry);
+  }
+  function bindCardTerminal() {
+    if (state.route !== "pos") return;
+    bindPhoneOrder();
+    if (posReaders === null) {
+      posReaders = [];
+      loadPosReaders();
+    }
+    document.querySelector("#pos-order")?.addEventListener("change", (event) => {
+      posSelectedId = event.target.value;
+      posCharge = null;
+      posStripe = null;
+      render();
+    });
+    document.querySelector("#pos-save-writeup")?.addEventListener("click", savePosWriteup);
+    const form = document.querySelector("#pos-form");
+    if (!form) return;
+    document.querySelector("#pos-refresh")?.addEventListener("click", () => {
+      posReaders = null;
+      render();
+    });
+    document.querySelector("#pos-cancel")?.addEventListener("click", async () => {
+      if (!posCharge?.readerId) return;
+      try {
+        await apiFetch("/payments/terminal/cancel", { method: "POST", body: JSON.stringify({ readerId: posCharge.readerId }) });
+        posCharge = { ...posCharge, phase: "canceled", message: "The reader was cleared." };
+        clearTimeout(posPollTimer);
+        render();
+      } catch (error) {
+        toast(error.message || "The reader could not be cleared");
+      }
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      const button = form.querySelector("#pos-charge");
+      button.disabled = true;
+      const reuse = posCharge?.targetId === data.orderId && posCharge?.phase === "declined" ? posCharge.paymentIntentId : "";
+      try {
+        const result = await apiFetch("/payments/terminal/charge", { method: "POST", body: JSON.stringify({ readerId: data.readerId, amount: Number(data.amount), targetType: "work_order", targetId: data.orderId, paymentIntentId: reuse }) });
+        posCharge = { ...result, targetId: data.orderId };
+        render();
+      } catch (error) {
+        toast(error.message || "The card charge could not be started");
+        button.disabled = false;
+      }
+    });
+    if (posCharge?.phase === "waiting") pollPosCharge();
+  }
+  function openAssignmentEditor(order) {
+    const assignments = order.assignments?.length ? order.assignments : order.tech && order.tech !== "Unassigned" ? [{ name: order.tech, role: "primary", sharePercent: 100 }] : [];
+    const techs = state.users.filter((user) => user.active !== false && classificationFor(user) === "technician" && (user.techName || user.name));
+    const options = (role) => `<option value="">Select technician</option>${techs.map((user) => `<option value="${escapeAttr(user.id)}" ${assignments.find((item) => item.role === role)?.employeeId === user.id ? "selected" : ""}>${escapeHtml(user.techName || user.name)}</option>`).join("")}`;
+    const writeIn = assignments.find((item) => item.writeIn)?.name || "";
+    showModal(`<form class="modal" id="assignment-form"><div class="modal-head"><h2>Assigned technicians</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="form-grid"><label>Primary technician<select name="primary">${options("primary")}</select></label><label>Primary share %<input name="primaryShare" type="number" min="0" max="100" step="1" value="${assignments.find((item) => item.role === "primary")?.sharePercent ?? 100}"/></label><label>Secondary technician<select name="secondary">${options("secondary")}</select></label><label>Secondary share %<input name="secondaryShare" type="number" min="0" max="100" step="1" value="${assignments.find((item) => item.role === "secondary")?.sharePercent ?? 0}"/></label><label>Apprentice<select name="apprentice">${options("apprentice")}</select></label><label>Apprentice share %<input name="apprenticeShare" type="number" min="0" max="100" step="1" value="${assignments.find((item) => item.role === "apprentice")?.sharePercent ?? 0}"/></label><label class="full">Temporary technician name<input name="writeIn" value="${escapeAttr(writeIn)}" placeholder="Subcontractor or temp"/></label></div><p class="form-help">Only technicians appear in the lists. A temporary name is stored on this work order without a payroll rate.</p></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">Save assignments</button></div></form>`);
+    document.querySelector("#assignment-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const nextAssignments = ["primary", "secondary", "apprentice"].flatMap((role) => {
+        if (!data[role]) return [];
+        const user = state.users.find((item) => item.id === data[role]);
+        if (!user) return [];
+        return [{ id: `${order.id}-${role}`, employeeId: user.id, name: user.techName || user.name, role, sharePercent: Number(data[`${role}Share`]) || 0, assignedAt: (/* @__PURE__ */ new Date()).toISOString() }];
+      });
+      if (String(data.writeIn || "").trim()) nextAssignments.push({ id: `${order.id}-write-in`, name: data.writeIn.trim(), role: nextAssignments.length ? "secondary" : "primary", writeIn: true, sharePercent: 0, hoursWorked: 0, assignedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      const updated = applyAssignments(order, nextAssignments, state.users);
+      const saved = await updateOrderInApi({ ...order, ...updated, updatedAt: order.updatedAt });
+      const index = state.orders.findIndex((item) => item.id === order.id);
+      if (index >= 0) state.orders[index] = saved;
+      syncPayroll(saved);
+      save();
+      closeModal();
+      toast(`${saved.id} technicians updated`);
+      render();
+    };
+  }
+  function loadIntakeDraft() {
+    try {
+      const raw = localStorage.getItem(INTAKE_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+  function saveIntakeDraft(draft) {
+    try {
+      localStorage.setItem(INTAKE_STORAGE_KEY, JSON.stringify(serializableIntake(draft)));
+    } catch {
+    }
+  }
+  function openCustomerIntake() {
+    const stored = loadIntakeDraft();
+    const draft = stored && stored.customer ? stored : emptyIntakeDraft();
+    showModal('<div class="modal wide intake-modal" id="intake-host"></div>');
+    const backdrop = document.querySelector("#modal-root");
+    if (backdrop) backdrop.onclick = (event) => {
+      if (event.target === backdrop) event.stopPropagation();
+    };
+    const host = document.querySelector("#intake-host");
+    const profile = shopProfile();
+    mountIntakeWizard(host, {
+      draft,
+      users: state.users,
+      laborRate: Number(profile.laborRate || 165),
+      taxRate: Number(state.taxSettings?.rate || 0),
+      onSave: saveIntakeDraft,
+      onCancel: (current) => {
+        saveIntakeDraft(current);
+        closeModal();
+      },
+      decodeVin: async (vin) => {
+        const normalized = String(vin || "").trim().toUpperCase();
+        if (normalized.length !== 17) throw new Error("Enter a 17-character VIN first.");
+        return apiFetch(`/api/vehicles/decode/${encodeURIComponent(normalized)}`);
+      },
+      lookupPlate: async () => ({ available: false, message: profile.plateProviderEnabled ? "Plate lookup is enabled in settings but no provider responded." : "Plate lookup is not connected. Enter the plate for the file, then decode the VIN or type the vehicle." }),
+      analyze: async (current) => {
+        try {
+          const response = await apiFetch("/api/ai/assistant", { method: "POST", body: JSON.stringify({ message: `Shop intake review only. Vehicle ${current.vehicle?.year || ""} ${current.vehicle?.make || ""} ${current.vehicle?.model || ""}. Concern: ${current.concern?.description || ""}. Codes: ${current.diagnosis?.codes || "none"}.` }) });
+          if (response?.reply || response?.message) return { source: "assistant", notice: "MechPro assistant response. Confirm every test on the vehicle before selling parts.", causes: [{ name: "Assistant notes", detail: response.reply || response.message }] };
+        } catch {
+        }
+        return localDiagnosticChecklist(current);
+      },
+      onConvert: async (current) => {
+        const name = [current.customer.firstName, current.customer.lastName].filter(Boolean).join(" ");
+        const display = current.customer.company ? `${name} (${current.customer.company})` : name;
+        const address = [current.customer.address, [current.customer.city, current.customer.state, current.customer.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+        const existing = state.customers.find((item) => item.phone === current.customer.phone || current.customer.email && item.email === current.customer.email);
+        await saveCustomerRecord(existing, { name: display, phone: current.customer.phone, email: current.customer.email, billingAddress: address, billingNotes: `Intake ${current.id}` });
+        const vehicleId = `veh-${Date.now()}`;
+        await saveShopEntity("vehicles", { id: vehicleId, customer: display, vin: current.vehicle.vin, year: current.vehicle.year, make: current.vehicle.make, model: current.vehicle.model, plate: current.vehicle.plate, mileage: current.vehicle.mileage, color: current.vehicle.color });
+        const max = state.orders.reduce((highest, order) => Math.max(highest, Number(String(order.id).replace(/\D/g, "")) || 0), 1040);
+        const record = intakeOrderPayload(current, { id: `RO-${max + 1}`, laborRate: Number(profile.laborRate || 165), taxRate: Number(state.taxSettings?.rate || 0), users: state.users });
+        record.intake.photos = [];
+        for (const photo of current.photos || []) {
+          if (!photo.file) {
+            record.intake.photos.push(photo);
+            continue;
+          }
+          try {
+            const fileId = await uploadFileToStorage(photo.file, "intake", photo.file.type || "image/jpeg", { apiFetch });
+            record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, contentType: photo.contentType, takenAt: photo.takenAt, fileId });
+          } catch (error) {
+            record.intake.photos.push({ id: photo.id, slot: photo.slot, name: photo.name, takenAt: photo.takenAt, uploadError: error.message || "Upload failed" });
+          }
+        }
+        let saved = record;
+        if (!isOfflineDesktop()) {
+          const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
+          saved = response?.queued ? record : response;
+        }
+        state.orders.unshift(saved);
+        localStorage.removeItem(INTAKE_STORAGE_KEY);
+        save();
+        closeModal();
+        toast(`${saved.id} created from intake`);
+        render();
+      }
     });
   }
   function applyRemoteList(key, records, entityType = key) {
@@ -7950,29 +9860,43 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       console.error("Failed to load employees from API; using local data", error);
     }
   }
-  function employeeFormValue(employee, field, fallback = "") {
-    return escapeAttr(employee?.[field] ?? fallback);
+  function employeeFormValue(employee, field2, fallback = "") {
+    return escapeAttr(employee?.[field2] ?? fallback);
   }
   async function saveEmployeeRecord(existing, data) {
+    const email = String(existing?.email || data.workEmail || data.email || "").trim().toLowerCase();
     const record = {
       ...existing || {},
       id: existing?.id || `user-${Date.now()}`,
       name: data.name.trim(),
-      email: String(existing?.email || data.email).trim().toLowerCase(),
+      email,
       role: data.role,
-      title: data.title.trim(),
-      techName: data.techName.trim(),
+      title: String(data.title || "").trim(),
+      techName: String(data.techName || "").trim(),
       active: existing?.active !== false,
       employeeId: data.employeeId.trim(),
-      phone: data.phone.trim(),
-      address: data.address.trim(),
+      phone: String(data.phone || "").trim(),
+      address: String(data.address || "").trim(),
       startDate: data.startDate,
       employmentType: data.employmentType,
       payRate: Number(data.payRate),
       payFrequency: data.payFrequency,
-      department: data.department.trim(),
-      emergencyContact: data.emergencyContact.trim(),
+      classification: data.classification || classificationFor({ role: data.role, classification: existing?.classification }),
+      payPlan: PAY_PLANS.some((plan) => plan.id === data.payPlan) ? data.payPlan : existing?.payPlan || "hourly",
+      commissionPercent: Number(data.commissionPercent) || 0,
+      department: String(data.department || "").trim(),
+      emergencyContact: String(data.emergencyContact || "").trim(),
       taxStatus: data.taxStatus,
+      w4FilingStatus: data.w4FilingStatus || existing?.w4FilingStatus || "single",
+      w4Step2Checkbox: String(data.w4Step2Checkbox) === "true",
+      w4DependentCredits: Number(data.w4DependentCredits) || 0,
+      w4OtherIncome: Number(data.w4OtherIncome) || 0,
+      w4Deductions: Number(data.w4Deductions) || 0,
+      w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
+      pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
+      stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
+      federalWithholdingRate: Number(existing?.federalWithholdingRate) || 0,
+      ssn: String(data.ssn || existing?.ssn || "").replace(/\D/g, "").slice(-4),
       createdAt: existing?.createdAt || now(),
       updatedAt: existing?.updatedAt
     };
@@ -8197,7 +10121,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
         hideResults();
       }
     });
-    [form.elements.phone, form.elements.email].forEach((field) => field.addEventListener("input", () => {
+    [form.elements.phone, form.elements.email].forEach((field2) => field2.addEventListener("input", () => {
       form.dataset.duplicateConfirmed = "";
       duplicateElement.hidden = true;
     }));
@@ -8267,7 +10191,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return estimate;
   }
   function inventoryPartOptions(selected = "") {
-    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money3(item.price)}</option>`).join("")}`;
+    return `<option value="">Typed / non-stock part</option>${state.inventory.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} \xB7 ${money4(item.price)}</option>`).join("")}`;
   }
   function estimateEditorLine(line = {}, index = 0, removable = true) {
     const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee";
@@ -8282,7 +10206,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".25"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
-    <div class="job-line-total"><span>Line total</span><b>${money3(item.total)}</b></div>
+    <div class="job-line-total"><span>Line total</span><b>${money4(item.total)}</b></div>
   </article>`;
   }
   function estimateFromEditor(root, options = root?._estimateOptions || {}) {
@@ -8324,10 +10248,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
       row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
       row.querySelector(".job-line-quantity").step = type === "labor" ? ".25" : "1";
-      row.querySelector(".job-line-total b").textContent = money3(quantity * rate);
+      row.querySelector(".job-line-total b").textContent = money4(quantity * rate);
     });
     const estimate = estimateFromEditor(root), summary = root.querySelector(".job-estimate-summary");
-    if (summary) summary.innerHTML = `<span>Labor <b>${money3(estimate.labor)}</b></span><span>Parts <b>${money3(estimate.parts)}</b></span><span>Subtotal <b>${money3(estimate.subtotal)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+    if (summary) summary.innerHTML = `<span>Labor <b>${money4(estimate.labor)}</b></span><span>Parts <b>${money4(estimate.parts)}</b></span><span>Subtotal <b>${money4(estimate.subtotal)}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
     const total = document.querySelector("#new-estimate-total");
     if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
   }
@@ -8425,7 +10349,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     try {
       const link = await ensureCustomerDocumentLink("estimate", order.id);
       const subject = `Estimate ${order.id} \u2014 ${state.messagingSettings.shopName || "MechPro"}`;
-      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money3(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
+      const body = `${state.messagingSettings.shopName || "MechPro"} estimate for ${order.vehicle}: ${money4(order.total)}. Review each recommended line and sign to approve: ${link.url}`;
       const delivery = await deliverShopMessage({ channel, to, subject, body, metadata: { type: "estimate", workOrderId: order.id, approvalUrl: link.url } });
       order.lastEstimateLink = { url: link.url, expiresAt: link.expiresAt, sentAt: now(), channel, deliveryMode: delivery.mode };
       await updateOrderInApi(order);
@@ -8450,10 +10374,10 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function onsiteSignatureModal(kind, record) {
     const estimate = kind === "estimate" ? coherentOrderEstimate(record) : record;
     const number = kind === "estimate" ? record.id : record.number;
-    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money3(line.unitPrice)}` : line.type === "fee" ? `Flat fee \xB7 ${money3(line.total)}` : `${line.hours.toFixed(2)} hr \xD7 ${money3(line.laborRate)}`}</small></span><strong>${money3(line.total)}</strong></label>`).join("")}</fieldset>` : "";
+    const lineChoices = kind === "estimate" ? `<fieldset class="onsite-line-choices"><legend>Approve or decline each line</legend>${estimate.lines.map((line) => `<label><input type="checkbox" name="approvedLine" value="${escapeAttr(line.id)}" checked><span><b>${escapeHtml(line.description)}</b><small>${line.type === "part" ? `${line.quantity} \xD7 ${money4(line.unitPrice)}` : line.type === "fee" ? `Flat fee \xB7 ${money4(line.total)}` : `${line.hours.toFixed(2)} hr \xD7 ${money4(line.laborRate)}`}</small></span><strong>${money4(line.total)}</strong></label>`).join("")}</fieldset>` : "";
     const typeOptions = ESTIMATE_APPROVAL_TYPES.map((option) => `<option value="${option.value}">${escapeHtml(option.label)}</option>`).join("");
     const approvalFields = kind === "estimate" ? `<div class="form-grid approval-method-fields"><label>Approval type *<select name="approvalType" id="approval-type">${typeOptions}</select></label><label id="custom-approval-label" hidden>Custom approval type *<input name="customLabel" maxlength="${APPROVAL_CUSTOM_LABEL_MAX}" placeholder="e.g. Approved via fleet manager email"/></label><label class="full">Approval note (optional)<textarea name="approvalNote" maxlength="${APPROVAL_NOTE_MAX}" placeholder="Who approved, callback number, or other audit detail"></textarea></label></div>` : "";
-    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Authorize estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money3(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}${approvalFields}<label>Approver name *<input name="authorizationName" maxlength="100" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label" id="signature-capture">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer" id="approval-disclaimer">${kind === "estimate" ? "A signature authorizes the selected work. For phone, in-person, email, text, or other approval, MechPro records the current staff user and time instead." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary" id="save-document-approval">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
+    showModal(`<form class="modal wide" id="document-signature-form"><div class="modal-head"><h2>${kind === "estimate" ? "Authorize estimate" : "Sign invoice"} on this device</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(number)} \xB7 ${escapeHtml(record.vehicle || "")}</span><strong>${money4(estimate.total ?? estimate.amount)}</strong></div>${lineChoices}${approvalFields}<label>Approver name *<input name="authorizationName" maxlength="100" required value="${escapeAttr(record.customer || "")}"/></label><label class="signature-label" id="signature-capture">Draw signature *<canvas id="signature-pad" width="720" height="220"></canvas></label><p class="ai-disclaimer" id="approval-disclaimer">${kind === "estimate" ? "A signature authorizes the selected work. For phone, in-person, email, text, or other approval, MechPro records the current staff user and time instead." : "Signing acknowledges this invoice and the completed work listed on it."}</p></div><div class="modal-actions"><button type="button" class="secondary" id="clear-signature">Clear</button><button type="submit" class="primary" id="save-document-approval">${icon("signature", 14)} ${kind === "estimate" ? "Sign & approve" : "Sign invoice"}</button></div></form>`);
     const canvas = document.querySelector("#signature-pad"), context = canvas.getContext("2d");
     let drawing = false, drawn = false;
     const position = (event) => {
@@ -8561,7 +10485,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   function laborTechnicians() {
     return state.users.filter((user) => user.active && user.techName);
   }
-  function technicianName(id) {
+  function technicianName2(id) {
     const user = state.users.find((item) => item.id === id);
     return user?.techName || user?.name || "Technician unavailable";
   }
@@ -8569,7 +10493,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const selected = new Set(selectedIds);
     const technicians = laborTechnicians();
     for (const id of selected) {
-      if (!technicians.some((user) => user.id === id)) technicians.push({ id, techName: technicianName(id) });
+      if (!technicians.some((user) => user.id === id)) technicians.push({ id, techName: technicianName2(id) });
     }
     if (!technicians.length) return `<p class="labor-assignment-empty">No active technician profiles are available.</p>`;
     return technicians.map((user) => `<label><input type="checkbox" class="${className}" value="${escapeAttr(user.id)}" id="${escapeAttr(`${prefix}-${user.id}`)}" ${selected.has(user.id) ? "checked" : ""}/><span>${escapeHtml(user.techName)}</span></label>`).join("");
@@ -8579,7 +10503,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     if (!laborLines.length) return "";
     const rows = laborLines.map((line, index) => {
       const ids = normalizeTechnicianIds(line);
-      return `<article class="labor-assignment-row" data-assignment-line="${escapeAttr(line.id)}"><div><strong>${escapeHtml(line.description)}</strong><small>${Number(line.hours).toFixed(2)} hr \xB7 ${ids.length ? ids.map(technicianName).map(escapeHtml).join(", ") : "Unassigned"}</small></div><fieldset><legend>Assigned technicians</legend>${technicianCheckboxes(ids, "line-technician", `line-${index}`)}</fieldset></article>`;
+      return `<article class="labor-assignment-row" data-assignment-line="${escapeAttr(line.id)}"><div><strong>${escapeHtml(line.description)}</strong><small>${Number(line.hours).toFixed(2)} hr \xB7 ${ids.length ? ids.map(technicianName2).map(escapeHtml).join(", ") : "Unassigned"}</small></div><fieldset><legend>Assigned technicians</legend>${technicianCheckboxes(ids, "line-technician", `line-${index}`)}</fieldset></article>`;
     }).join("");
     return `<section class="labor-assignment-panel"><div class="job-section-head"><div><h3>Labor-line technicians</h3><p>Assign none, one, or several technicians to each labor operation.</p></div></div><div class="labor-assignment-bulk"><fieldset><legend>Apply these technicians to every labor line</legend>${technicianCheckboxes([], "bulk-technician", "bulk")}</fieldset><button class="secondary" type="button" id="apply-bulk-technicians">${icon("users", 14)} Apply to all labor lines</button></div><div class="labor-assignment-list">${rows}</div><button class="primary" type="button" id="save-labor-assignments">${icon("save", 14)} Save technician assignments</button></section>`;
   }
@@ -8587,14 +10511,14 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const estimate = coherentOrderEstimate(order), profile = shopProfile(), brand = printableBrand(profile);
     const billableLines = billableEstimateLines(estimate.lines);
     const technicianRows = laborLinePrintRows(billableLines, state.users.map((user) => ({ id: user.id, name: user.techName || user.name })));
-    const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money3(line.laborRate)}</td><td>${money3(line.total)}</td></tr>`).join("");
-    const partRows = billableLines.filter((line) => ["part", "fee"].includes(line.type)).map((line) => `<tr><td><b>${line.type === "fee" ? "Fee \xB7 " : ""}${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${line.type === "fee" ? "Flat fee" : Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money3(line.total)}</td></tr>`).join("");
+    const laborRows = technicianRows.map(({ line, technicianName: name }) => `<tr><td><b>${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${escapeHtml(name)}</td><td>${Number(line.hours).toFixed(2)}</td><td>${money4(line.laborRate)}</td><td>${money4(line.total)}</td></tr>`).join("");
+    const partRows = billableLines.filter((line) => ["part", "fee"].includes(line.type)).map((line) => `<tr><td><b>${line.type === "fee" ? "Fee \xB7 " : ""}${escapeHtml(line.description)}</b><small>${escapeHtml(line.notes || "")}</small></td><td>${line.type === "fee" ? "Flat fee" : Number(line.quantity)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.unitPrice)}</td><td>${line.priceStatus === "pending" ? "Pending" : money4(line.total)}</td></tr>`).join("");
     const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
     const approvalMarkup = estimateApprovalMarkup(order.estimateApproval);
     const win = window.open("", "_blank");
     if (!win) return toast("Allow pop-ups to print the job card");
     win.opener = null;
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.estimate-approval-record{display:flex;justify-content:space-between;gap:20px;margin-top:20px;padding:14px;border:1px solid #b9d0c2;background:#edf5ef}.estimate-approval-record span,.estimate-approval-record strong{display:block}.estimate-approval-record span{font-size:9px;text-transform:uppercase}.estimate-approval-record img{max-width:260px;max-height:90px;object-fit:contain}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money3(estimate.parts)}</b></div><div><span>Labor</span><b>${money3(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money3(supplies)}</b></div><div><span>Discount</span><b>-${money3(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money3(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money3(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${approvalMarkup}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(order.id)} job card</title><style>${brand.style}body{font:12px/1.45 system-ui,sans-serif;max-width:920px;margin:auto;padding:24px;color:#17231e}h2{margin:20px 0 7px;color:var(--brand);font-size:16px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta div,.concern{padding:10px;border:1px solid #d9dedb}.meta span{display:block;color:#64726b;font-size:9px;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #d9dedb;text-align:left;vertical-align:top}th{background:#eef3f0;font-size:9px;text-transform:uppercase}td small{display:block;margin-top:3px;color:#59665f}.totals{width:360px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:4px}.totals .total{margin-top:5px;border-top:2px solid #17231e;font-size:16px;font-weight:800}.notes{margin-top:18px;padding:10px;border:1px solid #e1d3a9;background:#fff8e7}.estimate-approval-record{display:flex;justify-content:space-between;gap:20px;margin-top:20px;padding:14px;border:1px solid #b9d0c2;background:#edf5ef}.estimate-approval-record span,.estimate-approval-record strong{display:block}.estimate-approval-record span{font-size:9px;text-transform:uppercase}.estimate-approval-record img{max-width:260px;max-height:90px;object-fit:contain}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:50px}.signatures div{border-top:1px solid #17231e;padding-top:5px;font-size:9px}@media print{body{padding:0}}</style></head><body>${brand.header}<h1>Work order ${escapeHtml(order.id)}</h1><div class="meta"><div><span>Customer</span><b>${escapeHtml(order.customer)}</b><br>${escapeHtml(order.phone || "")}</div><div><span>Vehicle</span><b>${escapeHtml(order.vehicle)}</b><br>VIN ${escapeHtml(order.vin || "Not provided")}</div></div><div class="concern"><b>Customer complaint</b><p>${escapeHtml(order.complaint || "")}</p></div><h2>Labor assignments</h2><table><thead><tr><th>Labor line</th><th>Technician</th><th>Hours</th><th>Rate</th><th>Line total</th></tr></thead><tbody>${laborRows || `<tr><td colspan="5">No labor lines.</td></tr>`}</tbody></table><h2>Parts</h2><table><thead><tr><th>Part</th><th>Quantity</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${partRows || `<tr><td colspan="4">No parts.</td></tr>`}</tbody></table><div class="totals"><div><span>Parts</span><b>${money4(estimate.parts)}</b></div><div><span>Labor</span><b>${money4(estimate.labor)}</b></div><div><span>Shop supplies</span><b>${money4(supplies)}</b></div><div><span>Discount</span><b>-${money4(estimate.discountAmount || 0)}</b></div><div><span>Tax</span><b>${money4(estimate.tax)}</b></div><div class="total"><span>Total</span><b>${money4(estimate.total)}</b></div></div>${estimate.exclusions?.length ? `<div class="notes"><b>Not included / pending</b><ul>${estimate.exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${approvalMarkup}<div class="signatures"><div>Service writer / date</div><div>Technician / date</div></div><script>window.addEventListener('load',()=>window.print())<\/script></body></html>`);
     win.document.close();
   }
   function jobWorkflowSteps(order, invoice) {
@@ -8615,6 +10539,29 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     toast(`${saved.id} completed and invoice generated`);
     render();
   }
+  function readHelpSnapshot() {
+    const user = currentUser();
+    if (!user) {
+      return {
+        route: pendingAuthProfile ? "pending-profile" : "login",
+        role: "",
+        subview: "",
+        selectionLabel: ""
+      };
+    }
+    const route = String(state.route || "");
+    let subview = "";
+    if (route === "pos") subview = posMode || "reader";
+    else if (route === "accounting") subview = accountingTab || "";
+    else if (route === "shopops") subview = shopOpsTab || "";
+    else if (route === "ai") subview = aiTab || "";
+    let selectionLabel = "";
+    if (route === "pos" && posSelectedId) {
+      const order = state.orders.find((item) => item.id === posSelectedId);
+      if (order) selectionLabel = `${order.id} \xB7 ${order.customer || "No customer"} \xB7 ${order.vehicle || "No vehicle"}`;
+    }
+    return { route, role: user.role || "", subview, selectionLabel };
+  }
   function estimateParty(estimate, fallback = {}) {
     const customer = typeof estimate.customer === "object" ? estimate.customer : { ...estimate.customerDetails || {}, name: estimate.customer || estimate.customerDetails?.name || fallback.customer, phone: estimate.phone || estimate.customerDetails?.phone || fallback.phone, email: estimate.email || estimate.customerDetails?.email, address: estimate.address || estimate.customerDetails?.address };
     const vehicle = typeof estimate.vehicle === "object" ? estimate.vehicle : { ...estimate.vehicleDetails || {}, description: estimate.vehicle || estimate.vehicleDetails?.description || fallback.vehicle, vin: estimate.vin || estimate.vehicleDetails?.vin || fallback.vin, plate: estimate.plate || estimate.vehicleDetails?.plate || fallback.plate };
@@ -8622,9 +10569,9 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
   }
   function estimateLinePresentation(line) {
     const pending = line.priceStatus === "pending";
-    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money3(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : line.type === "fee" ? `Flat fee \xB7 ${money3(line.total)}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money3(line.laborRate)}`;
-    const assigned = line.type === "labor" ? normalizeTechnicianIds(line).map(technicianName) : [];
-    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small><span class="badge ${line.laborVerified ? "paid" : "estimate"}">${line.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(line.laborSource || "Shop estimate")}</small><small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money3(line.total)}</b></article>`;
+    const meta = line.type === "part" ? `${Number(line.quantity || 0)} \xD7 ${money4(line.unitPrice)}${line.partNumber ? ` \xB7 ${escapeHtml(line.partNumber)}` : ""}` : line.type === "fee" ? `Flat fee \xB7 ${money4(line.total)}` : `${Number(line.hours || 0).toFixed(2)} hr \xD7 ${money4(line.laborRate)}`;
+    const assigned = line.type === "labor" ? normalizeTechnicianIds(line).map(technicianName2) : [];
+    return `<article class="reference-estimate-line ${pending ? "pending" : ""}"><div><strong>${escapeHtml(line.description)}</strong><small>${meta}</small>${line.type === "labor" ? `<small><span class="badge ${line.laborVerified ? "paid" : "estimate"}">${line.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(line.laborSource || "Shop estimate")}</small><small class="line-technicians">Technicians: ${assigned.length ? assigned.map(escapeHtml).join(", ") : "Unassigned"}</small>` : ""}${line.notes ? `<p>${escapeHtml(line.notes)}</p>` : ""}</div><b>${pending ? "Pending" : money4(line.total)}</b></article>`;
   }
   function estimatePresentation(record, estimate, { locked = false, standalone = false } = {}) {
     const { customer, vehicle } = estimateParty(estimate, record);
@@ -8643,16 +10590,16 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       <section><span>Vehicle</span><h3>${escapeHtml(vehicle.description || "Vehicle not provided")}</h3><p>${vehicle.vin ? `VIN ${escapeHtml(vehicle.vin)}` : "VIN not provided"}${vehicle.plate ? `<br>Plate ${escapeHtml(vehicle.plate)}` : ""}${insurance.policy ? `<br>${escapeHtml(insurance.company || "Insurance")} \xB7 Policy ${escapeHtml(insurance.policy)}` : ""}</p></section>
     </div>
     <section class="reference-complaint"><span>Customer complaint / loss</span><p>${escapeHtml(complaint)}</p></section>
-    <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money3(estimate.parts)}</b></div></section>
+    <section class="reference-estimate-section"><div class="reference-section-title"><span>01</span><h3>Parts</h3></div>${parts.map(estimateLinePresentation).join("") || `<p>No parts quoted.</p>`}<div class="reference-subtotal"><span>Priced parts</span><b>${money4(estimate.parts)}</b></div></section>
     <section class="reference-estimate-section"><div class="reference-section-title"><span>02</span><h3>Labor</h3></div>${labor.map(estimateLinePresentation).join("") || `<p>No labor quoted.</p>`}</section>
     ${feeLines.length ? `<section class="reference-estimate-section"><div class="reference-section-title"><span>03</span><h3>Fees</h3></div>${feeLines.map(estimateLinePresentation).join("")}</section>` : ""}
     <section class="reference-totals">
-      <div><span>Labor</span><b>${money3(estimate.labor)}</b></div>
-      ${feeLines.length ? `<div><span>Fees</span><b>${money3(estimate.lineFees || 0)}</b></div>` : ""}
-      <div><span>Shop supplies</span><b>${money3(supply?.amount || 0)}</b></div>
-      <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` \xB7 ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money3(estimate.discountAmount)}` : money3(0)}</b></div>
-      <div><span>Tax \xB7 ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money3(estimate.tax)}</b></div>
-      <div class="total"><span>Estimate total</span><b>${money3(estimate.total)}</b></div>
+      <div><span>Labor</span><b>${money4(estimate.labor)}</b></div>
+      ${feeLines.length ? `<div><span>Fees</span><b>${money4(estimate.lineFees || 0)}</b></div>` : ""}
+      <div><span>Shop supplies</span><b>${money4(supply?.amount || 0)}</b></div>
+      <div><span>${escapeHtml(estimate.discountReason || "Discount")}${estimate.discountPercent ? ` \xB7 ${estimate.discountPercent}%` : ""}</span><b>${estimate.discountAmount ? `-${money4(estimate.discountAmount)}` : money4(0)}</b></div>
+      <div><span>Tax \xB7 ${Number(estimate.taxRate || 0).toFixed(2)}%</span><b>${money4(estimate.tax)}</b></div>
+      <div class="total"><span>Estimate total</span><b>${money4(estimate.total)}</b></div>
     </section>
     <aside class="reference-exclusions"><strong>Not included / still pending</strong><ul>${exclusions.length ? exclusions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Additional or hidden work is not included without a revised estimate and authorization.</li>"}</ul></aside>
     ${standalone ? "" : estimateApprovalMarkup(record.estimateApproval)}
@@ -8721,12 +10668,87 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     refreshEstimateEditor(root);
     toast(`${draft.sourceEstimateNumber || "Estimate"} filled for review. The work order has not been created.`);
   }
+  function readNewOrderDraftFromForm(form) {
+    if (!form) return null;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const estimate = typeof readNewOrderEstimate === "function" ? readNewOrderEstimate() : null;
+    return {
+      ...data,
+      estimateLines: estimate?.lines || [],
+      savedAt: Date.now()
+    };
+  }
+  function applyStoredNewOrderDraft(form, draft) {
+    if (!form || !draft) return;
+    for (const [key, value2] of Object.entries(draft)) {
+      if (key === "estimateLines" || key === "savedAt") continue;
+      const field2 = form.elements[key];
+      if (!field2 || value2 == null) continue;
+      if (field2.type === "checkbox") field2.checked = Boolean(value2);
+      else field2.value = value2;
+    }
+    form.elements.customerSelect?.dispatchEvent(new Event("change"));
+    if (draft.customerSelect && draft.customerSelect !== "__new__") {
+      form.elements.customerSelect.value = draft.customerSelect;
+      form.elements.customerSelect.dispatchEvent(new Event("change"));
+    }
+    if (draft.vehicle) form.elements.vehicle.value = draft.vehicle;
+    if (draft.vin) form.elements.vin.value = draft.vin;
+    if (draft.phone) form.elements.phone.value = draft.phone;
+    if (Array.isArray(draft.estimateLines) && draft.estimateLines.length) {
+      const lines = document.querySelector("#new-estimate-lines");
+      if (lines) {
+        lines.innerHTML = draft.estimateLines.map((line) => newOrderEstimateRow(line)).join("");
+        bindEstimateEditor(lines);
+        refreshEstimateEditor(lines);
+      }
+    }
+  }
+  function bindNewOrderDraftAutosave(form) {
+    if (!form) return;
+    let timer = 0;
+    const persist = () => {
+      try {
+        localStorage.setItem(NEW_ORDER_DRAFT_KEY, JSON.stringify(readNewOrderDraftFromForm(form)));
+      } catch {
+      }
+    };
+    const schedule2 = () => {
+      clearTimeout(timer);
+      timer = setTimeout(persist, 400);
+    };
+    form.addEventListener("input", schedule2);
+    form.addEventListener("change", schedule2);
+    setModalAutosave(() => {
+      clearTimeout(timer);
+      persist();
+    });
+    form.addEventListener("submit", () => {
+      try {
+        localStorage.removeItem(NEW_ORDER_DRAFT_KEY);
+      } catch {
+      }
+      setModalAutosave(null);
+    }, { capture: true });
+  }
   function openNewWithDraft(draft = null) {
     openNewEstimateFillCore();
     const form = document.querySelector("#new-form");
     if (!form) return;
     addEstimateSourceControls(form);
-    if (draft) applyWorkOrderDraftToForm(form, draft);
+    if (draft) {
+      applyWorkOrderDraftToForm(form, draft);
+    } else {
+      try {
+        const stored = JSON.parse(localStorage.getItem(NEW_ORDER_DRAFT_KEY) || "null");
+        if (stored && Date.now() - Number(stored.savedAt || 0) < 7 * 24 * 60 * 60 * 1e3) {
+          applyStoredNewOrderDraft(form, stored);
+          toast("Restored unsaved work order draft");
+        }
+      } catch {
+      }
+    }
+    bindNewOrderDraftAutosave(form);
   }
   function assistantMessageMarkup(item, index) {
     const actions = (item.actions || []).map((action, actionIndex) => action.kind === "estimate_work_order_draft" ? `<button type="button" class="assistant-draft-action" data-assistant-draft="${index}:${actionIndex}">${icon("clipboard-plus", 14)} Save estimate & fill work order</button>` : "").join("");
@@ -8813,7 +10835,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     return Number.isNaN(date.valueOf()) ? String(value2 || "") : date.toLocaleString();
   }
   function paymentHistoryMarkup(summary) {
-    const rows = summary.history.map((payment) => `<tr><td>${escapeHtml(paymentTimestamp(payment.receivedAt))}</td><td>${escapeHtml(paymentMethodLabel(payment.method))}</td><td><b>${money3(Number(payment.amount || 0))}</b></td><td>${escapeHtml(payment.reference || payment.note || "\u2014")}<small>${payment.reference && payment.note ? escapeHtml(payment.note) : ""}</small></td></tr>`).join("");
+    const rows = summary.history.map((payment) => `<tr><td>${escapeHtml(paymentTimestamp(payment.receivedAt))}</td><td>${escapeHtml(paymentMethodLabel(payment.method))}</td><td><b>${money4(Number(payment.amount || 0))}</b></td><td>${escapeHtml(payment.reference || payment.note || "\u2014")}<small>${payment.reference && payment.note ? escapeHtml(payment.note) : ""}</small></td></tr>`).join("");
     return `<div class="payment-history"><div class="payment-history-head"><strong>Payment history</strong><span>${summary.history.length} payment${summary.history.length === 1 ? "" : "s"}</span></div>${rows ? `<table><thead><tr><th>Date / time</th><th>Method</th><th>Amount</th><th>Reference / notes</th></tr></thead><tbody>${rows}</tbody></table>` : `<p>No payments recorded yet.</p>`}</div>`;
   }
   function localDateTimeValue(date = /* @__PURE__ */ new Date()) {
@@ -8846,7 +10868,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
       }
       save();
       closeModal();
-      toast(`${money3(amount)} payment recorded \xB7 ${money3(result.summary.balance)} remaining`);
+      toast(`${money4(amount)} payment recorded \xB7 ${money4(result.summary.balance)} remaining`);
       render();
       if (targetType === "work_order") openOrder(targetId);
     } catch (error) {
@@ -8860,7 +10882,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const summary = targetType === "invoice" ? invoicePaymentSummary(target) : workOrderPaymentSummary(target);
     if (summary.balance <= 0) return toast("This record has no remaining balance");
     const labelText = targetType === "invoice" ? target.number : target.id;
-    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(labelText)} \xB7 ${escapeHtml(target.customer || "")}</span><strong>${money3(summary.balance)} remaining</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${summary.balance}" step=".01" placeholder="Enter partial or full amount" required/></label><label>Method<select name="method">${["cash", "card", "check", "bank", "other"].map((method) => `<option value="${method}" ${method === initialMethod || initialMethod === "processor" && method === "card" ? "selected" : ""}>${paymentMethodLabel(method)}</option>`).join("")}</select></label><label>Received date / time<input name="receivedAt" type="datetime-local" value="${localDateTimeValue()}" required/></label><label>Reference / receipt<input name="reference" maxlength="160" placeholder="Receipt, check, or transaction ID"/></label><label class="full">Notes<textarea name="note" maxlength="500" placeholder="Optional payment note"></textarea></label></div><div class="payment-preview"><span>Paid to date <b>${money3(summary.paid)}</b></span><span>Current balance <b>${money3(summary.balance)}</b></span></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("check", 14)} Record payment</button></div></form>`);
+    showModal(`<form class="modal" id="payment-form"><div class="modal-head"><h2>Record payment</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body"><div class="estimate-sign-summary"><span>${escapeHtml(labelText)} \xB7 ${escapeHtml(target.customer || "")}</span><strong>${money4(summary.balance)} remaining</strong></div><div class="form-grid"><label>Amount received *<input name="amount" type="number" min="0.01" max="${summary.balance}" step=".01" placeholder="Enter partial or full amount" required/></label><label>Method<select name="method">${["cash", "card", "check", "bank", "other"].map((method) => `<option value="${method}" ${method === initialMethod || initialMethod === "processor" && method === "card" ? "selected" : ""}>${paymentMethodLabel(method)}</option>`).join("")}</select></label><label>Received date / time<input name="receivedAt" type="datetime-local" value="${localDateTimeValue()}" required/></label><label>Reference / receipt<input name="reference" maxlength="160" placeholder="Receipt, check, or transaction ID"/></label><label class="full">Notes<textarea name="note" maxlength="500" placeholder="Optional payment note"></textarea></label></div><div class="payment-preview"><span>Paid to date <b>${money4(summary.paid)}</b></span><span>Current balance <b>${money4(summary.balance)}</b></span></div></div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon("check", 14)} Record payment</button></div></form>`);
     document.querySelector("#payment-form").onsubmit = (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.target));
@@ -9069,7 +11091,7 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
     const presets = filingPeriodPresets();
     const range = taxPackageRange || presets.ytd;
     const pack = buildTaxPackage(range.from, range.to);
-    const catRows = Object.entries(pack.byCategory).map(([cat, amt]) => `<div class="statement-line"><span>${escapeHtml(cat)}</span><b>${money3(amt)}</b></div>`).join("") || '<div class="statement-line"><span>No expenses in range</span><b>$0.00</b></div>';
+    const catRows = Object.entries(pack.byCategory).map(([cat, amt]) => `<div class="statement-line"><span>${escapeHtml(cat)}</span><b>${money4(amt)}</b></div>`).join("") || '<div class="statement-line"><span>No expenses in range</span><b>$0.00</b></div>';
     return `<div class="tax-package-print" id="tax-package-printable">
 <div class="payroll-period-controls no-print" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
 <button type="button" class="secondary" data-taxpkg-preset="month">MTD</button>
@@ -9082,12 +11104,12 @@ AI workflow: ${aiResult.diagnostics.causes[0]?.cause || "Inspection required"}`.
 <button type="button" class="secondary" id="taxpkg-export-exp">${icon("download", 14)} Export expenses</button>
 <button type="button" class="secondary" id="taxpkg-print">${icon("printer", 14)} Print</button>
 </div>
-<div class="finance-kpis"><article><span>Service revenue (ex-tax)</span><strong>${money3(pack.revenue)}</strong></article><article><span>Operating expenses</span><strong>${money3(pack.expenseTotal)}</strong></article><article class="${pack.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money3(pack.net)}</strong></article><article><span>Sales tax collected</span><strong>${money3(pack.salesTax)}</strong><small>Liability \u2014 not income</small></article></div>
+<div class="finance-kpis"><article><span>Service revenue (ex-tax)</span><strong>${money4(pack.revenue)}</strong></article><article><span>Operating expenses</span><strong>${money4(pack.expenseTotal)}</strong></article><article class="${pack.net >= 0 ? "positive" : "negative"}"><span>Net income</span><strong>${money4(pack.net)}</strong></article><article><span>Sales tax collected</span><strong>${money4(pack.salesTax)}</strong><small>Liability \u2014 not income</small></article></div>
 <div class="accounting-grid"><section class="statement"><div class="statement-head"><div><div class="eyebrow">Cash-basis P&amp;L</div><h2>${escapeHtml(pack.from)} \u2192 ${escapeHtml(pack.to)}</h2></div><span class="badge paid">Schedule C prep</span></div>
-<div class="statement-line"><span>Service revenue</span><b>${money3(pack.revenue)}</b></div>
+<div class="statement-line"><span>Service revenue</span><b>${money4(pack.revenue)}</b></div>
 ${catRows}
-<div class="statement-line total"><span>Net income</span><b>${money3(pack.net)}</b></div>
-<small>${pack.payments} payments \xB7 Sales tax ${money3(pack.salesTax)} held in 2100</small>
+<div class="statement-line total"><span>Net income</span><b>${money4(pack.net)}</b></div>
+<small>${pack.payments} payments \xB7 Sales tax ${money4(pack.salesTax)} held in 2100</small>
 </section>
 <section class="statement"><div class="statement-head"><div><div class="eyebrow">Filing note</div><h2>Income tax package</h2></div></div>
 <p>Export these CSVs for your CPA or Schedule C. Revenue excludes sales tax collected. MechPro does not e-file Form 1040/1120 \u2014 use the package with your preparer or tax software.</p>
@@ -9368,7 +11390,7 @@ ${catRows}
     }
     if (state.route === "settings") render();
   }
-  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, pendingCreateIdsForCollection2, visibleSidebar2, chatDerivedCache, integrationStatus, laborLookupResults, partsLookupResult, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, renderHomeCore, customerListEpoch, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, openEmployeeFilingCore, bindFilingCore, bindFilingTaxSettingsCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
+  var buildHomeModel2, emptyState2, greetingForNow2, localIsoDate2, mergeRemoteCollection2, pendingCreateIdsForCollection2, visibleSidebar2, chatDerivedCache, posReaders, posConfigured, posCharge, posPollTimer, posSelectedId, posMode, posPhoneEntry, posStripe, integrationStatus, laborLookupResults, partsLookupResult, assistantConversation, assistantPaused, assistantSessionId, STORE, seed, LOCAL_PREFERENCES_VERSION, stripePaymentStatus, state, filter, query, importPreview, accountingTab, payrollPeriodKey, taxPackageRange, filingCenterOpen, shopOpsTab, reminderFilter, aiTab, aiResult, taxReportResult, chatConversationId, chatRefreshTimer, platformAccounts, platformAccountsLoading, elmPort, pendingAuthProfile, usStates, saveTimer, pendingStateSnapshot, persistedStateSnapshot, cloudflareConfig2, desktopEntitlementVerified, desktopLoginMessage, offlineAccountReady, offlineAccountEmail, cloudflareSignIn, MUTATION_QUEUE_STORE, mutationQueueStore, flushingMutationQueue, shopEntityCollections, roleLabel, roleRoutes, attentionDismissBound, userMenuDismissBound, inspectionPoints, relationshipDerivedCache, autozoneAccount, partstechAccount, laborGuideAccount, quickbooksAccount, financeDerivedCache, modalAutosaveFlush, baseShopOperations, bindEstimateActionsCore, bindNewOrderEstimatorCore, renderCore, bindBeforeProfileSync, shopProfileDefaults, appearanceMedia, importTypes, bindImportIntegrityCore, bindBrandingFeaturesCore, bindPrintableInvoiceCore, bindInvoiceDeleteActionsCore, updateOrderWithInvoiceCore, sampleOrderIds, sampleInvoiceIds, sampleCustomerNames, onboardingCheckComplete, bindRecordManagementCore, renderOnboardingCore, operationsInventoryCore, bindVendorManagementCore, settingsDataResetCore, bindDataResetCore, settingsAgentPhoneCore, settingsAppsBillingCore, bindAgentPhoneSettingsCore, bindAssistantGlobalCore, apiFetchAssistantCore, bindPosCore, renderHomeCore, customerListEpoch, openNewCore, bindJobCardInvoiceCore, loadShopEntitiesWithTaxSettingsCore, bindDurableRecordsCore, NEW_ORDER_DRAFT_KEY, openNewEstimateFillCore, bindReferenceEstimatesCore, paymentStatusLabelCore, openOrderPaymentCore, SESSION_KEEPALIVE_MS, saveCloudPreferences, offlineSaveTimer, bindFilingCore, renderShopOsCore, shopAiSettings, settingsShopAiCore, bindShopAiCore, apiFetchShopAiNoticeCore;
   var init_legacy = __esm({
     "src/runtime/legacy.js"() {
       init_config();
@@ -9397,6 +11419,10 @@ ${catRows}
       init_entity_persistence();
       init_mutation_queue_store();
       init_payments();
+      init_card_terminal();
+      init_help_menu();
+      init_technician_assignment();
+      init_intake_wizard();
       init_work_order_editor();
       init_estimate_workflow();
       init_estimate_templates();
@@ -9404,6 +11430,14 @@ ${catRows}
       init_estimate_approval();
       ({ buildHomeModel: buildHomeModel2, emptyState: emptyState2, greetingForNow: greetingForNow2, localIsoDate: localIsoDate2, mergeRemoteCollection: mergeRemoteCollection2, pendingCreateIdsForCollection: pendingCreateIdsForCollection2, visibleSidebar: visibleSidebar2 } = window.__MECHPRO_HOME__);
       chatDerivedCache = null;
+      posReaders = null;
+      posConfigured = false;
+      posCharge = null;
+      posPollTimer = 0;
+      posSelectedId = "";
+      posMode = "reader";
+      posPhoneEntry = false;
+      posStripe = null;
       integrationStatus = null;
       laborLookupResults = [];
       partsLookupResult = null;
@@ -9462,7 +11496,7 @@ ${catRows}
         estimates: [],
         // Default messaging settings – replace with your real service endpoint to enable email/SMS delivery.
         messagingSettings: { enabled: true, endpoint: "https://httpbin.org/post", senderEmail: "no-reply@example.com", senderPhone: "", shopName: "Your Car Guy" },
-        billingSettings: { enabled: false, provider: "stripe_connect", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy" },
+        billingSettings: { enabled: false, provider: "stripe", checkoutEndpoint: "", onboardingUrl: "", accountLabel: "", shopName: "Your Car Guy", shopId: "", webhookUrl: "" },
         payments: [],
         taxSettings: { state: "TX", taxId: "", rate: 8.25, filingFrequency: "Monthly", ein: "", texasTaxpayerNumber: "", webfileNumber: "", jurisdictions: null },
         chartOfAccounts: [
@@ -9495,6 +11529,7 @@ ${catRows}
         ]
       };
       LOCAL_PREFERENCES_VERSION = 2;
+      stripePaymentStatus = null;
       state = load();
       filter = "active";
       query = "";
@@ -9532,7 +11567,7 @@ ${catRows}
       window.addEventListener("online", flushMutationQueue);
       shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
       roleLabel = { super_admin: "Super Admin", admin: "Admin", technician: "Technician", office: "Office", service_writer: "Service Writer" };
-      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "accounting", "payroll", "messaging", "payments", "integrations", "support", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll", "integrations", "support"], office: ["customers", "shopops", "chat", "invoices", "accounting", "messaging", "integrations", "support"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "ai", "messaging", "integrations", "support"] };
+      roleRoutes = { super_admin: ["superadmin"], admin: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "accounting", "payroll", "messaging", "payments", "integrations", "support", "imports", "reports", "settings", "employees"], technician: ["dispatch", "orders", "schedule", "shopops", "oem-diagnostics", "obd", "keys", "chat", "ai", "payroll", "integrations", "support"], office: ["customers", "shopops", "chat", "invoices", "pos", "accounting", "messaging", "integrations", "support"], service_writer: ["dispatch", "orders", "schedule", "customers", "shopops", "oem-diagnostics", "obd", "keys", "chat", "invoices", "pos", "ai", "messaging", "integrations", "support"] };
       attentionDismissBound = false;
       userMenuDismissBound = false;
       inspectionPoints = ["Exterior lights", "Windshield", "Wiper blades", "Washer operation", "Mirrors", "Horn", "Seat belts", "Warning lights", "Battery condition", "Battery terminals", "Charging system", "Engine oil", "Coolant", "Brake fluid", "Power steering fluid", "Transmission fluid", "Belts", "Hoses", "Air filter", "Cabin filter", "Fuel system leaks", "Exhaust system", "Front brake pads", "Rear brake pads", "Brake rotors/drums", "Brake hoses/lines", "Parking brake", "Steering components", "Front suspension", "Rear suspension", "CV boots/U-joints", "Wheel bearings", "Tire tread LF", "Tire tread RF", "Tire tread LR", "Tire tread RR"];
@@ -9543,13 +11578,14 @@ ${catRows}
       quickbooksAccount = { connected: false, loaded: false };
       globalThis.mechProElm327 = { normalizeElmResponse, parseElmPid, parseElmDtcs, formatElmResult };
       financeDerivedCache = null;
+      modalAutosaveFlush = null;
       baseShopOperations = shopOperations;
       shopOperations = function() {
         if (shopOpsTab !== "analytics") return baseShopOperations().replace("OBD-II</button></div>", 'OBD-II</button><button class="tab" data-ops-tab="analytics">Analytics</button></div>');
         return shell(`${heading("Connected workflow", "Shop operations", "Linked operational records and performance.", false)}<div class="accounting-tabs ops-tabs">${[["vehicles", "Vehicles"], ["inspections", "Inspections"], ["inventory", "Inventory"], ["services", "Canned services"], ["reminders", "Reminders"], ["diagnostics", "OBD-II"], ["analytics", "Analytics"]].map((tab) => `<button class="tab ${shopOpsTab === tab[0] ? "active" : ""}" data-ops-tab="${tab[0]}">${tab[1]}</button>`).join("")}</div>${operationsAnalytics()}`);
       };
       savedEstimates = function() {
-        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td><span class="badge ${estimate.status === "approved" ? "paid" : estimate.status === "declined" ? "overdue" : "estimate"}">${escapeHtml(estimate.status)}</span><small>${escapeHtml(estimate.decisionNote || "")}</small></td><td><b>${money3(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount \xB7 ${escapeHtml(estimate.discountReason || "")}` : "No discount"}</small></td><td><div class="estimate-actions"><button class="mini-action" data-estimate-discount="${estimate.id}">${icon("percent", 13)} Discount</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button>${estimate.status === "pending" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${estimate.id}">${icon("circle-x", 13)} Decline</button>` : ""}</div></td></tr>`).join("");
+        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${estimate.number}</b></td><td>${escapeHtml(estimate.customer)}<small>${escapeHtml(estimate.vehicle)}</small></td><td><span class="badge ${estimate.status === "approved" ? "paid" : estimate.status === "declined" ? "overdue" : "estimate"}">${escapeHtml(estimate.status)}</span><small>${escapeHtml(estimate.decisionNote || "")}</small></td><td><b>${money4(estimate.total)}</b><small>${estimate.discountPercent ? `${estimate.discountPercent}% discount \xB7 ${escapeHtml(estimate.discountReason || "")}` : "No discount"}</small></td><td><div class="estimate-actions"><button class="mini-action" data-estimate-discount="${estimate.id}">${icon("percent", 13)} Discount</button><button class="mini-action" data-send-estimate="${estimate.id}" data-channel="email">${icon("mail", 13)} Email</button>${estimate.status === "pending" ? `<button class="mini-action" data-sign-estimate="${estimate.id}">${icon("signature", 13)} Sign</button><button class="mini-action danger" data-estimate-decline="${estimate.id}">${icon("circle-x", 13)} Decline</button>` : ""}</div></td></tr>`).join("");
         return `<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Discount, send, approve with a signature, or record a declined decision.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Decision</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
       };
       bindEstimateActionsCore = bindEstimateActions;
@@ -9567,7 +11603,7 @@ ${catRows}
       };
       newOrderEstimateRow = function(line = { service: "Custom service", notes: "Describe the inspection, labor, parts, and verification included with this service.", hours: 1, parts: 0, discount: 0 }) {
         const inventoryOptions = state.inventory.map((item) => `<option value="${escapeHtml(item.id)}" ${line.inventoryId === item.id ? "selected" : ""}>${escapeHtml(item.sku || "No SKU")} \xB7 ${escapeHtml(item.name)} (${Number(item.quantity || 0)} on hand)</option>`).join("");
-        return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes || line.description || "")}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || line.laborHours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts ?? line.partsPrice ?? 0).toFixed(2)}"/></label><label>Discount %<input class="estimate-discount" type="number" min="0" max="100" step=".1" value="${Number(line.discount || 0)}"/></label><label>Inventory SKU<select class="estimate-inventory"><option value="">Not linked</option>${inventoryOptions}</select></label><label>Committed quantity<input class="estimate-committed-quantity" type="number" min=".01" step=".01" value="${Number(line.committedQuantity || 1)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money3((Number(line.hours || line.laborHours || 0) * 165 + Number(line.parts ?? line.partsPrice ?? 0)) * (1 - Number(line.discount || 0) / 100))}</b></div></div></article>`;
+        return `<article class="new-estimate-line"><div class="estimate-line-head"><strong>Service line</strong><button class="icon-button remove-estimate-line" type="button" title="Remove service">${icon("trash-2", 14)}</button></div><label>Service<input class="estimate-service" value="${escapeHtml(line.service)}" required/></label><label>What this service includes<textarea class="estimate-explanation" required>${escapeHtml(line.notes || line.description || "")}</textarea></label><div class="estimate-line-numbers"><label>Labor hours<input class="estimate-hours" type="number" min="0" step=".25" value="${Number(line.hours || line.laborHours || 0)}"/></label><label>Parts & materials<input class="estimate-parts" type="number" min="0" step=".01" value="${Number(line.parts ?? line.partsPrice ?? 0).toFixed(2)}"/></label><label>Discount %<input class="estimate-discount" type="number" min="0" max="100" step=".1" value="${Number(line.discount || 0)}"/></label><label>Inventory SKU<select class="estimate-inventory"><option value="">Not linked</option>${inventoryOptions}</select></label><label>Committed quantity<input class="estimate-committed-quantity" type="number" min=".01" step=".01" value="${Number(line.committedQuantity || 1)}"/></label><div><span>Line total</span><b class="estimate-line-total">${money4((Number(line.hours || line.laborHours || 0) * 165 + Number(line.parts ?? line.partsPrice ?? 0)) * (1 - Number(line.discount || 0) / 100))}</b></div></div></article>`;
       };
       readNewOrderEstimate = function() {
         const lines = [...document.querySelectorAll(".new-estimate-line")].map((row) => {
@@ -9580,10 +11616,10 @@ ${catRows}
         const form = document.querySelector("#new-form"), trip = refreshMileagePreview(form, { rate: shopMileageRate() }), estimate = applyMileageToEstimate(readNewOrderEstimate(), trip.roundTrip, shopMileageRate(), state.taxSettings.rate);
         document.querySelectorAll(".new-estimate-line").forEach((row) => {
           const hours = Math.max(0, Number(row.querySelector(".estimate-hours").value) || 0), parts = Math.max(0, Number(row.querySelector(".estimate-parts").value) || 0), discount = Math.min(100, Math.max(0, Number(row.querySelector(".estimate-discount").value) || 0));
-          row.querySelector(".estimate-line-total").textContent = money3((hours * 165 + parts) * (1 - discount / 100));
+          row.querySelector(".estimate-line-total").textContent = money4((hours * 165 + parts) * (1 - discount / 100));
         });
         const summary = document.querySelector("#new-estimate-summary");
-        if (summary) summary.innerHTML = `<span>Labor <b>${money3(estimate.labor)}</b></span><span>Parts <b>${money3(estimate.parts)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Labor <b>${money4(estimate.labor)}</b></span><span>Parts <b>${money4(estimate.parts)}</b></span><span>Discount <b>-${money4(estimate.discountAmount)}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total) total.value = estimate.total.toFixed(2);
       };
@@ -9593,7 +11629,7 @@ ${catRows}
         const lines = document.querySelector("#new-estimate-lines");
         const canned = visibleCannedServices();
         if (!lines || !canned.length) return;
-        const picker = cannedServiceGroups(canned).map((group) => `<div class="canned-service-picker"><span>${escapeHtml(group.label)}</span>${group.items.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${escapeAttr(service.id)}">${escapeHtml(service.name)} \xB7 ${money3(Number(service.menuPrice ?? service.partsPrice ?? 0))}</button>`).join("")}</div>`).join("");
+        const picker = cannedServiceGroups(canned).map((group) => `<div class="canned-service-picker"><span>${escapeHtml(group.label)}</span>${group.items.map((service) => `<button type="button" class="mini-action" data-add-canned-service="${escapeAttr(service.id)}">${escapeHtml(service.name)} \xB7 ${money4(Number(service.menuPrice ?? service.partsPrice ?? 0))}</button>`).join("")}</div>`).join("");
         lines.insertAdjacentHTML("beforebegin", picker);
         document.querySelectorAll("[data-add-canned-service]").forEach((button) => button.onclick = () => {
           const service = visibleCannedServices().find((item) => item.id === button.dataset.addCannedService);
@@ -9832,21 +11868,21 @@ ${catRows}
         const balance = invoiceBalance(invoice);
         const customer = state.customers.find((item) => item.name === invoice.customer);
         const order = state.orders.find((item) => item.id === invoice.ro);
-        const itemRows = invoicePrintLineItems(invoice).map((item) => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money3(item.amount)}</td></tr>`).join("");
-        const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money3(breakdown.subtotal)}</td></tr>`;
-        const paymentRows = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number).map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money3(Number(payment.amount || 0))}</td></tr>`).join("");
+        const itemRows = invoicePrintLineItems(invoice).map((item) => `<tr><td>${escapeHtml(item.type === "fee" ? "Fee" : item.type === "part" ? "Part" : "Labor")}</td><td><b>${escapeHtml(item.description)}</b><small>${escapeHtml(item.detail)}</small></td><td>${money4(item.amount)}</td></tr>`).join("");
+        const fallbackRow = `<tr><td>Summary</td><td>Services and materials for ${escapeHtml(invoice.ro || invoice.number)}</td><td>${money4(breakdown.subtotal)}</td></tr>`;
+        const paymentRows = paymentRecords().filter((payment) => payment.invoiceNumber === invoice.number).map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${escapeHtml(payment.reference || "")}</td><td>${money4(Number(payment.amount || 0))}</td></tr>`).join("");
         const win = window.open("", "_blank", "noopener");
         if (!win) {
           toast("Allow pop-ups to print the invoice");
           return;
         }
-        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money3(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money3(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money3(invoice.amount)}</b></p><p><span>Payments</span><b>-${money3(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money3(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(invoice.number)} invoice</title><style>${brand.style}body{font:12px/1.55 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{margin:20px 0 8px}.invoice-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.invoice-meta div,.totals{padding:10px;border:1px solid #d6ddd7}.invoice-meta b,.invoice-meta span{display:block}.invoice-meta span,td small{display:block;color:#66727a}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left;vertical-align:top}th{color:#fff;background:var(--brand)}.totals{width:min(320px,100%);margin:18px 0 18px auto}.totals p{display:flex;justify-content:space-between;margin:5px 0}.totals .balance{padding-top:8px;border-top:2px solid var(--brand);font-size:15px}.footer{margin-top:28px;padding-top:12px;border-top:1px solid #d6ddd7;text-align:center;color:#66727a}@media(max-width:600px){.invoice-meta{grid-template-columns:1fr}}</style></head><body>${brand.header}<div class="invoice-meta"><div><span>Invoice</span><b>${escapeHtml(invoice.number)}</b></div><div><span>Repair order</span><b>${escapeHtml(invoice.ro || "")}</b></div><div><span>Customer</span><b>${escapeHtml(invoice.customer || "")}</b>${customer?.billingAddress ? `<small>${escapeHtml(customer.billingAddress)}</small>` : ""}</div><div><span>Vehicle</span><b>${escapeHtml(order?.vehicle || invoice.vehicle || "")}</b></div><div><span>Issued</span><b>${escapeHtml(invoice.date || "")}</b></div><div><span>Due</span><b>${escapeHtml(invoice.due || "")}</b></div></div><h2>Invoice line items</h2><table><thead><tr><th>Type</th><th>Description</th><th>Amount</th></tr></thead><tbody>${itemRows || fallbackRow}</tbody></table>${paymentRows ? `<h2>Payments</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${paymentRows}</tbody></table>` : ""}<div class="totals"><p><span>Subtotal</span><b>${money4(breakdown.subtotal)}</b></p><p><span>Tax (${Number(breakdown.taxRate || 0)}%)</span><b>${money4(breakdown.tax)}</b></p><p><span>Invoice amount</span><b>${money4(invoice.amount)}</b></p><p><span>Payments</span><b>-${money4(paid)}</b></p><p class="balance"><span>Balance due</span><b>${money4(balance)}</b></p></div><p class="footer">${escapeHtml(profile.invoiceFooter || "")}</p><button type="button" onclick="window.print()">Print invoice</button></body></html>`);
         win.document.close();
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money3(invoice.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money3(paid)} \xB7 Balance ${money3(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${escapeHtml(invoice.number)}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money4(invoice.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money4(paid)} \xB7 Balance ${money4(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}${paid === 0 ? `<button class="mini-action" data-edit-tax="${escapeHtml(invoice.number)}">${icon("percent", 13)} Edit tax</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Track open balances, invoice tax, payments, and branded print copies.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows}</tbody></table></div>`);
       };
@@ -9867,12 +11903,12 @@ ${catRows}
         });
       };
       printCustomerStatement = function(name) {
-        const invoices2 = state.invoices.filter((invoice) => invoice.customer === name), payments2 = paymentRecords().filter((payment) => payment.customer === name), balance = customerBalance(name), profile = shopProfile(), brand = printableBrand(profile), invoiceRows = invoices2.map((invoice) => `<tr><td>${escapeHtml(invoice.number)}</td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.status || "")}</td><td>${money3(invoice.amount)}</td><td>${money3(invoiceBalance(invoice))}</td></tr>`).join(""), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${money3(Number(payment.amount || 0))}</td><td>${escapeHtml(payment.invoiceNumber || "")}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
+        const invoices2 = state.invoices.filter((invoice) => invoice.customer === name), payments2 = paymentRecords().filter((payment) => payment.customer === name), balance = customerBalance(name), profile = shopProfile(), brand = printableBrand(profile), invoiceRows = invoices2.map((invoice) => `<tr><td>${escapeHtml(invoice.number)}</td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.status || "")}</td><td>${money4(invoice.amount)}</td><td>${money4(invoiceBalance(invoice))}</td></tr>`).join(""), paymentRows = payments2.map((payment) => `<tr><td>${escapeHtml(payment.receivedAt || "")}</td><td>${escapeHtml(payment.method || "")}</td><td>${money4(Number(payment.amount || 0))}</td><td>${escapeHtml(payment.invoiceNumber || "")}</td></tr>`).join(""), win = window.open("", "_blank", "noopener");
         if (!win) {
           toast("Allow pop-ups to print the statement");
           return;
         }
-        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(name)} statement</title><style>${brand.style}body{font:12px/1.6 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{color:var(--brand)}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.total{margin-top:18px;padding:12px;border-top:4px solid var(--brand);font-size:16px;text-align:right}</style></head><body>${brand.header}<h2>Customer Statement: ${escapeHtml(name)}</h2><p>Generated ${escapeHtml((/* @__PURE__ */ new Date()).toLocaleDateString())}</p><h3>Invoices</h3><table><thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invoiceRows || `<tr><td colspan="5">No invoices.</td></tr>`}</tbody></table><h3>Payments</h3><table><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="4">No payments.</td></tr>`}</tbody></table><p class="total">Account Balance: ${money3(balance)}</p><button type="button" onclick="window.print()">Print statement</button></body></html>`);
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(name)} statement</title><style>${brand.style}body{font:12px/1.6 system-ui,sans-serif;max-width:850px;margin:auto;padding:22px;color:#172029}h2{color:var(--brand)}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:7px 9px;border-bottom:1px solid #d6ddd7;text-align:left}th{color:#fff;background:var(--brand)}.total{margin-top:18px;padding:12px;border-top:4px solid var(--brand);font-size:16px;text-align:right}</style></head><body>${brand.header}<h2>Customer Statement: ${escapeHtml(name)}</h2><p>Generated ${escapeHtml((/* @__PURE__ */ new Date()).toLocaleDateString())}</p><h3>Invoices</h3><table><thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th><th>Balance</th></tr></thead><tbody>${invoiceRows || `<tr><td colspan="5">No invoices.</td></tr>`}</tbody></table><h3>Payments</h3><table><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Invoice</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="4">No payments.</td></tr>`}</tbody></table><p class="total">Account Balance: ${money4(balance)}</p><button type="button" onclick="window.print()">Print statement</button></body></html>`);
         win.document.close();
       };
       printInspectionReport = function(inspection) {
@@ -9908,14 +11944,14 @@ ${catRows}
       customers = function() {
         const q = query.toLowerCase(), cards = state.customers.filter((item) => !q || Object.values(item).join(" ").toLowerCase().includes(q)).map((item) => {
           const key = encodeURIComponent(customerRecordKey(item));
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money3(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p></div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Number(item.vehicles || state.vehicles.filter((vehicle) => vehicle.customer === item.name).length)}</b></div><div><span>Lifetime spend</span><b>${money4(Number(item.spend || 0))}</b></div><div><span>Shop visits</span><b>${Number(item.visits || 0)}</b></div><div><span>Balance</span><b>${money4(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Edit customer contact details and safely remove unlinked records.")}<div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice), key = escapeHtml(invoiceRecordKey(invoice));
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money3(invoice.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money3(paid)} \xB7 Balance ${money3(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-edit-invoice="${key}">${icon("pencil", 13)} Edit</button><button class="mini-action danger" data-delete-invoice="${key}">${icon("trash-2", 13)} Delete</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.due || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money4(invoice.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)} (${bd.taxRate}%)</small><small>Paid ${money4(paid)} \xB7 Balance ${money4(balance)}</small><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeHtml(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-edit-invoice="${key}">${icon("pencil", 13)} Edit</button><button class="mini-action danger" data-delete-invoice="${key}">${icon("trash-2", 13)} Delete</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action" data-record-payment="${escapeHtml(invoice.number)}" data-method="processor">${icon("credit-card", 13)} Card receipt</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeHtml(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Edit invoice details and safely remove invoices without payment history.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Due</th><th>Status</th><th>Invoice & payments</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
@@ -10044,6 +12080,11 @@ ${catRows}
       ["admin", "technician", "office", "service_writer"].forEach((role) => {
         if (roleRoutes[role] && !roleRoutes[role].includes("home")) roleRoutes[role] = ["home", ...roleRoutes[role]];
       });
+      bindPosCore = bind;
+      bind = function() {
+        bindPosCore();
+        bindCardTerminal();
+      };
       renderHomeCore = render;
       render = function() {
         if (currentUser() && state.route === "home") {
@@ -10104,7 +12145,7 @@ ${catRows}
       };
       stampDemoAppointments();
       employees = function() {
-        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money3(user.payRate) + " / yr" : money3(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
+        const rows = state.users.map((user) => `<tr><td><div class="employee-name"><span class="avatar">${initials(user.name)}</span><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.employeeId || "Pending ID")} \xB7 ${escapeHtml(user.email)}</small></div></div></td><td>${escapeHtml(roleLabel[user.role] || user.role)}<small>${escapeHtml(user.title || "No title")} \xB7 ${escapeHtml(user.department || "Unassigned")}</small></td><td>${escapeHtml(user.employmentType || "\u2014")}<small>${escapeHtml(user.payFrequency || "\u2014")} \xB7 ${user.payRate ? user.employmentType === "Salary" ? money4(user.payRate) + " / yr" : money4(user.payRate) + " / hr" : "Rate pending"}</small></td><td>${escapeHtml(user.phone || "\u2014")}<small>${escapeHtml(user.startDate || "Start date pending")}</small></td><td><span class="badge ${user.active ? "paid" : "overdue"}">${user.active ? "Active" : "Inactive"}</span><small>${escapeHtml(user.techName || "No dispatch identity")}</small></td><td><div class="record-actions"><button class="mini-action" data-edit-employee="${escapeAttr(user.id)}">${icon("pencil", 13)} Edit</button><button class="mini-action" data-toggle-user="${escapeAttr(user.id)}" ${user.id === currentUser().id ? "disabled" : ""}>${user.active ? "Deactivate" : "Activate"}</button></div></td></tr>`).join("");
         return shell(`${heading("Team access", "Employees", "Employee records, employment details, payroll rates, and login access.", false)}<div class="employee-actions"><div class="access-note">${icon("shield-check", 15)} Employee profiles are saved to this shop and remain available after sign-in or refresh.</div><button class="primary" id="new-employee">${icon("user-plus", 15)} Add employee</button></div><div class="data-panel"><table><thead><tr><th>Employee record</th><th>Role & department</th><th>Employment & pay</th><th>Contact & start</th><th>Access</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">No employee profiles yet.</td></tr>`}</tbody></table></div>`);
       };
       openEmployee = function(existing = null) {
@@ -10140,7 +12181,7 @@ ${catRows}
           const vehicleCount = state.vehicles.filter((vehicle) => vehicle.customer === item.name).length;
           const visitCount = state.orders.filter((order) => order.customer === item.name).length;
           const lifetimeSpend = customerLifetimeSpend(item, state.invoices);
-          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p>${item.billingAddress ? `<p>${escapeHtml(item.billingAddress)}</p>` : ""}</div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money3(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money3(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
+          return `<article class="customer-card" data-open-customer="${encodeURIComponent(item.name)}"><div class="customer-top"><div class="avatar">${initials(item.name)}</div><div><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.phone || "No phone")} \xB7 ${escapeHtml(item.email || "No email")}</p>${item.billingAddress ? `<p>${escapeHtml(item.billingAddress)}</p>` : ""}</div></div><div class="customer-stats"><div><span>Vehicles</span><b>${Math.max(Number(item.vehicles || 0), vehicleCount)}</b></div><div><span>Lifetime spend</span><b>${money4(lifetimeSpend)}</b></div><div><span>Shop visits</span><b>${Math.max(Number(item.visits || 0), visitCount)}</b></div><div><span>Balance</span><b>${money4(customerBalance(item.name))}</b></div></div><div class="customer-card-actions"><button class="customer-message" data-message-customer="${encodeURIComponent(item.name)}" data-message-phone="${encodeURIComponent(item.phone || "")}" data-message-email="${encodeURIComponent(item.email || "")}">${icon("send", 14)} Message</button><button class="mini-action" data-edit-customer="${key}">${icon("pencil", 14)} Edit</button><button class="mini-action danger" data-delete-customer="${key}">${icon("trash-2", 14)} Delete</button></div></article>`;
         }).join("");
         return shell(`${heading("Relationships", "Customers", "Create, find, and update customer records saved to this shop.", false)}<div class="ops-actions"><button class="primary" id="new-customer">${icon("user-plus", 14)} Add customer</button></div><div class="customer-grid">${cards || empty("No customers yet")}</div>`);
       };
@@ -10225,7 +12266,7 @@ ${catRows}
         };
       };
       orders = function() {
-        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(order.tech || "Unassigned")}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money3(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
+        const rows = filtered().map((order) => `<tr data-order="${escapeAttr(order.id)}"><td class="mono strong">${escapeHtml(order.id)}</td><td><b>${escapeHtml(order.customer)}</b><small>${escapeHtml(order.phone || "")}</small></td><td><b>${escapeHtml(order.vehicle)}</b><small class="mono">${escapeHtml(order.vin || "")}</small></td><td>${badge(order.status)}</td><td>${escapeHtml(assignmentSummary(order, state.users))}<small>${escapeHtml(order.bay || "Unassigned")}</small></td><td>${escapeHtml(order.promise || "Unscheduled")}</td><td><b>${money4(order.total)}</b></td><td><button class="mini-action" type="button" data-edit-order="${escapeAttr(order.id)}">${icon("pencil", 13)} Edit</button></td></tr>`).join("");
         return shell(`${heading("Operations", "Work orders", "Open and edit customer, vehicle, assignment, status, and service details.")}${toolbar()}<div class="data-panel"><table><thead><tr><th>RO number</th><th>Customer</th><th>Vehicle</th><th>Status</th><th>Assignment</th><th>Promise</th><th>Total</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : empty("No matching work orders")}</div>`);
       };
       updateOrderInApi = async function(record) {
@@ -10363,27 +12404,160 @@ ${catRows}
         const wasApproved = Boolean(order.linesLockedAt || order.estimateApproval?.status === "approved" || ["approved", "in_progress", "waiting_parts", "completed", "invoiced"].includes(order.status));
         const canEditEstimate = canManage && (!wasApproved || canApprove);
         const defaultLaborRate = estimate.lines.find((line) => line.type === "labor")?.laborRate || Number(shopProfile().laborRate || 140);
-        const editNotice = paidInvoice ? "Line items are locked because this invoice has a recorded payment." : invoice ? "Saving also updates the unpaid invoice and clears its signature." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total before saving.";
+        const editNotice = paidInvoice ? "Invoice already has a payment. Edits still update line items and the invoice total; recorded payments stay on the invoice." : invoice ? "Saving also updates the invoice and clears its signature so it can be re-authorized." : wasApproved ? "Saving creates a revision and clears the prior customer approval." : "Changes recalculate labor, parts, tax, and total. Closing the dialog autosaves drafts.";
+        const detailsEditor = canManage ? `<section class="job-details-editor"><div class="job-section-head"><div><h3>Work order details</h3><p>Customer, vehicle, complaint, and assignment stay editable through estimate, work, and invoice.</p></div><span class="autosave-hint" id="job-autosave-status">Autosave on</span></div><div class="form-grid"><label>Customer *<select id="job-detail-customer" required>${customerOptions(order.customer)}</select></label><label>Phone<input id="job-detail-phone" value="${escapeAttr(order.phone || "")}"/></label><label class="full">Vehicle description *<input id="job-detail-vehicle" required value="${escapeAttr(order.vehicle || "")}"/></label><label class="full">VIN<input id="job-detail-vin" maxlength="17" value="${escapeAttr(order.vin === "VIN pending" ? "" : order.vin || "")}"/></label><label class="full">Customer complaint *<textarea id="job-detail-complaint" rows="3" required>${escapeHtml(order.complaint || "")}</textarea></label><label class="full">Technician / service notes<textarea id="job-detail-notes" rows="3">${escapeHtml(order.notes || "")}</textarea></label><label>Status<select id="job-detail-status">${["estimate", "approved", "in_progress", "waiting_parts", "completed", "invoiced"].map((status) => `<option value="${status}" ${order.status === status ? "selected" : ""}>${label(status)}</option>`).join("")}</select></label><label>Priority<select id="job-detail-priority">${["normal", "high", "low"].map((priority) => `<option value="${priority}" ${(order.priority || "normal") === priority ? "selected" : ""}>${label(priority)}</option>`).join("")}</select></label><label>Technician<select id="job-detail-tech">${techOptions(order.tech || "Unassigned")}</select></label><label>Bay / assignment<select id="job-detail-bay">${["Unassigned", "Bay 1", "Bay 2", "Bay 3", "Bay 4", "Mobile"].map((bay) => `<option ${(order.bay || "Unassigned") === bay ? "selected" : ""}>${bay}</option>`).join("")}</select></label><label>Promise time<input id="job-detail-promise" value="${escapeAttr(order.promise || "")}"/></label><label>Labor hours<input id="job-detail-labor-hours" type="number" min="0" step=".25" value="${Number(order.laborHours || 0)}"/></label></div></section>` : "";
         const editor = canEditEstimate && !paidInvoice ? `<section class="job-editor"><div class="job-section-head"><div><h3>Edit line items</h3><p>${terminalOrder ? "After-midnight fee changes are locked after completion or invoicing. Reopen the work order before adding or replacing that fee." : editNotice}</p></div><div><button class="secondary" id="job-add-after-midnight-fee" type="button" ${terminalOrder ? `disabled title="Reopen this work order before adding the after-midnight fee"` : ""}>${icon("moon-star", 14)} Add after-midnight fee</button><button class="secondary" id="job-add-labor" type="button">${icon("wrench", 14)} Add labor</button><button class="secondary" id="job-add-part" type="button">${icon("package-plus", 14)} Add part</button></div></div><div id="job-estimate-editor" data-shop-supplies="${Number(estimate.fees?.find((fee) => /shop supplies/i.test(fee.description))?.amount ?? "")}" data-discount-percent="${Number(estimate.discountPercent || 0)}" data-discount-reason="${escapeAttr(estimate.discountReason || "")}" data-exclusions="${escapeAttr(JSON.stringify(estimate.exclusions || []))}" data-insurance="${escapeAttr(JSON.stringify(estimate.insurance || {}))}">${estimate.lines.map((line, index) => estimateEditorLine(line, index)).join("")}</div><div class="job-estimate-summary"></div><button class="primary" id="save-job-lines" type="button">${icon("save", 14)} Save line items</button></section>` : "";
         const approvalActions = (order.status === "estimate" || order.estimateRevisionPending) && canManage && !["completed", "invoiced"].includes(order.status) ? `<div class="job-actions"><button class="secondary" data-send-job-estimate="email">${icon("mail", 14)} Email link</button><button class="secondary" data-send-job-estimate="sms">${icon("message-square", 14)} Text link</button>${canApprove ? `<button class="primary" id="sign-job-estimate">${icon("circle-check", 14)} Record approval</button>` : ""}</div>` : "";
         const workActions = canManage && order.status === "approved" ? `<div class="job-actions"><button class="primary" id="start-job-work">${icon("play", 14)} Start work</button></div>` : canManage && ["in_progress", "waiting_parts"].includes(order.status) ? `<div class="job-actions"><button class="primary" id="complete-job-card">${icon("circle-check", 14)} Complete job & generate invoice</button></div>` : "";
-        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money3(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
+        const invoiceCard = invoice ? `<section class="job-invoice-card"><div><span>Invoice</span><h3>${escapeHtml(invoice.number)}</h3><p>${badge(invoice.status)} \xB7 ${money4(invoice.amount)}</p></div><div><button class="secondary" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 14)} Print</button><button class="primary" id="sign-job-invoice">${icon("signature", 14)} ${invoice.signature ? "Signed" : "Sign invoice"}</button></div></section>` : "";
         const assignments = canManage ? laborAssignmentPanel(order, estimate) : "";
-        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${estimatePresentation(order, estimate, { locked: wasApproved })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
+        showModal(`<div class="modal wide job-card-modal"><div class="modal-head"><div><span class="mono">${escapeHtml(order.id)}</span><h2>Job card</h2></div><button class="close" data-close>${icon("x")}</button></div><div class="modal-body">${jobWorkflowSteps(order, invoice)}${detailsEditor}${estimatePresentation(order, estimate, { locked: false })}${assignments}${editor}${approvalActions}${workActions}${invoiceCard}</div><div class="modal-actions"><button class="secondary" type="button" id="print-job-card">${icon("printer", 14)} Print job card</button><button class="secondary" data-close>Close</button></div></div>`);
         const editorRoot = document.querySelector("#job-estimate-editor");
+        let jobCardDirty = false;
+        let jobCardSaving = false;
+        let jobCardTimer = 0;
+        const setAutosaveStatus = (message) => {
+          const status = document.querySelector("#job-autosave-status");
+          if (status) status.textContent = message;
+        };
+        const readJobDetails = () => ({
+          customer: document.querySelector("#job-detail-customer")?.value?.trim() || order.customer,
+          phone: document.querySelector("#job-detail-phone")?.value?.trim() || "",
+          vehicle: document.querySelector("#job-detail-vehicle")?.value?.trim() || order.vehicle,
+          vin: (document.querySelector("#job-detail-vin")?.value || "").trim().toUpperCase() || "VIN pending",
+          complaint: document.querySelector("#job-detail-complaint")?.value?.trim() || order.complaint,
+          notes: document.querySelector("#job-detail-notes")?.value?.trim() || "",
+          status: document.querySelector("#job-detail-status")?.value || order.status,
+          priority: document.querySelector("#job-detail-priority")?.value || order.priority || "normal",
+          tech: document.querySelector("#job-detail-tech")?.value || order.tech,
+          bay: document.querySelector("#job-detail-bay")?.value || order.bay,
+          mobile: (document.querySelector("#job-detail-bay")?.value || order.bay) === "Mobile",
+          promise: document.querySelector("#job-detail-promise")?.value?.trim() || order.promise,
+          laborHours: Math.max(0, Number(document.querySelector("#job-detail-labor-hours")?.value) || 0)
+        });
+        const readLaborAssignments = () => {
+          const rows = [...document.querySelectorAll(".labor-assignment-row")];
+          if (!rows.length) return null;
+          return new Map(rows.map((row) => [
+            row.dataset.assignmentLine,
+            [...row.querySelectorAll(".line-technician:checked")].map((input) => input.value)
+          ]));
+        };
+        const buildRevisedOrder = () => {
+          const details = canManage ? readJobDetails() : {};
+          let nextEstimate = order.estimate;
+          if (editorRoot && document.contains(editorRoot)) {
+            const fromEditor = estimateFromEditor(editorRoot);
+            if (fromEditor.lines.length) {
+              nextEstimate = {
+                ...fromEditor,
+                generatedAt: order.estimate?.generatedAt,
+                summary: order.estimate?.summary || `Estimate for ${details.vehicle || order.vehicle}`
+              };
+            }
+          }
+          const editedAt = now();
+          let revised = workOrderWithEditedEstimate(order, nextEstimate, editedAt);
+          Object.assign(revised, details, { updatedAt: order.updatedAt });
+          const assignmentsByLine = readLaborAssignments();
+          if (assignmentsByLine && revised.estimate?.lines) {
+            revised.estimate.lines = revised.estimate.lines.map((line) => line.type === "labor" ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] } : line);
+          }
+          return { revised, editedAt };
+        };
+        const persistJobCard = async ({ silent = false, reopen = false } = {}) => {
+          if (!canManage || jobCardSaving) return false;
+          if (!jobCardDirty && silent) return true;
+          const { revised, editedAt } = buildRevisedOrder();
+          if (!revised.customer || !revised.vehicle || !revised.complaint) {
+            if (!silent) toast("Customer, vehicle, and complaint are required");
+            return false;
+          }
+          if (editorRoot && document.contains(editorRoot) && !estimateFromEditor(editorRoot).lines.length) {
+            if (!silent) toast("Add at least one labor or part line");
+            return false;
+          }
+          if (invoice && !isOfflineDesktop() && !navigator.onLine) {
+            Object.assign(order, revised);
+            save();
+            jobCardDirty = false;
+            setAutosaveStatus("Saved locally \xB7 offline");
+            if (!silent) toast("Saved locally. Reconnect to sync the invoice.");
+            return true;
+          }
+          jobCardSaving = true;
+          setAutosaveStatus("Saving\u2026");
+          const revisedInvoice = invoice ? {
+            ...invoiceWithEditedWorkOrder(invoice, revised, editedAt),
+            // Keep authorization on paid invoices; unpaid edits still clear for re-sign.
+            signature: paidInvoice ? invoice.signature : null
+          } : null;
+          try {
+            const savedOrder = await updateOrderInApi(revised, { throwOnError: true });
+            Object.assign(order, savedOrder?.queued ? revised : savedOrder);
+            if (revisedInvoice) {
+              const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
+              Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
+            }
+            save();
+            jobCardDirty = false;
+            setAutosaveStatus("Saved");
+            if (!silent) {
+              setModalAutosave(null);
+              closeModal();
+              toast(`${order.id} updated${revisedInvoice ? ` \xB7 ${invoice.number} synchronized` : ""}`);
+              if (reopen) openOrder(order.id);
+              else render();
+            }
+            return true;
+          } catch (error) {
+            Object.assign(order, revised);
+            save();
+            jobCardDirty = false;
+            setAutosaveStatus("Saved locally");
+            if (!silent) toast(error.message || "Cloud sync failed \u2014 changes kept locally");
+            return false;
+          } finally {
+            jobCardSaving = false;
+          }
+        };
+        const markJobCardDirty = () => {
+          jobCardDirty = true;
+          setAutosaveStatus("Unsaved changes");
+          clearTimeout(jobCardTimer);
+          jobCardTimer = setTimeout(() => {
+            void persistJobCard({ silent: true });
+          }, 700);
+        };
+        if (canManage) {
+          document.querySelector(".job-details-editor")?.addEventListener("input", markJobCardDirty);
+          document.querySelector(".job-details-editor")?.addEventListener("change", markJobCardDirty);
+          document.querySelector(".labor-assignment-panel")?.addEventListener("change", markJobCardDirty);
+          setModalAutosave(({ reason }) => {
+            clearTimeout(jobCardTimer);
+            if (!jobCardDirty) return;
+            void persistJobCard({ silent: true });
+            if (reason === "close") toast(`${order.id} autosaved`);
+          });
+        }
         if (editorRoot) {
           bindEstimateEditor(editorRoot, { taxRate: estimate.taxRate, fees: estimate.fees });
+          editorRoot.addEventListener("input", markJobCardDirty);
+          editorRoot.addEventListener("change", markJobCardDirty);
           document.querySelector("#job-add-labor").onclick = () => {
             editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(customLaborDraft(`labor-${Date.now()}`, defaultLaborRate), editorRoot.children.length));
             bindEstimateEditor(editorRoot);
+            markJobCardDirty();
           };
           document.querySelector("#job-add-part").onclick = () => {
             editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine({ id: `part-${Date.now()}`, type: "part", description: "Typed part", quantity: 1, unitPrice: 0 }, editorRoot.children.length));
             bindEstimateEditor(editorRoot);
+            markJobCardDirty();
           };
           document.querySelector("#job-add-after-midnight-fee").onclick = () => addAfterMidnightFeeToEditor(editorRoot, (line) => {
             editorRoot.insertAdjacentHTML("beforeend", estimateEditorLine(line, editorRoot.children.length));
             bindEstimateEditor(editorRoot);
+            markJobCardDirty();
           });
           document.querySelector("#save-job-lines").onclick = async (event) => {
             const next = estimateFromEditor(editorRoot);
@@ -10393,37 +12567,29 @@ ${catRows}
             }
             if (invoice && !isOfflineDesktop() && !navigator.onLine) return toast("Reconnect before changing an invoiced work order");
             event.currentTarget.disabled = true;
-            const editedAt = now();
-            const revisedOrder = workOrderWithEditedEstimate(order, { ...next, generatedAt: order.estimate.generatedAt, summary: order.estimate.summary }, editedAt);
-            const revisedInvoice = invoice ? invoiceWithEditedWorkOrder(invoice, revisedOrder, editedAt) : null;
-            try {
-              const savedOrder = await updateOrderInApi(revisedOrder, { throwOnError: true });
-              Object.assign(order, savedOrder?.queued ? revisedOrder : savedOrder);
-              if (revisedInvoice) {
-                const savedInvoice = await updateInvoiceInApi(revisedInvoice, { throwOnError: true });
-                Object.assign(invoice, savedInvoice?.queued ? revisedInvoice : savedInvoice);
-              }
-              save();
-              closeModal();
-              toast(`${order.id} line items updated${revisedInvoice ? ` \xB7 ${invoice.number} synchronized` : ""}`);
-              openOrder(order.id);
-            } catch (error) {
-              event.currentTarget.disabled = false;
-              toast(error.message || "Line items could not be saved");
-            }
+            jobCardDirty = true;
+            const ok = await persistJobCard({ silent: false, reopen: true });
+            if (!ok) event.currentTarget.disabled = false;
           };
         }
         document.querySelectorAll("[data-send-job-estimate]").forEach((button) => button.onclick = () => sendJobEstimate(order, button.dataset.sendJobEstimate));
         document.querySelector("#sign-job-estimate")?.addEventListener("click", () => onsiteSignatureModal("estimate", order));
         document.querySelector("#start-job-work")?.addEventListener("click", async () => {
+          jobCardDirty = true;
+          const details = readJobDetails();
           order.status = "in_progress";
+          Object.assign(order, details, { status: "in_progress" });
           await updateOrderInApi(order);
           save();
+          setModalAutosave(null);
           closeModal();
           toast(`${order.id} moved to in progress`);
           render();
         });
-        document.querySelector("#complete-job-card")?.addEventListener("click", () => completeJobCard(order));
+        document.querySelector("#complete-job-card")?.addEventListener("click", async () => {
+          if (jobCardDirty) await persistJobCard({ silent: true });
+          completeJobCard(order);
+        });
         document.querySelector("#sign-job-invoice")?.addEventListener("click", () => {
           if (!invoice.signature) onsiteSignatureModal("invoice", invoice);
         });
@@ -10436,32 +12602,20 @@ ${catRows}
               input.checked = selected.has(input.value);
             });
           });
-          toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line. Save to persist.`);
+          markJobCardDirty();
+          toast(`Applied ${selected.size || "no"} technician${selected.size === 1 ? "" : "s"} to every labor line.`);
         });
         document.querySelector("#save-labor-assignments")?.addEventListener("click", async (event) => {
-          const assignmentsByLine = new Map([...document.querySelectorAll(".labor-assignment-row")].map((row) => [
-            row.dataset.assignmentLine,
-            [...row.querySelectorAll(".line-technician:checked")].map((input) => input.value)
-          ]));
-          order.estimate.lines = order.estimate.lines.map((line) => line.type === "labor" ? { ...line, technicianIds: assignmentsByLine.get(line.id) || [] } : line);
           event.currentTarget.disabled = true;
-          try {
-            const saved = !isOfflineDesktop() && !isLocalShell() ? await apiFetch(`/entities/orders/${encodeURIComponent(order.id)}`, { method: "PUT", body: JSON.stringify(order) }) : order;
-            state.orders[state.orders.indexOf(order)] = saved?.queued ? order : saved;
-            save();
-            closeModal();
-            toast(`${order.id} technician assignments saved`);
-            openOrder(order.id);
-          } catch (error) {
-            event.currentTarget.disabled = false;
-            toast(error.message || "Technician assignments could not be saved");
-          }
+          jobCardDirty = true;
+          const ok = await persistJobCard({ silent: false, reopen: true });
+          if (!ok) event.currentTarget.disabled = false;
         });
       };
       invoices = function() {
         const q = query.toLowerCase(), rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const paid = invoicePaid(invoice), balance = invoiceBalance(invoice), bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money3(invoice.amount)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Balance ${money3(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${balance === 0 ? `<span class="badge paid">Paid</span>` : badge(invoice.status)}</td><td><b>${money4(invoice.amount)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)}</small><small>Balance ${money4(balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("banknote", 13)} Cash</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button>` : ""}</div></td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Review the completed job, capture a mobile signature, and collect payment.", false)}${stats()}<div class="data-panel"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
       };
@@ -10536,6 +12690,15 @@ ${catRows}
           await loadEmployeesFromApi();
           if (state.route === "employees") render();
         });
+        syncHelp(readHelpSnapshot(), {
+          icon,
+          onNavigate: (route) => {
+            if (!canAccess(route)) return;
+            state.route = route;
+            save();
+            render();
+          }
+        });
       };
       estimateEditorLine = function(line = {}, index = 0, removable = true) {
         const item = normalizeEstimateLine(line, index), description = estimateEditorDescription(line, item.description), part = item.type === "part", fee = item.type === "fee", laborSource = item.laborSource || "Unverified shop estimate";
@@ -10546,11 +12709,12 @@ ${catRows}
       <label class="job-inventory-field" ${part ? "" : "hidden"}>Inventory / catalog<select class="job-line-inventory">${inventoryPartOptions(item.inventoryId)}</select></label>
       <label class="full">Description<input class="job-line-description" required value="${escapeAttr(description.value)}" placeholder="${escapeAttr(description.placeholder)}" ${item.code ? "readonly" : ""}/></label>
       <label class="full">Customer-facing detail<textarea class="job-line-notes">${escapeHtml(item.notes)}</textarea></label>
+      <label class="job-part-number-field" ${part ? "" : "hidden"}>Part # / SKU<input class="job-line-part-number" value="${escapeAttr(item.partNumber || item.inventorySku || "")}" placeholder="Optional"/></label>
       <label class="job-line-quantity-field" ${fee ? "hidden" : ""}><span class="job-line-quantity-label">${part ? "Quantity" : "Labor hours"}</span><input class="job-line-quantity" type="number" min="0" step="${part ? "1" : ".1"}" value="${fee ? 1 : part ? item.quantity : item.hours}"/></label>
       <label><span class="job-line-rate-label">${fee ? "Flat fee" : part ? "Unit price" : "Labor rate"}</span><input class="job-line-rate" type="number" min="0" step=".01" value="${fee || part ? item.unitPrice : item.laborRate || shopProfile().laborRate}" ${fee && item.code ? "readonly" : ""}/></label>
     </div>
     <small class="labor-source" ${part ? "hidden" : ""}><span class="badge ${item.laborVerified ? "paid" : "estimate"}">${item.laborVerified ? "Verified" : "Unverified"}</span> ${escapeHtml(laborSource)}</small>
-    <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money3(item.total)}</b></div>
+    <div class="job-line-total"><span>Line total</span><b>${item.priceStatus === "pending" ? "Pending" : money4(item.total)}</b></div>
   </article>`;
       };
       estimateFromEditor = function(root) {
@@ -10559,17 +12723,19 @@ ${catRows}
           const quantity = Math.max(0, Number(row.querySelector(".job-line-quantity").value) || 0);
           const unitPrice = Math.max(0, Number(row.querySelector(".job-line-rate").value) || 0);
           const inventory = type === "part" ? state.inventory.find((item) => item.id === row.querySelector(".job-line-inventory").value) : null;
+          const partNumber = type === "part" ? (row.querySelector(".job-line-part-number")?.value || "").trim() : "";
           return normalizeEstimateLine({
             id: row.dataset.lineId || `line-${Date.now()}-${index}`,
             type,
             description: row.querySelector(".job-line-description").value.trim(),
             notes: row.querySelector(".job-line-notes").value.trim(),
+            partNumber,
             quantity,
             unitPrice,
             hours: type === "labor" ? quantity : 0,
             laborRate: type === "labor" ? unitPrice : 0,
             inventoryId: inventory?.id || null,
-            inventorySku: inventory?.sku || "",
+            inventorySku: inventory?.sku || partNumber || "",
             committedQuantity: type === "part" && inventory ? quantity : 0,
             priceStatus: type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, unitPrice) : "priced",
             laborSource: row.dataset.laborSource || "",
@@ -10602,15 +12768,17 @@ ${catRows}
           const priceStatus = type === "part" ? estimatePartPriceStatus(row.dataset.priceStatus, rate) : "priced";
           row.dataset.priceStatus = priceStatus;
           row.querySelector(".job-inventory-field").hidden = type !== "part";
+          const partNumberField = row.querySelector(".job-part-number-field");
+          if (partNumberField) partNumberField.hidden = type !== "part";
           row.querySelector(".job-line-quantity-field").hidden = type === "fee";
           row.querySelector(".job-line-quantity-label").textContent = type === "labor" ? "Labor hours" : "Quantity";
           row.querySelector(".job-line-rate-label").textContent = type === "fee" ? "Flat fee" : type === "part" ? "Unit price" : "Labor rate";
           row.querySelector(".job-line-quantity").step = type === "labor" ? ".1" : "1";
-          row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money3(quantity * rate);
+          row.querySelector(".job-line-total b").textContent = priceStatus === "pending" ? "Pending" : money4(quantity * rate);
         });
         const estimate = estimateFromEditor(root), summary = root.parentElement.querySelector(".job-estimate-summary") || document.querySelector("#new-estimate-summary");
         const supplies = estimate.fees.find((fee) => /shop supplies/i.test(fee.description))?.amount || 0;
-        if (summary) summary.innerHTML = `<span>Parts <b>${money3(estimate.parts)}</b></span><span>Labor <b>${money3(estimate.labor)}</b></span><span>Fees <b>${money3(estimate.lineFees)}</b></span><span>Supplies <b>${money3(supplies)}</b></span><span>Discount <b>-${money3(estimate.discountAmount)}</b></span><span>Tax <b>${money3(estimate.tax)}</b></span><strong>Total ${money3(estimate.total)}</strong>`;
+        if (summary) summary.innerHTML = `<span>Parts <b>${money4(estimate.parts)}</b></span><span>Labor <b>${money4(estimate.labor)}</b></span><span>Fees <b>${money4(estimate.lineFees)}</b></span><span>Supplies <b>${money4(supplies)}</b></span><span>Discount <b>-${money4(estimate.discountAmount)}</b></span><span>Tax <b>${money4(estimate.tax)}</b></span><strong>Total ${money4(estimate.total)}</strong>`;
         const total = document.querySelector("#new-estimate-total");
         if (total && root.id === "new-estimate-lines") total.value = estimate.total.toFixed(2);
       };
@@ -10632,13 +12800,14 @@ ${catRows}
           insurance: source.insurance || order.insurance || {}
         };
       };
+      NEW_ORDER_DRAFT_KEY = "mechpro:new-work-order-draft:v1";
       openNewEstimateFillCore = openNew;
       openNew = function() {
         openNewWithDraft();
       };
       savedEstimates = function() {
-        const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} \xB7 ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money3(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
-        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money3(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${escapeAttr(estimate.id)}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
+        const reference = `<section class="reference-template-card"><div><div class="eyebrow">Reusable shop template</div><h2>${REFERENCE_ESTIMATE.number}</h2><p>${escapeHtml(REFERENCE_ESTIMATE.customer.name)} \xB7 ${escapeHtml(REFERENCE_ESTIMATE.vehicle.description)}</p></div><strong>${money4(REFERENCE_ESTIMATE.total)}</strong><div><button class="secondary" data-preview-estimate="${REFERENCE_ESTIMATE.id}">${icon("file-text", 14)} View estimate</button><button class="primary" data-fill-estimate="${REFERENCE_ESTIMATE.id}">${icon("clipboard-plus", 14)} Fill new work order</button></div></section>`;
+        const rows = [...state.estimates].reverse().map((estimate) => `<tr><td class="mono"><b>${escapeHtml(estimate.number || "Draft")}</b></td><td>${escapeHtml(typeof estimate.customer === "object" ? estimate.customer.name : estimate.customer)}<small>${escapeHtml(typeof estimate.vehicle === "object" ? estimate.vehicle.description : estimate.vehicle)}</small></td><td>${badge(estimate.status || "estimate")}</td><td><b>${money4(estimate.total)}</b></td><td><div class="estimate-actions"><button class="mini-action" data-preview-estimate="${escapeAttr(estimate.id)}">${icon("file-text", 13)} View</button><button class="mini-action" data-fill-estimate="${escapeAttr(estimate.id)}">${icon("clipboard-plus", 13)} Fill work order</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="email">${icon("mail", 13)} Email</button><button class="mini-action" data-send-estimate="${escapeAttr(estimate.id)}" data-channel="sms">${icon("message-square", 13)} Text</button>${estimate.status !== "approved" ? `<button class="mini-action" data-sign-estimate="${escapeAttr(estimate.id)}">${icon("signature", 13)} Sign</button>` : ""}</div></td></tr>`).join("");
         return `${reference}<section class="ai-result"><div class="ai-result-head"><div><div class="eyebrow">Customer estimates</div><h2>Estimate register</h2><p>Review the customer-facing document or explicitly fill a new work order.</p></div></div><div class="data-panel"><table><thead><tr><th>Estimate</th><th>Customer & vehicle</th><th>Status</th><th>Total</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No saved estimates.</td></tr>`}</tbody></table></div></section>`;
       };
       liveAssistant = function() {
@@ -10750,7 +12919,7 @@ ${catRows}
         const rows = state.invoices.filter((invoice) => !q || Object.values(invoice).join(" ").toLowerCase().includes(q)).map((invoice) => {
           const summary = invoicePaymentSummary(invoice);
           const bd = invoiceTaxBreakdown(invoice);
-          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money3(summary.total)}</b><small>Subtotal ${money3(bd.subtotal)} \xB7 Tax ${money3(bd.tax)}</small><small>Paid ${money3(summary.paid)} \xB7 Remaining ${money3(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${escapeAttr(invoice.number)}">${icon("message-square", 13)} Text to pay</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(invoice.number)}</b><small>${invoice.signature ? `Signed by ${escapeHtml(invoice.signature.authorizationName)}` : "Signature pending"}</small></td><td class="mono">${escapeHtml(invoice.ro || "")}</td><td><b>${escapeHtml(invoice.customer)}</b></td><td>${escapeHtml(invoice.date || "")}</td><td>${escapeHtml(invoice.closedAt || "")}</td><td>${badge(summary.status)}</td><td><b>${money4(summary.total)}</b><small>Subtotal ${money4(bd.subtotal)} \xB7 Tax ${money4(bd.tax)}</small><small>Paid ${money4(summary.paid)} \xB7 Remaining ${money4(summary.balance)}</small></td><td><div class="invoice-payments"><button class="mini-action" data-print-invoice="${escapeAttr(invoice.number)}">${icon("printer", 13)} Print</button><button class="mini-action" data-sign-invoice="${escapeAttr(invoice.number)}" ${invoice.signature ? "disabled" : ""}>${icon("signature", 13)} ${invoice.signature ? "Signed" : "Sign"}</button>${summary.balance > 0 ? `<button class="mini-action" data-record-payment="${escapeAttr(invoice.number)}" data-method="cash">${icon("badge-dollar-sign", 13)} Record payment</button><button class="mini-action invoice-pay" data-pay-invoice="${escapeAttr(invoice.number)}">${icon("external-link", 13)} Pay online</button><button class="mini-action" data-text-pay="${escapeAttr(invoice.number)}">${icon("message-square", 13)} Text to pay</button>` : ""}</div>${paymentHistoryMarkup(summary)}</td></tr>`;
         }).join("");
         return shell(`${heading("Accounts receivable", "Invoices", "Record partial or full payments, monitor remaining balances, and review collection history.", false)}${stats()}<div class="data-panel invoice-register"><table><thead><tr><th>Invoice</th><th>Work order</th><th>Customer</th><th>Issued</th><th>Closeout</th><th>Status</th><th>Total</th><th>Payments</th></tr></thead><tbody>${rows || `<tr><td colspan="8">No invoices yet.</td></tr>`}</tbody></table></div>`);
       };
@@ -10760,8 +12929,22 @@ ${catRows}
         const order = state.orders.find((item) => item.id === id);
         const modalBody = document.querySelector(".job-card-modal .modal-body");
         if (!order || !modalBody) return;
+        const user = currentUser();
+        const assigned = user && orderIncludesTechnician(order, user, state.users);
+        const activeClock = user ? openJobClock(order.id, user.id) : null;
+        const clockRows = (order.assignments || []).map((item) => {
+          const tracked = item.employeeId ? clockedHours(state.jobClockEntries, order.id, item.employeeId) : Number(item.hoursWorked || 0);
+          return `<li><strong>${escapeHtml(item.name)}</strong> \xB7 ${escapeHtml(item.role)} \xB7 ${formatHours(tracked || item.hoursWorked)}</li>`;
+        }).join("");
+        const clockButton = user?.role === "technician" && assigned ? `<button class="${activeClock ? "secondary danger" : "primary"}" id="job-clock" data-work-order-id="${escapeAttr(order.id)}" type="button">${activeClock ? "Clock out" : "Clock in"}</button>` : "";
+        modalBody.insertAdjacentHTML("afterbegin", `<section class="job-clock-panel"><div><h3>Assigned technicians</h3><ul class="intake-causes">${clockRows || `<li>${escapeHtml(order.tech || "Unassigned")}</li>`}</ul>${clockButton}</div>${["admin", "service_writer"].includes(user?.role) ? `<button class="secondary" type="button" id="edit-assignments">Edit assignments</button>` : ""}</section>`);
+        document.querySelector("#job-clock")?.addEventListener("click", (event) => {
+          const workOrderId = event.currentTarget.dataset.workOrderId;
+          openJobClock(workOrderId) ? stopJobClock(workOrderId) : startJobClock(workOrderId);
+        });
+        document.querySelector("#edit-assignments")?.addEventListener("click", () => openAssignmentEditor(order));
         const summary = workOrderPaymentSummary(order);
-        modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money3(summary.total)}</b></div><div><span>Paid</span><b>${money3(summary.paid)}</b></div><div><span>Remaining</span><b>${money3(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
+        modalBody.insertAdjacentHTML("beforeend", `<section class="work-order-payments"><div class="job-section-head"><div><h3>Payments</h3><p>Record deposits or partial collections against this work order.</p></div>${summary.balance > 0 ? `<button class="primary" type="button" id="record-work-order-payment">${icon("badge-dollar-sign", 14)} Record payment</button>` : ""}</div><div class="payment-balance-grid"><div><span>Total</span><b>${money4(summary.total)}</b></div><div><span>Paid</span><b>${money4(summary.paid)}</b></div><div><span>Remaining</span><b>${money4(summary.balance)}</b></div><div><span>Status</span>${badge(summary.status)}</div></div>${paymentHistoryMarkup(summary)}</section>`);
         document.querySelector("#record-work-order-payment")?.addEventListener("click", () => recordTargetPayment("work_order", order.id));
         lucide.createIcons();
       };
@@ -10845,9 +13028,9 @@ ${catRows}
       taxReportView = function(result, stateName, settings2) {
         const shop = shopFilingProfile();
         const supplement = buildJurisdictionSupplement(result.totals.taxable, shop.jurisdictions);
-        const rows = result.rows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td class="mono">${escapeHtml(row.invoiceNumber)}</td><td>${escapeHtml(row.customer)}</td><td>${money3(row.gross)}</td><td>${money3(row.taxable)}</td><td>${money3(row.nontaxable ?? 0)}</td><td><b>${money3(row.tax)}</b></td></tr>`).join("");
-        const jurisRows = supplement.rows.map((r) => `<tr><td class="mono">${escapeHtml(r.code)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.kind)}</td><td>${r.rate}%</td><td>${money3(r.amountSubjectToLocalTax)}</td><td><b>${money3(r.taxDue)}</b></td></tr>`).join("");
-        return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${escapeHtml(stateName)} sales tax filing</div><h2>Period ${escapeHtml(result.from)} to ${escapeHtml(result.to)}</h2><small>${escapeHtml(shop.shopName)} \xB7 Tax ID: ${escapeHtml(settings2.taxId || "Not set")} \xB7 EIN: ${escapeHtml(shop.ein || "Not set")} \xB7 Filing: ${escapeHtml(settings2.filingFrequency)} \xB7 Rate ${shop.rate}%</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money3(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money3(result.totals.taxable)}</strong></article><article><span>Nontaxable</span><strong>${money3(result.totals.nontaxable || 0)}</strong></article><article><span>Tax collected</span><strong>${money3(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross</th><th>Taxable</th><th>Nontaxable</th><th>Tax</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No payments were recorded in this period.</td></tr>`}</tbody></table></div><div class="statement" style="margin-top:14px"><div class="statement-head"><div><div class="eyebrow">Local jurisdictions</div><h2>Texas list supplement</h2></div></div><div class="data-panel"><table><thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Rate</th><th>Subject to tax</th><th>Tax due</th></tr></thead><tbody>${jurisRows}</tbody></table></div><small>State ${money3(supplement.stateTax)} \xB7 Local ${money3(supplement.localTax)} \xB7 Total ${money3(supplement.totalTax)}</small></div></div>`;
+        const rows = result.rows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td class="mono">${escapeHtml(row.invoiceNumber)}</td><td>${escapeHtml(row.customer)}</td><td>${money4(row.gross)}</td><td>${money4(row.taxable)}</td><td>${money4(row.nontaxable ?? 0)}</td><td><b>${money4(row.tax)}</b></td></tr>`).join("");
+        const jurisRows = supplement.rows.map((r) => `<tr><td class="mono">${escapeHtml(r.code)}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.kind)}</td><td>${r.rate}%</td><td>${money4(r.amountSubjectToLocalTax)}</td><td><b>${money4(r.taxDue)}</b></td></tr>`).join("");
+        return `<div class="tax-report-print" id="tax-report-printable"><div class="statement-head"><div><div class="eyebrow">${escapeHtml(stateName)} sales tax filing</div><h2>Period ${escapeHtml(result.from)} to ${escapeHtml(result.to)}</h2><small>${escapeHtml(shop.shopName)} \xB7 Tax ID: ${escapeHtml(settings2.taxId || "Not set")} \xB7 EIN: ${escapeHtml(shop.ein || "Not set")} \xB7 Filing: ${escapeHtml(settings2.filingFrequency)} \xB7 Rate ${shop.rate}%</small></div></div><div class="finance-kpis"><article><span>Gross receipts</span><strong>${money4(result.totals.gross)}</strong></article><article><span>Taxable sales</span><strong>${money4(result.totals.taxable)}</strong></article><article><span>Nontaxable</span><strong>${money4(result.totals.nontaxable || 0)}</strong></article><article><span>Tax collected</span><strong>${money4(result.totals.tax)}</strong></article></div><div class="data-panel"><table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Gross</th><th>Taxable</th><th>Nontaxable</th><th>Tax</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No payments were recorded in this period.</td></tr>`}</tbody></table></div><div class="statement" style="margin-top:14px"><div class="statement-head"><div><div class="eyebrow">Local jurisdictions</div><h2>Texas list supplement</h2></div></div><div class="data-panel"><table><thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Rate</th><th>Subject to tax</th><th>Tax due</th></tr></thead><tbody>${jurisRows}</tbody></table></div><small>State ${money4(supplement.stateTax)} \xB7 Local ${money4(supplement.localTax)} \xB7 Total ${money4(supplement.totalTax)}</small></div></div>`;
       };
       reports = function() {
         const t = state.taxSettings;
@@ -10923,19 +13106,19 @@ ${filingCenterMarkup()}`);
       payStubMarkup = function(stub) {
         const user = stub.user;
         const ytd = ytdPayForUser(user, stub.period.key);
-        const lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${Number(line.hours).toFixed(2)}</td><td>${money3(line.rate)}</td><td><b>${money3(line.amount || line.grossPay)}</b></td></tr>`).join("");
-        return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "")} \xB7 ${escapeHtml(stub.method || "")}</p></div><div class="net-pay"><span>Net pay</span><strong>${money3(stub.net)}</strong></div></div>
+        const lines = stub.lines.map((line) => `<tr><td class="mono">${escapeHtml(line.roNumber)}</td><td>${escapeHtml(line.customer)}<small>${escapeHtml(line.vehicle)}</small></td><td>${Number(line.hours).toFixed(2)}</td><td>${money4(line.rate)}</td><td><b>${money4(line.amount || line.grossPay)}</b></td></tr>`).join("");
+        return `<section class="pay-stub"><div class="pay-stub-head"><div><div class="eyebrow">${escapeHtml(user.employeeId || "Employee")} \xB7 ${escapeHtml(user.department || "Department")}</div><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(user.title)} \xB7 ${escapeHtml(user.employmentType || "")} \xB7 ${escapeHtml(stub.method || "")}</p></div><div class="net-pay"><span>Net pay</span><strong>${money4(stub.net)}</strong></div></div>
 <div class="pay-stub-totals">
 <div><span>Job hours</span><b>${stub.hours.toFixed(2)}</b></div>
-<div><span>Gross</span><b>${money3(stub.gross)}</b></div>
-<div><span>Federal FIT</span><b>(${money3(stub.federal)})</b></div>
-<div><span>SS / Medicare</span><b>(${money3(stub.socialSecurity)} / ${money3(stub.medicare)})</b></div>
-<div><span>State</span><b>(${money3(stub.state)})</b></div>
-<div><span>Employer FICA</span><b>${money3(stub.employerSocialSecurity + stub.employerMedicare)}</b></div>
+<div><span>Gross</span><b>${money4(stub.gross)}</b></div>
+<div><span>Federal FIT</span><b>(${money4(stub.federal)})</b></div>
+<div><span>SS / Medicare</span><b>(${money4(stub.socialSecurity)} / ${money4(stub.medicare)})</b></div>
+<div><span>State</span><b>(${money4(stub.state)})</b></div>
+<div><span>Employer FICA</span><b>${money4(stub.employerSocialSecurity + stub.employerMedicare)}</b></div>
 </div>
-${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money3(stub.salaryPay)}</b></div>` : ""}
+${stub.salaryPay ? `<div class="salary-line">Weekly salary base: <b>${money4(stub.salaryPay)}</b></div>` : ""}
 <table><thead><tr><th>Work order</th><th>Job</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead><tbody>${lines || `<tr><td colspan="5">No completed job labor has been posted this week.</td></tr>`}</tbody></table>
-<div class="pay-stub-foot"><span>YTD gross ${money3(ytd.gross)} \xB7 FIT ${money3(ytd.federal)} \xB7 SS ${money3(ytd.socialSecurity)} \xB7 Med ${money3(ytd.medicare)}</span><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")} \xB7 W-4 ${escapeHtml(user.w4FilingStatus || "single")}</span></div>
+<div class="pay-stub-foot"><span>YTD gross ${money4(ytd.gross)} \xB7 FIT ${money4(ytd.federal)} \xB7 SS ${money4(ytd.socialSecurity)} \xB7 Med ${money4(ytd.medicare)}</span><span>Tax status: ${escapeHtml(user.taxStatus || "Not set")} \xB7 W-4 ${escapeHtml(user.w4FilingStatus || "single")}</span></div>
 ${currentUser().role === "admin" ? `<div class="payroll-actions" style="margin-top:10px;justify-content:flex-start"><button type="button" class="mini-action" data-print-w2="${escapeHtml(user.id)}">${icon("file-text", 13)} W-2 / 1099</button></div>` : ""}
 </section>`;
       };
@@ -10962,8 +13145,9 @@ ${admin ? `<div class="payroll-actions"><button class="secondary" id="payroll-ex
 <button type="button" class="secondary" id="payroll-next">Next ${icon("chevron-right", 14)}</button>
 <label>Jump to week<input type="date" id="payroll-jump" value="${period.key}"/></label>
 </div>
-<div class="payroll-summary"><span>Pay period</span><strong>${period.start} \u2013 ${period.end}</strong><span>${liabilities.hours.toFixed(2)} labor hours</span><strong>${money3(liabilities.net)} net</strong></div>
-${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT withheld (2200)</span><strong>${money3(liabilities.federal)}</strong></article><article><span>FICA payable (2210)</span><strong>${money3(liabilities.ss)}</strong></article><article><span>Medicare payable (2220)</span><strong>${money3(liabilities.med)}</strong></article><article><span>Suggested liabilities</span><strong>${money3(liabilities.federal + liabilities.ss + liabilities.med)}</strong><small>Do not auto-journal</small></article></div>` : ""}
+<div class="payroll-summary"><span>Pay period</span><strong>${period.start} \u2013 ${period.end}</strong><span>${liabilities.hours.toFixed(2)} labor hours</span><strong>${money4(liabilities.net)} net</strong></div>
+${admin ? technicianTrackerHtml(technicianPerformance(state.orders, state.users, state.jobClockEntries)) : ""}
+${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT withheld (2200)</span><strong>${money4(liabilities.federal)}</strong></article><article><span>FICA payable (2210)</span><strong>${money4(liabilities.ss)}</strong></article><article><span>Medicare payable (2220)</span><strong>${money4(liabilities.med)}</strong></article><article><span>Suggested liabilities</span><strong>${money4(liabilities.federal + liabilities.ss + liabilities.med)}</strong><small>Do not auto-journal</small></article></div>` : ""}
 <div class="payroll-grid">${stubs.map(payStubMarkup).join("") || empty("No active payroll employees")}</div>`);
       };
       exportPayroll = function() {
@@ -10994,57 +13178,70 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         downloadTextFile(`mechpro-payroll-register-${period.key}.csv`, csvFromRows(rows));
         toast("Payroll register exported");
       };
-      openEmployeeFilingCore = openEmployee;
-      openEmployee = function() {
-        showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>Create employee profile</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">
+      openEmployee = function(existing = null) {
+        const roleOptions = ["technician", "office", "service_writer", "admin"].map((role) => `<option value="${role}" ${existing?.role === role ? "selected" : ""}>${roleLabel[role] || role}</option>`).join("");
+        const employmentOptions = ["Hourly", "Salary", "Contractor"].map((value2) => `<option ${existing?.employmentType === value2 ? "selected" : ""}>${value2}</option>`).join("");
+        const payFreqOptions = ["Weekly", "Biweekly", "Monthly"].map((value2) => `<option ${(existing?.payFrequency || "Weekly") === value2 ? "selected" : ""}>${value2}</option>`).join("");
+        const taxStatusOptions = ["W-2", "1099 Contractor"].map((value2) => `<option ${(existing?.taxStatus || "W-2") === value2 ? "selected" : ""}>${value2}</option>`).join("");
+        const filingStatus = existing?.w4FilingStatus || "single";
+        const filingOptions = [
+          ["single", "Single / Married filing separately"],
+          ["married_joint", "Married filing jointly"],
+          ["head_of_household", "Head of household"]
+        ].map(([value2, labelText]) => `<option value="${value2}" ${filingStatus === value2 ? "selected" : ""}>${labelText}</option>`).join("");
+        const step2 = Boolean(existing?.w4Step2Checkbox);
+        showModal(`<form class="modal wide" id="employee-form"><div class="modal-head"><h2>${existing ? "Edit employee profile" : "Create employee profile"}</h2><button type="button" class="close" data-close>${icon("x")}</button></div><div class="modal-body">
 <h3>Identity & access</h3><div class="form-grid">
-<label>Employee name *<input name="name" required/></label>
-<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required/></label>
-<label>Job title<input name="title"/></label>
-<label>Department<input name="department"/></label>
-<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required/></label>
-<label>Role<select name="role"><option value="technician">Technician</option><option value="office">Office</option><option value="service_writer">Service Writer</option><option value="admin">Admin</option></select></label>
-<label class="full">Technician dispatch name <input name="techName"/></label>
+<label>Employee name *<input name="name" required value="${employeeFormValue(existing, "name")}"/></label>
+<label>Employee ID *<input name="employeeId" placeholder="EMP-005" required value="${employeeFormValue(existing, "employeeId")}"/></label>
+<label>Job title<input name="title" value="${employeeFormValue(existing, "title")}"/></label>
+<label>Department<input name="department" value="${employeeFormValue(existing, "department")}"/></label>
+<label class="full" for="employee-email"><span class="field-label">Email address *</span><input id="employee-email" name="workEmail" type="text" inputmode="email" autocomplete="email" required value="${employeeFormValue(existing, "email")}" ${existing ? "readonly" : ""}/></label>
+<label>Role<select name="role">${roleOptions}</select></label>
+<label>Classification<select name="classification">${EMPLOYEE_CLASSIFICATIONS.map((item) => `<option value="${item.id}" ${classificationFor(existing || { role: "technician" }) === item.id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+<label class="full">Technician dispatch name <input name="techName" value="${employeeFormValue(existing, "techName")}"/></label>
 </div>
 <h3>Employment & pay</h3><div class="form-grid">
-<label>Employment type<select name="employmentType"><option>Hourly</option><option>Salary</option><option>Contractor</option></select></label>
-<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required/></label>
-<label>Pay frequency<select name="payFrequency"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></label>
-<label>Start date<input name="startDate" type="date" value="${filingIsoDate()}"/></label>
-<label>Tax status<select name="taxStatus"><option>W-2</option><option>1099 Contractor</option></select></label>
-<label>Phone<input name="phone" type="tel"/></label>
-<label class="full">Home address<input name="address"/></label>
-<label class="full">Emergency contact<input name="emergencyContact"/></label>
+<label>Employment type<select name="employmentType">${employmentOptions}</select></label>
+<label>Pay rate *<input name="payRate" type="number" min="0" step=".01" required value="${Number(existing?.payRate || 0)}"/></label>
+<label>Pay plan<select name="payPlan">${PAY_PLANS.map((plan) => `<option value="${plan.id}" ${(existing?.payPlan || "hourly") === plan.id ? "selected" : ""}>${plan.label}</option>`).join("")}</select></label>
+<label>Commission %<input name="commissionPercent" type="number" min="0" max="100" step=".01" value="${Number(existing?.commissionPercent || 0)}"/></label>
+<label>Pay frequency<select name="payFrequency">${payFreqOptions}</select></label>
+<label>Start date<input name="startDate" type="date" value="${employeeFormValue(existing, "startDate", filingIsoDate())}"/></label>
+<label>Tax status<select name="taxStatus">${taxStatusOptions}</select></label>
+<label>Phone<input name="phone" type="tel" value="${employeeFormValue(existing, "phone")}"/></label>
+<label class="full">Home address<input name="address" value="${employeeFormValue(existing, "address")}"/></label>
+<label class="full">Emergency contact<input name="emergencyContact" value="${employeeFormValue(existing, "emergencyContact")}"/></label>
 </div>
 <h3>Form W-4 / withholding (Pub 15-T 2026)</h3><div class="form-grid">
-<label>Filing status<select name="w4FilingStatus"><option value="single">Single / Married filing separately</option><option value="married_joint">Married filing jointly</option><option value="head_of_household">Head of household</option></select></label>
-<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false">No</option><option value="true">Yes \u2014 multiple jobs</option></select></label>
-<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="0"/></label>
-<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="0"/></label>
-<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="0"/></label>
-<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="0"/></label>
-<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="0"/></label>
-<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="0"/><small>TX = 0</small></label>
-<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX"/></label>
+<label>Filing status<select name="w4FilingStatus">${filingOptions}</select></label>
+<label>Step 2 checkbox<select name="w4Step2Checkbox"><option value="false" ${step2 ? "" : "selected"}>No</option><option value="true" ${step2 ? "selected" : ""}>Yes \u2014 multiple jobs</option></select></label>
+<label>Dependent credits (annual $<input name="w4DependentCredits" type="number" min="0" step="1" value="${Number(existing?.w4DependentCredits || 0)}"/></label>
+<label>Other income (annual $<input name="w4OtherIncome" type="number" min="0" step="1" value="${Number(existing?.w4OtherIncome || 0)}"/></label>
+<label>Deductions (annual $<input name="w4Deductions" type="number" min="0" step="1" value="${Number(existing?.w4Deductions || 0)}"/></label>
+<label>Extra withholding / period $<input name="w4ExtraWithholding" type="number" min="0" step=".01" value="${Number(existing?.w4ExtraWithholding || 0)}"/></label>
+<label>Pre-tax deduction / period $<input name="pretaxDeductionPerPeriod" type="number" min="0" step=".01" value="${Number(existing?.pretaxDeductionPerPeriod || 0)}"/></label>
+<label>State WH rate %<input name="stateWithholdingRate" type="number" min="0" step=".01" value="${Number(existing?.stateWithholdingRate || 0)}"/><small>TX = 0</small></label>
+<label>SSN last 4 (optional)<input name="ssn" maxlength="4" pattern="[0-9]*" placeholder="XXXX" value="${employeeFormValue(existing, "ssn")}"/></label>
 </div>
 <div class="ledger-note">${icon("info", 15)} Federal FIT uses IRS Pub 15-T (2026) percentage method from these W-4 fields. SSN is stored only for W-2/EFW2 packages \u2014 prefer last 4 until you are ready to file.</div>
-</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">${icon("user-plus", 14)} Create profile</button></div></form>`);
-        document.querySelector("#employee-email")?.focus({ preventScroll: true });
+</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" type="submit">${icon(existing ? "save" : "user-plus", 14)} ${existing ? "Save employee" : "Create profile"}</button></div></form>`);
+        if (!existing) document.querySelector("#employee-email")?.focus({ preventScroll: true });
         document.querySelector("#employee-form").onsubmit = async (event) => {
           event.preventDefault();
           const form = event.target;
           const data = Object.fromEntries(new FormData(form));
-          const email = String(data.workEmail || "").trim().toLowerCase();
+          const email = String(existing?.email || data.workEmail || "").trim().toLowerCase();
           const button = form.querySelector("button.primary");
           if (!email || !email.includes("@")) {
             toast("Enter a valid work email address");
             return;
           }
-          if (state.users.some((user) => String(user.email || "").toLowerCase() === email)) {
+          if (!existing && state.users.some((user) => String(user.email || "").toLowerCase() === email)) {
             toast("An employee profile already uses that email");
             return;
           }
-          if (state.users.some((user) => user.employeeId === data.employeeId.trim())) {
+          if (state.users.some((user) => user.id !== existing?.id && user.employeeId === data.employeeId.trim())) {
             toast("An employee already uses that employee ID");
             return;
           }
@@ -11052,43 +13249,11 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
             toast("Add the technician dispatch name");
             return;
           }
-          const record = {
-            id: `user-${Date.now()}`,
-            name: data.name.trim(),
-            email,
-            role: data.role,
-            title: data.title.trim(),
-            techName: data.techName.trim(),
-            active: true,
-            employeeId: data.employeeId.trim(),
-            phone: data.phone.trim(),
-            address: data.address.trim(),
-            startDate: data.startDate,
-            employmentType: data.employmentType,
-            payRate: Number(data.payRate),
-            payFrequency: data.payFrequency,
-            department: data.department.trim(),
-            emergencyContact: data.emergencyContact.trim(),
-            taxStatus: data.taxStatus,
-            w4FilingStatus: data.w4FilingStatus,
-            w4Step2Checkbox: data.w4Step2Checkbox === "true",
-            w4DependentCredits: Number(data.w4DependentCredits) || 0,
-            w4OtherIncome: Number(data.w4OtherIncome) || 0,
-            w4Deductions: Number(data.w4Deductions) || 0,
-            w4ExtraWithholding: Number(data.w4ExtraWithholding) || 0,
-            pretaxDeductionPerPeriod: Number(data.pretaxDeductionPerPeriod) || 0,
-            stateWithholdingRate: Number(data.stateWithholdingRate) || 0,
-            federalWithholdingRate: 0,
-            ssn: String(data.ssn || "").replace(/\D/g, "").slice(-4)
-          };
           if (button) button.disabled = true;
           try {
-            const saved = await apiFetch("/entities/employees", { method: "POST", body: JSON.stringify(record) });
-            const value2 = saved?.queued ? record : saved || record;
-            state.users.push(value2);
-            save();
+            const saved = await saveEmployeeRecord(existing, data);
             closeModal();
-            toast(`${value2.name || data.name} profile created`);
+            toast(`${saved.name} profile ${existing ? "updated" : "created"}`);
             render();
           } catch (error) {
             toast(error.message || "Employee could not be saved");
@@ -11096,7 +13261,6 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
             if (button) button.disabled = false;
           }
         };
-        void openEmployeeFilingCore;
       };
       bindFilingCore = bindExpandedFeatures;
       bindExpandedFeatures = function() {
@@ -11113,10 +13277,10 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
             }
           };
         });
-        const taxForm = document.querySelector("#tax-report-form");
-        if (taxForm && !taxForm.dataset.filingBound) {
-          taxForm.dataset.filingBound = "1";
-          taxForm.addEventListener("submit", async (event) => {
+        const taxReportForm = document.querySelector("#tax-report-form");
+        if (taxReportForm && !taxReportForm.dataset.filingBound) {
+          taxReportForm.dataset.filingBound = "1";
+          taxReportForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
             const data = Object.fromEntries(new FormData(event.target));
@@ -11175,15 +13339,11 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
         document.querySelectorAll("[data-print-w2]").forEach((button) => {
           button.onclick = () => printEmployeeAnnualForm(button.dataset.printW2);
         });
-      };
-      bindFilingTaxSettingsCore = bindExpandedFeatures;
-      bindExpandedFeatures = function() {
-        bindFilingTaxSettingsCore();
-        const taxForm = document.querySelector("#tax-settings-form");
-        if (taxForm && !taxForm.dataset.filingEnhanced) {
-          taxForm.dataset.filingEnhanced = "1";
-          const grid = taxForm.querySelector(".form-grid") || taxForm;
-          if (!taxForm.querySelector("[name=ein]")) {
+        const taxSettingsForm = document.querySelector("#tax-settings-form");
+        if (taxSettingsForm && !taxSettingsForm.dataset.filingEnhanced) {
+          taxSettingsForm.dataset.filingEnhanced = "1";
+          const grid = taxSettingsForm.querySelector(".form-grid") || taxSettingsForm;
+          if (!taxSettingsForm.querySelector("[name=ein]")) {
             grid.insertAdjacentHTML("beforeend", `
 <label>Federal EIN<input name="ein" value="${escapeHtml(state.taxSettings.ein || "")}" placeholder="XX-XXXXXXX"/></label>
 <label>TX taxpayer number<input name="texasTaxpayerNumber" value="${escapeHtml(state.taxSettings.texasTaxpayerNumber || "")}" placeholder="1-xxxxxxxxxx-x"/></label>
@@ -11191,7 +13351,7 @@ ${admin ? `<div class="finance-kpis" style="margin:12px 0"><article><span>FIT wi
 <label class="full">Local jurisdictions JSON<small>Array of {code,name,kind,rate,required} \u2014 city/transit/county/SPD</small>
 <textarea name="jurisdictionsJson" rows="4">${escapeHtml(JSON.stringify(state.taxSettings.jurisdictions || DEFAULT_TX_JURISDICTIONS, null, 0))}</textarea></label>`);
           }
-          taxForm.addEventListener("submit", async (event) => {
+          taxSettingsForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
             const data = Object.fromEntries(new FormData(event.target));
