@@ -2919,7 +2919,7 @@ async function servePublicDownload(request, env) {
 // Committed binaries (the APK) are also served by Pages, but the SPA shell must never stand in for a missing installer.
 async function missingPublicDownload(request, env) {
   const fallback = await proxyPagesRequest(request, env).catch(() => null);
-  if (fallback?.ok && !/text\/html/i.test(fallback.headers.get('Content-Type') || '')) return fallback;
+  if (fallback?.ok && /^application\//i.test(fallback.headers.get('Content-Type') || '')) return fallback;
   await fallback?.body?.cancel();
   const status = env.FILES ? 404 : 503;
   const message = env.FILES
