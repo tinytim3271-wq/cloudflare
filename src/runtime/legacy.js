@@ -33,6 +33,7 @@ import { applyShopSnapshot, ensureOfflineOwner, isOfflineDesktop, offlineLoginMa
 import { presentCatalogInspection, printCatalogInspection } from './catalog-inspection-ui.js';
 import { applyQueuedEntityMutations } from './entity-persistence.js';
 import { createMutationQueueStore } from './mutation-queue-store.js';
+import { applySettledShopEntityResults, readableShopEntityTypes } from './shop-entity-load.js';
 import { paymentSummary } from '../modules/payments.js';
 import { cardTerminalModel, recoveryWriteup } from '../modules/card-terminal.js';
 import { syncHelp } from '../modules/help-menu.js';
@@ -420,7 +421,19 @@ async function loadPayrollEntriesFromApi() { try { state.payrollEntries = await 
 const shopEntityCollections = { vehicles: "vehicles", inventory: "inventory", vendors: "vendors", services: "services", inspectiontemplates: "inspectionTemplates", inspections: "inspections", reminders: "reminders", appointments: "appointments", purchases: "purchases", shopsettings: "shopSettingsRecords", diagnosticsessions: "diagnosticSessions", keyprogrammingjobs: "keyJobs" };
 async function saveShopEntity(type, record) { const saved = await apiFetch(`/entities/${type}${record.updatedAt ? `/${encodeURIComponent(record.id)}` : ""}`, { method: record.updatedAt ? "PUT" : "POST", body: JSON.stringify(record) }), value = saved?.queued ? record : saved, collection = shopEntityCollections[type], index = state[collection].findIndex(item => item.id === value.id); if (index >= 0) state[collection][index] = value; else state[collection].push(value); save(); return value }
 const shopEntityReadRoles = { keyprogrammingjobs: ["admin", "technician", "service_writer"] };
-async function loadShopEntities() { const role = currentUser()?.role || ""; const types = Object.keys(shopEntityCollections).filter(type => !shopEntityReadRoles[type] || shopEntityReadRoles[type].includes(role)); const results = await Promise.allSettled(types.map(type => apiFetch(`/entities/${type}`))); let failed = 0; types.forEach((type, index) => { const result = results[index]; if (result.status === "fulfilled" && Array.isArray(result.value)) state[shopEntityCollections[type]] = result.value; else if (result.status === "rejected") { failed += 1; console.error(`Failed to load ${type}; using local data`, result.reason) } }); save(); return failed === 0 }
+async function loadShopEntities() {
+  const role = currentUser()?.role || "";
+  const types = readableShopEntityTypes(shopEntityCollections, shopEntityReadRoles, role);
+  const results = await Promise.allSettled(types.map(type => apiFetch(`/entities/${type}`)));
+  const failed = applySettledShopEntityResults(
+    types,
+    results,
+    (type, records) => { state[shopEntityCollections[type]] = records; },
+    (type, reason) => console.error(`Failed to load ${type}; using local data`, reason),
+  );
+  save();
+  return failed === 0;
+}
 function icon(name, size = 18) { return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>` }
 function money(value) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value) }
 function initials(name) { return name.split(/\s+/).map(x => x[0]).slice(0, 2).join("").toUpperCase() }
@@ -1411,7 +1424,38 @@ loadOrdersFromApi = async function () { try { applyRemoteList("orders", await ap
 loadCustomersFromApi = async function () { const epoch = customerListEpoch; try { const records = await apiFetch("/entities/customers"); if (epoch !== customerListEpoch) return; applyRemoteList("customers", records) } catch (error) { console.error("Failed to load customers from API; using local data", error) } };
 loadInvoicesFromApi = async function () { try { applyRemoteList("invoices", await apiFetch("/entities/invoices")) } catch (error) { console.error("Failed to load invoices from API; using local data", error) } };
 loadExpensesFromApi = async function () { try { applyRemoteList("expenses", await apiFetch("/entities/expenses")) } catch (error) { console.error("Failed to load expenses from API; using local data", error) } };
-loadShopEntities = async function () { try { const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map(type => apiFetch(`/entities/${type}`))); types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type)); const tax = state.shopSettingsRecords.find(item => item.id === "tax"); if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly", ein: String(tax.ein || ""), texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""), webfileNumber: String(tax.webfileNumber || ""), jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null } } catch (error) { console.error("Failed to load shop operations; using local data", error) } await ensureCannedMenu() };
+loadShopEntities = async function () {
+  try {
+    // This reassignment is the active loader (later wrappers call into it). It must
+    // keep role filtering + allSettled — Promise.all over every type 403s office
+    // users on keyprogrammingjobs and aborts vehicles/inventory refresh.
+    const role = currentUser()?.role || "";
+    const types = readableShopEntityTypes(shopEntityCollections, shopEntityReadRoles, role);
+    const results = await Promise.allSettled(types.map(type => apiFetch(`/entities/${type}`)));
+    applySettledShopEntityResults(
+      types,
+      results,
+      (type, records) => applyRemoteList(shopEntityCollections[type], records, type),
+      (type, reason) => console.error(`Failed to load ${type}; using local data`, reason),
+    );
+    const tax = state.shopSettingsRecords.find(item => item.id === "tax");
+    if (tax) {
+      state.taxSettings = {
+        state: tax.state || "TX",
+        taxId: String(tax.taxId || ""),
+        rate: Number(tax.rate) || 0,
+        filingFrequency: tax.filingFrequency || "Monthly",
+        ein: String(tax.ein || ""),
+        texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""),
+        webfileNumber: String(tax.webfileNumber || ""),
+        jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null,
+      };
+    }
+  } catch (error) {
+    console.error("Failed to load shop operations; using local data", error);
+  }
+  await ensureCannedMenu();
+};
 function stampDemoAppointments() { const samples = new Set(["apt-1048", "apt-1049", "apt-1052"]); if (!(state.appointments || []).some(item => samples.has(item.id))) return; const today = new Date(), iso = localIsoDate(today), tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1); const next = localIsoDate(tomorrow); state.appointments = state.appointments.map(item => item.id === "apt-1048" || item.id === "apt-1049" ? { ...item, date: iso } : item.id === "apt-1052" ? { ...item, date: next } : item) }
 stampDemoAppointments();
 
