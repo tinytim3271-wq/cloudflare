@@ -52,6 +52,7 @@ import {
 import {
   INTAKE_STORAGE_KEY,
   emptyIntakeDraft,
+  findIntakeCustomer,
   intakeOrderPayload,
   localDiagnosticChecklist,
   mountIntakeWizard,
@@ -1373,12 +1374,12 @@ function openCustomerIntake() {
       const name = [current.customer.firstName, current.customer.lastName].filter(Boolean).join(" ");
       const display = current.customer.company ? `${name} (${current.customer.company})` : name;
       const address = [current.customer.address, [current.customer.city, current.customer.state, current.customer.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-      const existing = state.customers.find(item => item.phone === current.customer.phone || (current.customer.email && item.email === current.customer.email));
-      await saveCustomerRecord(existing, { name: display, phone: current.customer.phone, email: current.customer.email, billingAddress: address, billingNotes: `Intake ${current.id}` });
+      const existing = findIntakeCustomer(state.customers, current);
+      const customer = await saveCustomerRecord(existing, { name: display, phone: current.customer.phone, email: current.customer.email, billingAddress: address, billingNotes: `Intake ${current.id}` });
       const vehicleId = `veh-${Date.now()}`;
-      await saveShopEntity("vehicles", { id: vehicleId, customer: display, vin: current.vehicle.vin, year: current.vehicle.year, make: current.vehicle.make, model: current.vehicle.model, plate: current.vehicle.plate, mileage: current.vehicle.mileage, color: current.vehicle.color });
+      await saveShopEntity("vehicles", { id: vehicleId, customerId: customer.id, customer: customer.name || display, vin: current.vehicle.vin, year: current.vehicle.year, make: current.vehicle.make, model: current.vehicle.model, plate: current.vehicle.plate, mileage: current.vehicle.mileage, color: current.vehicle.color });
       const max = state.orders.reduce((highest, order) => Math.max(highest, Number(String(order.id).replace(/\D/g, "")) || 0), 1040);
-      const record = intakeOrderPayload(current, { id: `RO-${max + 1}`, laborRate: Number(profile.laborRate || 165), taxRate: Number(state.taxSettings?.rate || 0), users: state.users });
+      const record = intakeOrderPayload(current, { id: `RO-${max + 1}`, laborRate: Number(profile.laborRate || 165), taxRate: Number(state.taxSettings?.rate || 0), users: state.users, customer });
       record.intake.photos = [];
       for (const photo of current.photos || []) {
         if (!photo.file) { record.intake.photos.push(photo); continue }
@@ -1392,7 +1393,7 @@ function openCustomerIntake() {
       let saved = record;
       if (!isOfflineDesktop()) {
         const response = await apiFetch("/entities/orders", { method: "POST", body: JSON.stringify(record) });
-        saved = response?.queued ? record : response;
+        saved = response?.queued ? record : (response || record);
       }
       state.orders.unshift(saved);
       localStorage.removeItem(INTAKE_STORAGE_KEY);
