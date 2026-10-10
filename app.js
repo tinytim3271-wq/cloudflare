@@ -3585,6 +3585,34 @@ button{margin-top:12px;padding:8px 14px}
     }
   });
 
+  // src/runtime/shop-entity-load.js
+  function readableShopEntityTypes(entityTypes, readRoles, role) {
+    const types = Array.isArray(entityTypes) ? entityTypes : Object.keys(entityTypes || {});
+    const roles = readRoles && typeof readRoles === "object" ? readRoles : {};
+    const currentRole = String(role || "");
+    return types.filter((type) => !roles[type] || roles[type].includes(currentRole));
+  }
+  function applySettledShopEntityResults(types, results, apply, onRejected) {
+    let failed = 0;
+    types.forEach((type, index) => {
+      const result = results[index];
+      if (!result) return;
+      if (result.status === "fulfilled" && Array.isArray(result.value)) {
+        apply(type, result.value);
+        return;
+      }
+      if (result.status === "rejected") {
+        failed += 1;
+        if (typeof onRejected === "function") onRejected(type, result.reason);
+      }
+    });
+    return failed;
+  }
+  var init_shop_entity_load = __esm({
+    "src/runtime/shop-entity-load.js"() {
+    }
+  });
+
   // src/modules/payments.js
   function paymentMatchesTarget(payment, targetType, targetId, linkedTargetId = "") {
     if (!payment || payment.status !== "completed") return false;
@@ -6632,17 +6660,16 @@ ${check2.ok ? "" : `<div class="import-errors">${check2.problems.map((problem) =
   }
   async function loadShopEntities() {
     const role = currentUser()?.role || "";
-    const types = Object.keys(shopEntityCollections).filter((type) => !shopEntityReadRoles[type] || shopEntityReadRoles[type].includes(role));
+    const types = readableShopEntityTypes(shopEntityCollections, shopEntityReadRoles, role);
     const results = await Promise.allSettled(types.map((type) => apiFetch(`/entities/${type}`)));
-    let failed = 0;
-    types.forEach((type, index) => {
-      const result = results[index];
-      if (result.status === "fulfilled" && Array.isArray(result.value)) state[shopEntityCollections[type]] = result.value;
-      else if (result.status === "rejected") {
-        failed += 1;
-        console.error(`Failed to load ${type}; using local data`, result.reason);
-      }
-    });
+    const failed = applySettledShopEntityResults(
+      types,
+      results,
+      (type, records) => {
+        state[shopEntityCollections[type]] = records;
+      },
+      (type, reason) => console.error(`Failed to load ${type}; using local data`, reason)
+    );
     save();
     return failed === 0;
   }
@@ -11784,6 +11811,7 @@ ${catRows}
       init_catalog_inspection_ui();
       init_entity_persistence();
       init_mutation_queue_store();
+      init_shop_entity_load();
       init_payments();
       init_card_terminal();
       init_help_menu();
@@ -12501,10 +12529,28 @@ ${catRows}
       };
       loadShopEntities = async function() {
         try {
-          const types = Object.keys(shopEntityCollections), results = await Promise.all(types.map((type) => apiFetch(`/entities/${type}`)));
-          types.forEach((type, index) => applyRemoteList(shopEntityCollections[type], results[index], type));
+          const role = currentUser()?.role || "";
+          const types = readableShopEntityTypes(shopEntityCollections, shopEntityReadRoles, role);
+          const results = await Promise.allSettled(types.map((type) => apiFetch(`/entities/${type}`)));
+          applySettledShopEntityResults(
+            types,
+            results,
+            (type, records) => applyRemoteList(shopEntityCollections[type], records, type),
+            (type, reason) => console.error(`Failed to load ${type}; using local data`, reason)
+          );
           const tax = state.shopSettingsRecords.find((item) => item.id === "tax");
-          if (tax) state.taxSettings = { state: tax.state || "TX", taxId: String(tax.taxId || ""), rate: Number(tax.rate) || 0, filingFrequency: tax.filingFrequency || "Monthly", ein: String(tax.ein || ""), texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""), webfileNumber: String(tax.webfileNumber || ""), jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null };
+          if (tax) {
+            state.taxSettings = {
+              state: tax.state || "TX",
+              taxId: String(tax.taxId || ""),
+              rate: Number(tax.rate) || 0,
+              filingFrequency: tax.filingFrequency || "Monthly",
+              ein: String(tax.ein || ""),
+              texasTaxpayerNumber: String(tax.texasTaxpayerNumber || ""),
+              webfileNumber: String(tax.webfileNumber || ""),
+              jurisdictions: Array.isArray(tax.jurisdictions) ? tax.jurisdictions : null
+            };
+          }
         } catch (error) {
           console.error("Failed to load shop operations; using local data", error);
         }
