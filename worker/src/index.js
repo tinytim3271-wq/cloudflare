@@ -2895,11 +2895,11 @@ async function route(request, env, analytics) {
 async function servePublicDownload(request, env) {
   if (!['GET', 'HEAD'].includes(request.method)) return null;
   const key = publicDownloadObjectKey(new URL(request.url).pathname);
-  if (!key || !env.FILES) return null;
-  const object = request.method === 'HEAD'
-    ? await env.FILES.head(key)
-    : await env.FILES.get(key);
-  if (!object) return null;
+  if (!key) return null;
+  const object = env.FILES
+    ? await (request.method === 'HEAD' ? env.FILES.head(key) : env.FILES.get(key))
+    : null;
+  if (!object) return missingPublicDownload(request, env);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('ETag', object.httpEtag);
@@ -2914,6 +2914,21 @@ async function servePublicDownload(request, env) {
     return new Response(null, { status: 200, headers });
   }
   return new Response(object.body, { status: 200, headers });
+}
+
+// Committed binaries (the APK) are also served by Pages, but the SPA shell must never stand in for a missing installer.
+async function missingPublicDownload(request, env) {
+  const fallback = await proxyPagesRequest(request, env).catch(() => null);
+  if (fallback?.ok && /^application\//i.test(fallback.headers.get('Content-Type') || '')) return fallback;
+  await fallback?.body?.cancel();
+  const status = env.FILES ? 404 : 503;
+  const message = env.FILES
+    ? 'This installer has not been published yet.'
+    : 'Downloads are temporarily unavailable.';
+  return new Response(request.method === 'HEAD' ? null : `${message}\n`, {
+    status,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
 }
 
 async function proxyPagesRequest(request, env) {
